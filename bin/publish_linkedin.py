@@ -1,19 +1,23 @@
 #!/usr/bin/env python3
-"""Publish stage — reads state/decision.json, posts to LinkedIn, updates state.
+"""Publish stage — turns an analyst decision into a LinkedIn post.
 
-Deliberately dumb and deterministic: it does NOT decide anything, it only
-executes what the analyst wrote. Safety:
+Deliberately dumb: it does not decide anything, it executes what the analyst
+(or the operator, via --approve) already decided. Safety:
 
-  * dry-run by default (settings.publish.dry_run, or CTI_DRY_RUN env)
-  * every draft is archived to drafts/ regardless of dry-run
+  * dry-run unless explicitly turned off (settings.publish.dry_run / CTI_DRY_RUN)
+  * every draft is archived to drafts/ regardless
   * a stale decision.json (older than candidates.json) is treated as a skip
-  * post text over the char limit is refused, not truncated
+  * over-limit post text is refused, not truncated
+  * DRY-RUN simulations are logged to state/dry_runs.jsonl, NOT history.jsonl,
+    so they never pollute the analyst's "already posted" dedup
+  * real posts write history.jsonl + seen.jsonl and clear the review queue
 """
 from __future__ import annotations
 
 import argparse
 import json
 import os
+import re
 import sys
 import textwrap
 from datetime import datetime, timezone
@@ -30,10 +34,17 @@ DRAFTS.mkdir(exist_ok=True)
 USERINFO_URL = "https://api.linkedin.com/v2/userinfo"
 POSTS_URL = "https://api.linkedin.com/rest/posts"
 TOKEN_URL = "https://www.linkedin.com/oauth/v2/accessToken"
+URN_RE = re.compile(r"^urn:li:(person|organization):[A-Za-z0-9_-]+$")
+# LinkedIn only keeps ~12 monthly versions active; an old pin returns HTTP 426.
+DEFAULT_LI_VERSION = "202509"
 
 
 def log(msg: str) -> None:
     print(f"[publish] {msg}")
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 def truthy(v: str | None) -> bool:
@@ -46,11 +57,21 @@ def load_settings() -> dict:
 
 def is_dry_run(settings: dict) -> bool:
     env = os.getenv("CTI_DRY_RUN")
-    if env is not None:
+    if env not in (None, ""):
         return truthy(env)
     return bool(settings.get("publish", {}).get("dry_run", True))
 
 
+def write_last_run(**kw) -> None:
+    kw.setdefault("run_at", now_iso())
+    (STATE / "last_run.json").write_text(json.dumps(kw, indent=2))
+
+
+def post_url_from_urn(urn: str) -> str:
+    return f"https://www.linkedin.com/feed/update/{urn}/" if urn.startswith("urn:li:") else ""
+
+
+# --------------------------------------------------------------------------- draft archive
 def archive_draft(decision: dict) -> Path:
     sel = decision.get("selected") or {}
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -82,18 +103,18 @@ def archive_draft(decision: dict) -> Path:
     return path
 
 
+# --------------------------------------------------------------------------- LinkedIn
 def refresh_token() -> str | None:
     cid = os.getenv("LINKEDIN_CLIENT_ID")
     csec = os.getenv("LINKEDIN_CLIENT_SECRET")
     rtok = os.getenv("LINKEDIN_REFRESH_TOKEN")
     if not (cid and csec and rtok):
+        log("token rejected and no CLIENT_ID/SECRET/REFRESH_TOKEN set — cannot refresh")
         return None
     log("access token rejected — attempting refresh")
     r = requests.post(TOKEN_URL, data={
-        "grant_type": "refresh_token",
-        "refresh_token": rtok,
-        "client_id": cid,
-        "client_secret": csec,
+        "grant_type": "refresh_token", "refresh_token": rtok,
+        "client_id": cid, "client_secret": csec,
     }, timeout=20)
     r.raise_for_status()
     tok = r.json()["access_token"]
@@ -102,40 +123,80 @@ def refresh_token() -> str | None:
 
 
 def _persist_token(tok: str) -> None:
-    """Best-effort write of the new token back into config/env."""
     envf = ROOT / "config" / "env"
     if not envf.exists():
         return
     lines = envf.read_text().splitlines()
-    done = False
     for i, ln in enumerate(lines):
         if ln.startswith("LINKEDIN_ACCESS_TOKEN="):
             lines[i] = f"LINKEDIN_ACCESS_TOKEN={tok}"
-            done = True
-    if not done:
+            break
+    else:
         lines.append(f"LINKEDIN_ACCESS_TOKEN={tok}")
     envf.write_text("\n".join(lines) + "\n")
+    os.chmod(envf, 0o600)
     os.environ["LINKEDIN_ACCESS_TOKEN"] = tok
     log("config/env updated with refreshed token")
 
 
-def author_urn(token: str, version: str) -> str:
-    pinned = os.getenv("LINKEDIN_AUTHOR_URN", "").strip()
-    if pinned:
-        return pinned
+def userinfo(token: str) -> dict:
     r = requests.get(USERINFO_URL, headers={"Authorization": f"Bearer {token}"}, timeout=20)
     r.raise_for_status()
-    return f"urn:li:person:{r.json()['sub']}"
+    return r.json()
 
 
-def post_to_linkedin(text: str, settings: dict) -> str:
+def resolve_author_urn(token: str) -> str:
+    """Pinned LINKEDIN_AUTHOR_URN wins — but a *person* URN is sanity-checked
+    against /userinfo and silently corrected if it doesn't match the token."""
+    pinned = os.getenv("LINKEDIN_AUTHOR_URN", "").strip()
+    real_sub = None
+    try:
+        real_sub = userinfo(token).get("sub")
+    except requests.RequestException as e:
+        log(f"userinfo lookup failed ({e}) — relying on pinned URN")
+
+    if pinned and URN_RE.match(pinned):
+        if pinned.startswith("urn:li:organization:"):
+            return pinned
+        if real_sub and pinned != f"urn:li:person:{real_sub}":
+            log(f"pinned LINKEDIN_AUTHOR_URN ({pinned}) does not match this token "
+                f"(urn:li:person:{real_sub}) — using the token's own URN")
+            return f"urn:li:person:{real_sub}"
+        return pinned
+    if pinned:
+        log(f"ignoring malformed LINKEDIN_AUTHOR_URN: {pinned!r}")
+    if real_sub:
+        return f"urn:li:person:{real_sub}"
+    raise RuntimeError("cannot determine author URN: no valid LINKEDIN_AUTHOR_URN and /userinfo failed")
+
+
+def _version_candidates(pinned: str) -> list[str]:
+    """The configured version first, then a walk forward through recent months,
+    so a stale pin (HTTP 426) self-heals without an edit."""
+    out = [pinned] if pinned else []
+    now = datetime.now(timezone.utc)
+    for back in range(12, -2, -1):          # ~12 months ago → ~1 month ahead
+        y, m = now.year, now.month - back
+        while m <= 0:
+            m += 12
+            y -= 1
+        while m > 12:
+            m -= 12
+            y += 1
+        v = f"{y}{m:02d}"
+        if v not in out:
+            out.append(v)
+    return out
+
+
+def post_to_linkedin(text: str, settings: dict) -> tuple[str, str]:
     token = os.environ["LINKEDIN_ACCESS_TOKEN"]
-    version = str(settings.get("publish", {}).get("linkedin_api_version", "202506"))
+    pinned = str(settings.get("publish", {}).get("linkedin_api_version", DEFAULT_LI_VERSION))
     visibility = settings.get("publish", {}).get("visibility", "PUBLIC")
 
-    def _do(tok: str) -> requests.Response:
+    def _do(tok: str, version: str) -> requests.Response:
         payload = {
-            "author": author_urn(tok, version),
+            "author": resolve_author_urn(tok),
             "commentary": text,
             "visibility": visibility,
             "distribution": {
@@ -153,124 +214,149 @@ def post_to_linkedin(text: str, settings: dict) -> str:
             "LinkedIn-Version": version,
         }, json=payload, timeout=30)
 
-    resp = _do(token)
-    if resp.status_code == 401:
-        new = refresh_token()
-        if new:
-            resp = _do(new)
-    if resp.status_code not in (200, 201):
-        raise RuntimeError(f"LinkedIn {resp.status_code}: {resp.text[:500]}")
-    post_id = resp.headers.get("x-restli-id") or resp.headers.get("x-linkedin-id") or ""
-    return post_id
+    resp = None
+    for version in _version_candidates(pinned):
+        resp = _do(token, version)
+        if resp.status_code == 401:
+            new = refresh_token()
+            if new:
+                resp = _do(new, version)
+        if resp.status_code == 426:          # version not active — try the next one
+            log(f"LinkedIn-Version {version} not active, trying another")
+            continue
+        break
+    if resp is None or resp.status_code not in (200, 201):
+        body = resp.text[:600] if resp is not None else "no response"
+        code = resp.status_code if resp is not None else "?"
+        raise RuntimeError(f"LinkedIn HTTP {code}: {body}")
+    if version != pinned:
+        log(f"posted with LinkedIn-Version {version} — update publish.linkedin_api_version in Settings")
+    urn = resp.headers.get("x-restli-id") or resp.headers.get("x-linkedin-id") or ""
+    return urn, post_url_from_urn(urn)
 
 
-def record(decision: dict, post_id: str, dry: bool) -> None:
+# --------------------------------------------------------------------------- recording
+def record_dry(decision: dict) -> None:
     sel = decision["selected"]
-    now = datetime.now(timezone.utc).isoformat()
+    row = {"simulated_at": now_iso(), "title": sel.get("title"), "url": sel.get("url"),
+           "score": sel.get("score")}
+    with (STATE / "dry_runs.jsonl").open("a") as f:
+        f.write(json.dumps(row) + "\n")
+    write_last_run(decision="post", published=False, dry_run=True,
+                   title=sel.get("title"), score=sel.get("score"),
+                   note="dry-run simulation — nothing sent to LinkedIn")
+
+
+def record_real(decision: dict, urn: str, url: str) -> None:
+    sel = decision["selected"]
+    now = now_iso()
     row = {
-        "posted_at": now,
-        "dry_run": dry,
-        "post_id": post_id,
-        "title": sel.get("title"),
-        "url": sel.get("url"),
-        "source": sel.get("source"),
-        "score": sel.get("score"),
-        "cve_ids": sel.get("cve_ids", []),
+        "posted_at": now, "dry_run": False, "post_id": urn, "post_url": url,
+        "title": sel.get("title"), "url": sel.get("url"), "source": sel.get("source"),
+        "score": sel.get("score"), "cve_ids": sel.get("cve_ids", []),
     }
     with (STATE / "history.jsonl").open("a") as f:
         f.write(json.dumps(row) + "\n")
-    if not dry:  # only a real post blocks the URL from ever being reconsidered
-        with (STATE / "seen.jsonl").open("a") as f:
-            f.write(json.dumps({"url": sel.get("url"), "posted_at": now}) + "\n")
-        (STATE / "pending.json").unlink(missing_ok=True)
-    (STATE / "last_run.json").write_text(json.dumps({
-        "run_at": now, "decision": decision.get("decision"),
-        "dry_run": dry, "post_id": post_id,
-        "score": sel.get("score"), "title": sel.get("title"),
-    }, indent=2))
+    with (STATE / "seen.jsonl").open("a") as f:
+        f.write(json.dumps({"url": sel.get("url"), "posted_at": now}) + "\n")
+    for tmp in ("pending.json", "approved.json"):
+        (STATE / tmp).unlink(missing_ok=True)
+    write_last_run(decision="post", published=True, dry_run=False,
+                   title=sel.get("title"), score=sel.get("score"),
+                   post_id=urn, post_url=url)
+
+
+# --------------------------------------------------------------------------- main
+def load_decision(args) -> tuple[dict, bool]:
+    """returns (decision, operator_approved)"""
+    if args.approve is not None:
+        path = Path(args.approve) if args.approve else (STATE / "pending.json")
+        if not path.exists():
+            log(f"--approve: {path} not found (nothing waiting)")
+            sys.exit(3)
+        blob = json.loads(path.read_text())
+        decision = blob.get("decision", blob)  # pending.json wraps it; approved.json is bare
+        log(f"operator-approved decision from {path.name}")
+        return decision, True
+
+    path = Path(args.decision)
+    if not path.exists():
+        log("no decision.json — analyst produced nothing")
+        sys.exit(3)
+    cand = STATE / "candidates.json"
+    if cand.exists() and path.stat().st_mtime < cand.stat().st_mtime:
+        log("decision.json is older than candidates.json — stale, treating as skip")
+        sys.exit(4)
+    return json.loads(path.read_text()), False
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--decision", default=str(STATE / "decision.json"))
     ap.add_argument("--force-post", action="store_true", help="ignore dry_run for this call")
-    ap.add_argument("--approve", metavar="PATH",
-                    help="post an operator-approved decision (from the UI); skips review-hold")
+    ap.add_argument("--approve", nargs="?", const="", metavar="PATH",
+                    help="publish an operator-approved post (default: state/pending.json)")
     args = ap.parse_args()
 
     settings = load_settings()
     mode = str(settings.get("publish", {}).get("mode", "auto")).lower()
 
-    if args.approve:
-        dpath = Path(args.approve)
-        if not dpath.exists():
-            log(f"--approve {dpath}: not found")
-            return 3
-        decision = json.loads(dpath.read_text())
-        log("operator-approved decision — proceeding to publish")
-    else:
-        dpath = Path(args.decision)
-        if not dpath.exists():
-            log("no decision.json — analyst produced nothing")
-            return 3
-        cand = STATE / "candidates.json"
-        if cand.exists() and dpath.stat().st_mtime < cand.stat().st_mtime:
-            log("decision.json is older than candidates.json — stale, treating as skip")
-            return 4
-        decision = json.loads(dpath.read_text())
-
+    decision, operator = load_decision(args)
     archive_draft(decision)
 
     if decision.get("decision") != "post":
         log(f"decision=skip — {decision.get('reason')}")
-        (STATE / "last_run.json").write_text(json.dumps({
-            "run_at": datetime.now(timezone.utc).isoformat(),
-            "decision": "skip", "reason": decision.get("reason"),
-        }, indent=2))
+        write_last_run(decision="skip", published=False, reason=decision.get("reason"))
         return 0
 
     sel = decision.get("selected") or {}
     text = (sel.get("post_text") or "").strip()
     limit = int(settings.get("publish", {}).get("max_post_chars", 2900))
     if not text:
-        log("decision=post but post_text empty — refusing")
+        log("decision=post but post_text is empty — refusing")
+        write_last_run(decision="post", published=False, error="empty post_text")
         return 5
     if len(text) > limit:
         log(f"post_text {len(text)} chars > limit {limit} — refusing")
+        write_last_run(decision="post", published=False, error=f"post too long ({len(text)}>{limit})")
         return 5
-    if sel.get("score", 0) < decision.get("min_score", 80):
-        log(f"score {sel.get('score')} < threshold {decision.get('min_score')} — refusing")
+    if not operator and sel.get("score", 0) < decision.get("min_score", 80):
+        log(f"score {sel.get('score')} < threshold {decision.get('min_score')} — not posting")
+        write_last_run(decision="skip", published=False,
+                       reason=f"score {sel.get('score')} below threshold {decision.get('min_score')}")
         return 0
 
-    # review mode: hold the post for a human to approve in the web UI
-    if mode == "review" and not args.approve:
-        pending = {
-            "held_at": datetime.now(timezone.utc).isoformat(),
-            "decision": decision,
-        }
-        (STATE / "pending.json").write_text(json.dumps(pending, indent=2))
-        log("publish.mode=review — post held in state/pending.json for approval (open the UI)")
-        (STATE / "last_run.json").write_text(json.dumps({
-            "run_at": datetime.now(timezone.utc).isoformat(),
-            "decision": "pending_review", "score": sel.get("score"),
-            "title": sel.get("title"),
-        }, indent=2))
+    # review mode: an automatic run holds the post for a human; --approve skips this
+    if mode == "review" and not operator:
+        (STATE / "pending.json").write_text(json.dumps(
+            {"held_at": now_iso(), "decision": decision}, indent=2))
+        log("publish.mode=review — held in state/pending.json for approval (open the panel)")
+        write_last_run(decision="pending_review", published=False,
+                       title=sel.get("title"), score=sel.get("score"))
         return 0
 
     dry = is_dry_run(settings) and not args.force_post
     if dry:
-        log("DRY RUN — not calling LinkedIn. Draft is archived above.")
-        record(decision, post_id="", dry=True)
+        log("DRY-RUN — nothing sent to LinkedIn (logged to state/dry_runs.jsonl). "
+            "Turn off dry-run in Settings to post for real.")
+        record_dry(decision)
         return 0
 
     if not os.getenv("LINKEDIN_ACCESS_TOKEN"):
         log("LIVE mode but LINKEDIN_ACCESS_TOKEN is unset — cannot post")
+        write_last_run(decision="post", published=False, error="no LINKEDIN_ACCESS_TOKEN")
         return 6
 
-    log(f"posting to LinkedIn ({len(text)} chars, score {sel.get('score')})")
-    post_id = post_to_linkedin(text, settings)
-    log(f"published: {post_id or '(no id header)'}")
-    record(decision, post_id=post_id, dry=False)
+    log(f"posting to LinkedIn ({len(text)} chars, score {sel.get('score')}) …")
+    try:
+        urn, url = post_to_linkedin(text, settings)
+    except (requests.RequestException, RuntimeError) as e:
+        log(f"POST FAILED: {e}")
+        write_last_run(decision="post", published=False, error=str(e)[:600],
+                       title=sel.get("title"))
+        return 7
+    log(f"published: {urn or '(no id header)'}  {url}")
+    record_real(decision, urn, url)
     return 0
 
 

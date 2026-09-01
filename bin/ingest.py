@@ -202,6 +202,9 @@ def main() -> int:
     hist_path = STATE / "history.jsonl"
     if hist_path.exists():
         rows = [json.loads(x) for x in hist_path.read_text().splitlines() if x.strip()]
+        # only *real* posts count as "already covered" — dry-run sims must not
+        # make the analyst think a story was published
+        rows = [r for r in rows if not r.get("dry_run")]
         recently_posted = [
             {"title": r.get("title", ""), "url": r.get("url", ""), "posted_at": r.get("posted_at", "")}
             for r in rows[-25:]

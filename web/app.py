@@ -21,6 +21,7 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import quote
 
 import requests
 import yaml
@@ -79,21 +80,26 @@ def load_env() -> dict:
     return out
 
 
-def save_env(updates: dict[str, str]) -> None:
+def save_env(updates: dict[str, str | None]) -> None:
+    """value None  -> delete the key;  str -> set it."""
     f = CFG / "env"
     lines = f.read_text().splitlines() if f.exists() else []
-    seen = set()
-    for i, ln in enumerate(lines):
+    out, seen = [], set()
+    for ln in lines:
         s = ln.strip()
         if s and not s.startswith("#") and "=" in s:
             k = s.split("=", 1)[0].strip()
             if k in updates:
-                lines[i] = f"{k}={updates[k]}"
                 seen.add(k)
+                if updates[k] is None:
+                    continue                       # drop the line
+                out.append(f"{k}={updates[k]}")
+                continue
+        out.append(ln)
     for k, v in updates.items():
-        if k not in seen:
-            lines.append(f"{k}={v}")
-    f.write_text("\n".join(lines) + "\n")
+        if k not in seen and v is not None:
+            out.append(f"{k}={v}")
+    f.write_text("\n".join(out) + "\n")
     os.chmod(f, 0o600)
 
 
@@ -102,6 +108,30 @@ def read_json(p: Path):
         return json.loads(p.read_text())
     except (OSError, json.JSONDecodeError):
         return None
+
+
+def read_jsonl(p: Path) -> list[dict]:
+    if not p.exists():
+        return []
+    out = []
+    for ln in p.read_text().splitlines():
+        if ln.strip():
+            try:
+                out.append(json.loads(ln))
+            except json.JSONDecodeError:
+                pass
+    return out
+
+
+def real_history() -> list[dict]:
+    """LinkedIn posts that actually went out (never dry-run sims)."""
+    return [r for r in read_jsonl(STATE / "history.jsonl") if not r.get("dry_run")]
+
+
+def posted_urls() -> set[str]:
+    urls = {r.get("url") for r in real_history()}
+    urls |= {r.get("url") for r in read_jsonl(STATE / "seen.jsonl")}
+    return {u for u in urls if u}
 
 
 def mask(v: str) -> str:
@@ -218,29 +248,57 @@ def dashboard(request: Request):
     cand = read_json(STATE / "candidates.json") or {}
     counts = cand.get("counts", {})
     env = load_env()
+
+    posted = posted_urls()
     pending = read_json(STATE / "pending.json")
+    if pending and (pending.get("decision", {}).get("selected", {}).get("url") in posted):
+        (STATE / "pending.json").unlink(missing_ok=True)   # stale — already posted
+        pending = None
 
     dry = str(env.get("CTI_DRY_RUN", pub.get("dry_run", True))).lower() in ("1", "true", "yes", "on")
     mode = pub.get("mode", "auto")
     tok_ok = bool(env.get("LINKEDIN_ACCESS_TOKEN"))
 
-    mode_pill = f'<span class="pill {"warn" if mode == "review" else "good"}">{e(mode)}</span>'
-    dry_pill = ('<span class="pill bad">DRY-RUN — nothing posts</span>' if dry
-                else '<span class="pill good">LIVE — will post</span>')
-    tok_pill = ('<span class="pill good">token set</span>' if tok_ok
+    mode_pill = f'<span class="pill {"warn" if mode == "review" else "good"}">mode: {e(mode)}</span>'
+    dry_pill = ('<span class="pill bad">DRY-RUN — nothing is posted</span>' if dry
+                else '<span class="pill good">LIVE — posts for real</span>')
+    tok_pill = ('<span class="pill good">LinkedIn token set</span>' if tok_ok
                 else '<span class="pill warn">no LinkedIn token</span>')
 
-    hist = []
-    hp = STATE / "history.jsonl"
-    if hp.exists():
-        hist = [json.loads(x) for x in hp.read_text().splitlines() if x.strip()][-10:][::-1]
+    hist = real_history()[-10:][::-1]
+    dry_n = len(read_jsonl(STATE / "dry_runs.jsonl"))
     hist_rows = "".join(
         f"<tr><td>{e(rel_time(h.get('posted_at','')))}</td>"
-        f"<td>{'🧪 dry' if h.get('dry_run') else '✅ live'}</td>"
         f"<td>{e(h.get('score'))}</td>"
-        f"<td><a href='{e(h.get('url'))}' target=_blank>{e((h.get('title') or '')[:80])}</a></td></tr>"
+        f"<td><a href='{e(h.get('url'))}' target=_blank>{e((h.get('title') or '')[:75])}</a></td>"
+        f"<td>{('<a target=_blank href=' + e(h.get('post_url')) + '>on LinkedIn ↗</a>') if h.get('post_url') else '<span class=dim>—</span>'}</td></tr>"
         for h in hist
-    ) or "<tr><td colspan=4 class=dim>nothing posted yet</td></tr>"
+    ) or "<tr><td colspan=4 class=dim>nothing has been posted for real yet</td></tr>"
+
+    # ---- "what happened last" card ----
+    lr_d, when = last.get("decision", "—"), rel_time(last.get("run_at", ""))
+    if last.get("published"):
+        pu = last.get("post_url", "")
+        card = (f'<span class="pill good">POSTED</span> to LinkedIn {e(when)} — {e(last.get("title",""))}'
+                + (f' &nbsp;<a class=btn href="{e(pu)}" target=_blank>View post ↗</a>' if pu else ''))
+        cbord = "var(--good)"
+    elif lr_d == "post" and last.get("dry_run"):
+        card = (f'<span class="pill warn">DRY-RUN</span> {e(when)} — a post cleared the bar but '
+                f'<b>nothing was sent</b>. Turn off dry-run in <a href=/settings>Settings</a> to post for real.')
+        cbord = "var(--warn)"
+    elif last.get("error"):
+        card = f'<span class="pill bad">FAILED</span> {e(when)} — <span class=mono>{e(last.get("error"))}</span>'
+        cbord = "var(--bad)"
+    elif lr_d == "pending_review":
+        card = (f'<span class="pill warn">HELD</span> {e(when)} — {e(last.get("title",""))} '
+                f'is waiting for you. <a class=btn good href=/review>Review &amp; approve →</a>')
+        cbord = "var(--warn)"
+    elif lr_d == "skip":
+        card = f'<span class="pill dim">skipped</span> {e(when)} — <span class=dim>{e(last.get("reason",""))}</span>'
+        cbord = "var(--line)"
+    else:
+        card = f'{e(lr_d)} · {e(when)}'
+        cbord = "var(--line)"
 
     pending_banner = ""
     if pending:
@@ -252,36 +310,36 @@ def dashboard(request: Request):
             f'<a class="btn good" style="margin-left:8px" href="/review">Review &amp; approve →</a></div>'
         )
 
-    last_line = (f'{e(last.get("decision","—"))} · {e(rel_time(last.get("run_at","")))}'
-                 + (f' · score {e(last.get("score"))}' if last.get("score") is not None else ""))
-
     body = f"""
 {pending_banner}
 <div class=card>
   <div class=row style="justify-content:space-between">
     <div class=row>{mode_pill} {dry_pill} {tok_pill}</div>
-    <form method=post action=/run><button class=btn>▶ Run pipeline now</button></form>
+    <div class=row>
+      <form method=post action=/run><button class=btn>▶ Run pipeline now</button></form>
+      <form method=post action=/reset-test onsubmit="return confirm('Clear pending post + dry-run history + this run\\'s candidates/decision? Real posted history is kept.')">
+        <button class="btn ghost">Clear test data</button></form>
+    </div>
   </div>
 </div>
 
-<div class=grid>
-  <div class=stat><div class=n>{e(counts.get('candidates','—'))}</div><div class=l>candidates last run</div></div>
-  <div class=stat><div class=n>{e(counts.get('clusters','—'))}</div><div class=l>story clusters</div></div>
-  <div class=stat><div class=n>{e(counts.get('raw_items','—'))}</div><div class=l>raw feed items</div></div>
-  <div class=stat><div class=n>{e(len(hist))}</div><div class=l>recent posts shown</div></div>
-</div>
+<h2>What happened last</h2>
+<div class=card style="border-color:{cbord}">{card}
+<br><span class=dim>ingest {e(rel_time(cand.get('generated_at','')))} · lookback {e(cand.get('lookback_hours','?'))}h
+· threshold {e(cand.get('min_score','?'))} · {e(counts.get('candidates','—'))} candidates / {e(counts.get('clusters','—'))} clusters</span></div>
 
-<h2>Last run</h2>
-<div class=card>{last_line}
-{('<br><span class=dim>' + e(last.get('reason','')) + '</span>') if last.get('reason') else ''}
-<br><span class=dim>ingest generated {e(rel_time(cand.get('generated_at','')))}, lookback {e(cand.get('lookback_hours','?'))}h,
-threshold {e(cand.get('min_score','?'))}</span></div>
-
-<h2>Recent posts</h2>
+<h2>Posted to LinkedIn {('· ' + str(dry_n) + ' dry-run sims not shown') if dry_n else ''}</h2>
 <div class=card style="padding:0">
-<table><tr><th>when</th><th>mode</th><th>score</th><th>headline</th></tr>{hist_rows}</table></div>
+<table><tr><th>when</th><th>score</th><th>headline</th><th>link</th></tr>{hist_rows}</table></div>
 """
     return page("Dashboard", body, "/", flash_from(request))
+
+
+@app.post("/reset-test")
+def reset_test():
+    for f in ("pending.json", "approved.json", "decision.json", "candidates.json", "dry_runs.jsonl"):
+        (STATE / f).unlink(missing_ok=True)
+    return RedirectResponse("/?m=Test+data+cleared+(real+post+history+kept)", 303)
 
 
 @app.post("/run")
@@ -297,15 +355,21 @@ def run_now():
 # ----------------------------------------------------------------------------- review queue
 @app.get("/review", response_class=HTMLResponse)
 def review(request: Request):
+    posted = posted_urls()
     pending = read_json(STATE / "pending.json")
+    if pending and pending.get("decision", {}).get("selected", {}).get("url") in posted:
+        (STATE / "pending.json").unlink(missing_ok=True)
+        pending = None
     if not pending:
         dec = read_json(STATE / "decision.json") or {}
-        if dec.get("decision") == "post" and dec.get("selected"):
+        sel0 = dec.get("selected") or {}
+        if dec.get("decision") == "post" and sel0 and sel0.get("url") not in posted:
             pending = {"held_at": dec.get("run_at", ""), "decision": dec, "_from_decision": True}
     if not pending:
         return page("Review queue",
-                    "<div class=card>Nothing waiting. Posts appear here when "
-                    "<span class=mono>publish.mode = review</span> and the analyst clears the bar.</div>",
+                    "<div class=card>Nothing waiting. A post lands here when "
+                    "<span class=mono>publish.mode = review</span> and the analyst clears the bar — "
+                    "or it's already been posted (see the Dashboard).</div>",
                     "/review", flash_from(request))
 
     d = pending["decision"]
@@ -313,6 +377,18 @@ def review(request: Request):
     settings = load_yaml(CFG / "settings.yaml")
     dry = str(load_env().get("CTI_DRY_RUN", settings.get("publish", {}).get("dry_run", True))).lower() \
         in ("1", "true", "yes", "on")
+
+    # surface what happened on the previous approve attempt for THIS post
+    lr = read_json(STATE / "last_run.json") or {}
+    prev = ""
+    if lr.get("decision") == "post" and lr.get("dry_run") and lr.get("title") == sel.get("title"):
+        prev = ('<div class="flash" style="border-color:var(--warn)">Your last approve was a '
+                '<b>DRY-RUN</b> — nothing was posted. This post is still here. '
+                'Turn off dry-run below and approve again to post for real.</div>')
+    elif lr.get("error") and lr.get("title") == sel.get("title"):
+        prev = (f'<div class="flash" style="border-color:var(--bad)">Last attempt <b>failed</b>: '
+                f'<span class=mono>{e(lr.get("error"))}</span></div>')
+
     brk = "".join(f"<li>{e(b)}</li>" for b in sel.get("score_breakdown", []))
     considered = "".join(
         f"<tr><td>{e(c.get('score'))}</td><td><a href='{e(c.get('url'))}' target=_blank>"
@@ -320,11 +396,11 @@ def review(request: Request):
         for c in d.get("considered", [])
     )
     warn = ('<div class="flash" style="border-color:var(--bad);background:rgba(248,81,73,.1)">'
-            'Global <b>dry-run is ON</b> — approving will simulate only. Turn it off in '
-            '<a href=/settings>Settings</a> to post for real.</div>') if dry else ""
+            'Global <b>dry-run is ON</b> — approving will simulate only, nothing is sent. '
+            'Turn it off in <a href=/settings>Settings</a> to post for real.</div>') if dry else ""
 
     body = f"""
-{warn}
+{prev}{warn}
 <div class=card>
   <div class=row style="justify-content:space-between">
     <div><span class="pill good">score {e(sel.get('score'))}</span>
@@ -382,22 +458,22 @@ def review_reject():
 @app.post("/review/approve")
 def review_approve(post_text: str = Form("")):
     _write_pending_text(post_text.strip())
-    # publisher wants a bare decision doc at --approve PATH
-    pending = read_json(STATE / "pending.json") or {}
-    appr = STATE / "approved.json"
-    appr.write_text(json.dumps(pending.get("decision", {}), indent=2))
     proc = subprocess.run(
-        [sys.executable, str(ROOT / "bin" / "publish_linkedin.py"), "--approve", str(appr)],
+        [sys.executable, str(ROOT / "bin" / "publish_linkedin.py"), "--approve"],
         cwd=ROOT, capture_output=True, text=True, env=_env_with_config(),
     )
-    out = (proc.stdout + proc.stderr).strip()
-    ok = proc.returncode == 0 and ("published:" in out or "DRY RUN" in out)
-    if "published:" in out:
-        (STATE / "pending.json").unlink(missing_ok=True)
-    msg = ("Posted to LinkedIn" if "published:" in out
-           else "Dry-run: simulated only" if "DRY RUN" in out
-           else f"Publisher exited {proc.returncode}")
-    return RedirectResponse(f"/review?m={msg.replace(' ', '+')}+·+{out.splitlines()[-1][:80].replace(' ', '+') if out else ''}", 303)
+    lr = read_json(STATE / "last_run.json") or {}
+    if lr.get("published"):
+        msg = "✓ Posted to LinkedIn"
+    elif lr.get("dry_run"):
+        msg = "Dry-run only — nothing was posted. Turn off dry-run in Settings, then approve again."
+    elif lr.get("error"):
+        msg = f"Failed: {lr['error'][:160]}"
+    else:
+        tail = (proc.stdout + proc.stderr).strip().splitlines()
+        msg = (tail[-1][:180] if tail else f"publisher exited {proc.returncode}")
+    dest = "/" if lr.get("published") else "/review"
+    return RedirectResponse(f"{dest}?m={quote(msg)}", 303)
 
 
 def _env_with_config() -> dict:
@@ -624,12 +700,17 @@ def secrets_get(request: Request):
     fields = ""
     for k, label, hint in SECRET_KEYS:
         cur = env.get(k, "")
-        ph = mask(cur) or "not set"
+        shown = e(cur) if k == "LINKEDIN_AUTHOR_URN" else (mask(cur) or "not set")
+        typ = "text" if k == "LINKEDIN_AUTHOR_URN" else "password"
+        val = f'value="{e(cur)}"' if k == "LINKEDIN_AUTHOR_URN" else ""
+        ph = "" if k == "LINKEDIN_AUTHOR_URN" else f'placeholder="{shown}"'
         fields += f"""<label>{e(label)} <small>— {e(hint)}</small></label>
-<input type=password name={k} placeholder="{e(ph)}" autocomplete=off>"""
+<input type={typ} name={k} {val} {ph} autocomplete=off>
+<label style="margin:2px 0 0;font-size:12px"><input type=checkbox name=clear_{k}> clear this value</label>"""
     dry = env.get("CTI_DRY_RUN", "")
-    body = f"""<div class=card class=dim>Values are write-only. Stored in
-<span class=mono>config/env</span> (chmod 600, git-ignored). Leave a field blank to keep the current value.</div>
+    body = f"""<div class=card class=dim>Stored in <span class=mono>config/env</span>
+(chmod 600, git-ignored). Secret fields are write-only — leave blank to keep the current value,
+or tick <b>clear</b> to remove it. The Author URN is shown in full so you can check / fix it.</div>
 <form method=post action=/secrets>{fields}
 <label style="margin-top:14px">CTI_DRY_RUN override <small>— blank = use settings.yaml</small></label>
 <select name=CTI_DRY_RUN>
@@ -646,15 +727,16 @@ def secrets_get(request: Request):
 @app.post("/secrets")
 async def secrets_post(request: Request):
     f = await request.form()
-    updates = {}
+    updates: dict = {}
     for k, _, _ in SECRET_KEYS:
+        if f.get(f"clear_{k}"):
+            updates[k] = None
+            continue
         v = (f.get(k) or "").strip()
         if v:
             updates[k] = v
     cd = f.get("CTI_DRY_RUN", "")
-    updates["CTI_DRY_RUN"] = cd if cd else load_env().get("CTI_DRY_RUN", "")
-    if not updates["CTI_DRY_RUN"]:
-        updates.pop("CTI_DRY_RUN")
+    updates["CTI_DRY_RUN"] = cd if cd in ("true", "false") else None  # "" -> remove override
     if updates:
         save_env(updates)
     return RedirectResponse("/secrets?m=Saved", 303)
@@ -671,8 +753,17 @@ def secrets_test():
                          headers={"Authorization": f"Bearer {tok}"}, timeout=15)
         if r.ok:
             j = r.json()
+            real = f"urn:li:person:{j.get('sub','?')}"
             msg = (f"OK — authenticated as <b>{e(j.get('name','?'))}</b><br>"
-                   f"URN: <span class=mono>urn:li:person:{e(j.get('sub','?'))}</span>")
+                   f"This token posts as: <span class=mono>{e(real)}</span>")
+            pinned = env.get("LINKEDIN_AUTHOR_URN", "").strip()
+            if pinned and pinned != real and not pinned.startswith("urn:li:organization:"):
+                msg += (f'<br><br><span class="pill bad">mismatch</span> Your pinned '
+                        f'<span class=mono>LINKEDIN_AUTHOR_URN</span> is <span class=mono>{e(pinned)}</span>, '
+                        f'which is not this token. Clear it on the Secrets page (leave blank to auto-detect) '
+                        f'or set it to <span class=mono>{e(real)}</span> — otherwise real posts will be rejected.')
+            elif not pinned:
+                msg += "<br><span class=dim>No pinned URN — the publisher auto-detects this one. Good.</span>"
         else:
             msg = f"HTTP {r.status_code}: <span class=mono>{e(r.text[:300])}</span>"
     except Exception as ex:  # noqa
