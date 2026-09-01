@@ -1,0 +1,10 @@
+# CLI pipeline needs only these two (both usually already present):
+requests>=2.31
+PyYAML>=6.0
+
+# Web control panel (web/app.py) also needs:
+fastapi>=0.110
+uvicorn>=0.27
+python-multipart>=0.0.9
+
+# The RSS/Atom parser (lib/feedparse.py) is stdlib-only — no feedparser needed.

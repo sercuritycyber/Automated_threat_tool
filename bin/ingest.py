@@ -182,10 +182,12 @@ def main() -> int:
     lookback = int(ing.get("lookback_hours", 12))
     timeout = int(ing.get("feed_timeout_seconds", 20))
     max_candidates = int(ing.get("max_candidates", 40))
-    feeds = load_yaml(ROOT / "config" / "feeds.yaml").get("feeds", [])
+    all_feeds = load_yaml(ROOT / "config" / "feeds.yaml").get("feeds", [])
+    feeds = [f for f in all_feeds if f.get("enabled", True)]
 
     cutoff = datetime.now(timezone.utc) - timedelta(hours=lookback)
-    print(f"[ingest] {len(feeds)} feeds, lookback {lookback}h (since {cutoff:%Y-%m-%d %H:%M UTC})")
+    print(f"[ingest] {len(feeds)}/{len(all_feeds)} feeds enabled, lookback {lookback}h "
+          f"(since {cutoff:%Y-%m-%d %H:%M UTC})")
 
     seen_urls = set()
     seen_path = STATE / "seen.jsonl"

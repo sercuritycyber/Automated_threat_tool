@@ -1,5 +1,7 @@
 # ------------------------------------------------------------------
 # Runtime knobs. Anything secret lives in config/env (see env.example).
+# The web UI (web/app.py) can edit this file — it keeps the values but
+# drops these comments. Full field reference is in README.md.
 # ------------------------------------------------------------------
 
 brand:
@@ -17,9 +19,14 @@ scoring:
   min_score: 80               # only publish if the top item scores >= this
 
 publish:
-  # Master safety switch. true = draft + archive only, never calls LinkedIn.
-  # Override per-run with CTI_DRY_RUN=false in the environment.
+  # auto   = if the analyst says post and it clears min_score, publish straight away
+  # review = hold every post in state/pending.json for a human to approve in the web UI
+  mode: review
+
+  # Master safety switch. true = draft + archive only, never calls LinkedIn
+  # (an approval in the UI won't post either). Override per-run with CTI_DRY_RUN.
   dry_run: true
+
   max_post_chars: 2900        # LinkedIn hard limit is 3000
   linkedin_api_version: "202506"
   visibility: "PUBLIC"        # PUBLIC | CONNECTIONS
@@ -28,5 +35,4 @@ notify:
   # Optional failure/health pings. Leave blank to disable.
   # Any ntfy.sh-style topic URL works, e.g. https://ntfy.sh/my-cti-alerts
   ntfy_url: ""
-  # Also ping on a successful post (not just failures)?
-  on_success: true
+  on_success: true            # also ping on a successful post, not just failures

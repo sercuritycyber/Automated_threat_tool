@@ -1,0 +1,15 @@
+[Unit]
+Description=Blue Team CTI — local web control panel (127.0.0.1:8799)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Threatintel
+ExecStart=/usr/bin/env python3 %h/Threatintel/web/app.py
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=CTI_UI_PORT=8799
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

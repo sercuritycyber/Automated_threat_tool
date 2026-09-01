@@ -182,6 +182,7 @@ def record(decision: dict, post_id: str, dry: bool) -> None:
     if not dry:  # only a real post blocks the URL from ever being reconsidered
         with (STATE / "seen.jsonl").open("a") as f:
             f.write(json.dumps({"url": sel.get("url"), "posted_at": now}) + "\n")
+        (STATE / "pending.json").unlink(missing_ok=True)
     (STATE / "last_run.json").write_text(json.dumps({
         "run_at": now, "decision": decision.get("decision"),
         "dry_run": dry, "post_id": post_id,
@@ -193,20 +194,31 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--decision", default=str(STATE / "decision.json"))
     ap.add_argument("--force-post", action="store_true", help="ignore dry_run for this call")
+    ap.add_argument("--approve", metavar="PATH",
+                    help="post an operator-approved decision (from the UI); skips review-hold")
     args = ap.parse_args()
 
     settings = load_settings()
-    dpath = Path(args.decision)
-    if not dpath.exists():
-        log("no decision.json — analyst produced nothing")
-        return 3
+    mode = str(settings.get("publish", {}).get("mode", "auto")).lower()
 
-    cand = STATE / "candidates.json"
-    if cand.exists() and dpath.stat().st_mtime < cand.stat().st_mtime:
-        log("decision.json is older than candidates.json — stale, treating as skip")
-        return 4
+    if args.approve:
+        dpath = Path(args.approve)
+        if not dpath.exists():
+            log(f"--approve {dpath}: not found")
+            return 3
+        decision = json.loads(dpath.read_text())
+        log("operator-approved decision — proceeding to publish")
+    else:
+        dpath = Path(args.decision)
+        if not dpath.exists():
+            log("no decision.json — analyst produced nothing")
+            return 3
+        cand = STATE / "candidates.json"
+        if cand.exists() and dpath.stat().st_mtime < cand.stat().st_mtime:
+            log("decision.json is older than candidates.json — stale, treating as skip")
+            return 4
+        decision = json.loads(dpath.read_text())
 
-    decision = json.loads(dpath.read_text())
     archive_draft(decision)
 
     if decision.get("decision") != "post":
@@ -228,6 +240,21 @@ def main() -> int:
         return 5
     if sel.get("score", 0) < decision.get("min_score", 80):
         log(f"score {sel.get('score')} < threshold {decision.get('min_score')} — refusing")
+        return 0
+
+    # review mode: hold the post for a human to approve in the web UI
+    if mode == "review" and not args.approve:
+        pending = {
+            "held_at": datetime.now(timezone.utc).isoformat(),
+            "decision": decision,
+        }
+        (STATE / "pending.json").write_text(json.dumps(pending, indent=2))
+        log("publish.mode=review — post held in state/pending.json for approval (open the UI)")
+        (STATE / "last_run.json").write_text(json.dumps({
+            "run_at": datetime.now(timezone.utc).isoformat(),
+            "decision": "pending_review", "score": sel.get("score"),
+            "title": sel.get("title"),
+        }, indent=2))
         return 0
 
     dry = is_dry_run(settings) and not args.force_post
