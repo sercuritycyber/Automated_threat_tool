@@ -123,6 +123,14 @@ def read_jsonl(p: Path) -> list[dict]:
     return out
 
 
+sys.path.insert(0, str(ROOT / "bin"))
+try:
+    from lint_post import lint as lint_post_text  # noqa
+except ImportError:
+    def lint_post_text(t, c=None):
+        return {"ok": True, "errors": [], "warnings": [], "stats": {}}
+
+
 def real_history() -> list[dict]:
     """LinkedIn posts that actually went out (never dry-run sims)."""
     return [r for r in read_jsonl(STATE / "history.jsonl") if not r.get("dry_run")]
@@ -399,6 +407,40 @@ def review(request: Request):
             'Global <b>dry-run is ON</b> — approving will simulate only, nothing is sent. '
             'Turn it off in <a href=/settings>Settings</a> to post for real.</div>') if dry else ""
 
+    # ---- post-quality check ----
+    ptext = sel.get("post_text", "") or ""
+    ql = lint_post_text(ptext, sel.get("cve_ids") or [])
+    st = ql.get("stats", {})
+    if not ql["errors"] and not ql["warnings"]:
+        qcard = ('<div class="flash" style="border-color:var(--good)">'
+                 '✓ Post-quality checks pass.</div>')
+    else:
+        items = "".join(f'<li><span class="pill bad">fix</span> {e(x)}</li>' for x in ql["errors"])
+        items += "".join(f'<li><span class="pill warn">nit</span> {e(x)}</li>' for x in ql["warnings"])
+        qcard = (f'<div class="card" style="border-color:{"var(--bad)" if ql["errors"] else "var(--warn)"}">'
+                 f'<b>Post-quality check</b> '
+                 f'<span class=dim>· {st.get("chars","?")} chars · hook {st.get("hook_chars","?")} '
+                 f'· {st.get("bullets","?")} bullets · {st.get("hashtags","?")} tags</span>'
+                 f'<ul style="margin:8px 0 0;padding-left:18px">{items}</ul>'
+                 + ('<p class=dim style="margin:8px 0 0">Auto-mode would hold this post instead of '
+                    'publishing. Fix the <b>fix</b> items, or edit and approve manually.</p>'
+                    if ql["errors"] else '')
+                 + '</div>')
+
+    # ---- LinkedIn "…more" fold preview ----
+    fold = 215
+    cut = ptext.rfind(" ", 0, fold) if len(ptext) > fold else len(ptext)
+    head_txt, tail_txt = ptext[:cut], ptext[cut:]
+    preview = (
+        '<div class=card><b class=dim>LinkedIn preview</b>'
+        '<div style="white-space:pre-wrap;border:1px solid var(--line);border-radius:8px;'
+        'padding:12px;margin-top:8px;max-width:540px;font-size:13.5px">'
+        f'{e(head_txt)}'
+        + (f'<span class=dim> …more</span>\n<span class=dim>{"─" * 30}</span>{e(tail_txt)}'
+           if tail_txt.strip() else '')
+        + '</div></div>'
+    )
+
     body = f"""
 {prev}{warn}
 <div class=card>
@@ -414,12 +456,17 @@ def review(request: Request):
   <details><summary class=dim>score breakdown</summary><ul>{brk}</ul></details>
 </div>
 
+{qcard}
+{preview}
+
 <form method=post action=/review/approve>
-<label>Post text <small>— edit freely; character count enforced on save</small></label>
-<textarea name=post_text rows=16>{e(sel.get('post_text'))}</textarea>
+<label>Post text <small>— edit freely; “Save edits” re-runs the quality check</small></label>
+<textarea name=post_text rows=18>{e(ptext)}</textarea>
 <div class=row style="margin-top:12px">
   <button class="btn good" onclick="return confirm('Post this to LinkedIn now?')">✓ Approve &amp; post</button>
-  <button class="btn ghost" formaction=/review/save formnovalidate>Save edits</button>
+  <button class="btn ghost" formaction=/review/save formnovalidate>Save edits &amp; re-check</button>
+  <button class="btn ghost" formaction=/review/rewrite formnovalidate
+    onclick="return confirm('Ask the analyst to rewrite this tighter? Takes ~30s.')">↻ Rewrite tighter</button>
   <button class="btn bad" formaction=/review/reject formnovalidate
     onclick="return confirm('Discard this post?')">✗ Reject</button>
 </div>
@@ -453,6 +500,47 @@ def review_save(post_text: str = Form("")):
 def review_reject():
     (STATE / "pending.json").unlink(missing_ok=True)
     return RedirectResponse("/review?m=Post+rejected+and+discarded", 303)
+
+
+REWRITE_PROMPT = """You are the social editor for Blue Team Podcast (securitycyber.uk).
+Rewrite the LinkedIn post below to a professional standard. Keep every fact,
+CVE id, version number and the source link exactly as given — do not add facts.
+
+Rules:
+- First line: one sentence, <= 200 chars, leads with the stake for the reader.
+- Then 3 bullets, each ONE line <= 180 chars: "• Vulnerability:", "• Affected:", "• Do now:".
+- Blank line between every block.
+- Every sentence <= 25 words, active voice, British spelling. At most one em-dash per sentence.
+- 1-2 short sentences of attributed context, then the URL on its own line,
+  then exactly 3-4 real hashtags including #BlueTeam and #CyberSecurity (no hype tags).
+- 600-1600 characters total.
+
+Output ONLY the rewritten post text, nothing else.
+
+--- CURRENT POST ---
+%s
+"""
+
+
+@app.post("/review/rewrite")
+def review_rewrite(post_text: str = Form("")):
+    cur = post_text.strip() or (read_json(STATE / "pending.json") or {}) \
+        .get("decision", {}).get("selected", {}).get("post_text", "")
+    if not cur:
+        return RedirectResponse("/review?m=Nothing+to+rewrite", 303)
+    _write_pending_text(cur)  # keep any edits the user already made
+    try:
+        proc = subprocess.run(
+            ["claude", "-p", REWRITE_PROMPT % cur, "--allowedTools", ""],
+            cwd=ROOT, capture_output=True, text=True, timeout=120, env=_env_with_config(),
+        )
+        new = proc.stdout.strip()
+    except (subprocess.TimeoutExpired, FileNotFoundError) as ex:
+        return RedirectResponse(f"/review?m={quote('Rewrite failed: ' + str(ex)[:120])}", 303)
+    if len(new) < 200 or "http" not in new:
+        return RedirectResponse("/review?m=Rewrite+came+back+empty+—+kept+the+original", 303)
+    _write_pending_text(new)
+    return RedirectResponse("/review?m=Rewritten+—+review+the+new+draft+below", 303)
 
 
 @app.post("/review/approve")

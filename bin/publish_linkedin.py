@@ -27,6 +27,12 @@ import requests
 import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "bin"))
+try:
+    from lint_post import lint as lint_text
+except ImportError:  # linter optional
+    def lint_text(_t, _c=None):
+        return {"ok": True, "errors": [], "warnings": []}
 STATE = ROOT / "state"
 DRAFTS = ROOT / "drafts"
 DRAFTS.mkdir(exist_ok=True)
@@ -325,6 +331,22 @@ def main() -> int:
         write_last_run(decision="skip", published=False,
                        reason=f"score {sel.get('score')} below threshold {decision.get('min_score')}")
         return 0
+
+    # quality gate — a malformed post never posts automatically
+    ql = lint_text(text, sel.get("cve_ids") or [])
+    if ql["warnings"]:
+        log("post-quality warnings: " + " | ".join(ql["warnings"][:6]))
+    if ql["errors"] and not operator:
+        log("post-quality FAIL: " + " | ".join(ql["errors"]))
+        (STATE / "pending.json").write_text(json.dumps(
+            {"held_at": now_iso(), "decision": decision, "lint": ql}, indent=2))
+        write_last_run(decision="pending_review", published=False,
+                       title=sel.get("title"), score=sel.get("score"),
+                       note="held: post-quality check failed — review and edit in the panel")
+        return 0
+    if ql["errors"]:
+        log("post-quality errors present but operator-approved — posting anyway: "
+            + " | ".join(ql["errors"][:6]))
 
     # review mode: an automatic run holds the post for a human; --approve skips this
     if mode == "review" and not operator:
