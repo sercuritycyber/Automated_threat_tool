@@ -29,7 +29,7 @@ python3 web/app.py        # → http://127.0.0.1:8799   (localhost only, no exte
 
 | Page | What it does |
 |---|---|
-| **Dashboard** | live status (mode / dry-run / token), counts from the last run, recent posts, **Run pipeline now** button, a banner when a post is awaiting approval |
+| **Dashboard** | operations view: system-state banner (LIVE / DRY-RUN / ARMED) with a live countdown to the next scheduled run, stat tiles (posts today vs cap, 7-day count, avg score, queue depth), today's run slots, a 14-day activity chart, recent posts, a run-history timeline, and quick actions — **Run now**, **Fire top candidate**, **Go live / Pause**, **Clear test data**. Soft-refreshes every 60s |
 | **Review queue** | the held post — edit the text inline, **Approve & post**, **Save edits**, or **Reject**; shows the score breakdown and everything else that was considered |
 | **Candidates** | the current `state/candidates.json` as a table (pre-score, source, CVEs, KEV hits); **Draft & review** on any row hands that one story to `claude -p` now and drops the draft in the review queue — bypasses the schedule and the daily cap |
 | **Drafts** | every generated post, archived |
@@ -110,11 +110,17 @@ Everything below is in the panel (Settings / Feeds), or edit the files directly:
 ## Operations
 
 ```bash
+systemd/install.sh                 # install / update the units + panel (safe to re-run)
+systemd/install.sh status          # what's running + next scheduled run
+systemd/install.sh uninstall       # remove the units (keeps config/, state/, logs/)
+sudo loginctl enable-linger $USER  # let the timer fire while you're logged out
+
 systemctl --user list-timers cti-harvester.timer
 systemctl --user start cti-harvester.service       # run the harvest now
 journalctl --user -u cti-harvester.service -f      # follow the harvest
 journalctl --user -u cti-panel.service -f          # follow the web panel
 ls -t logs/ ; cat state/last_run.json              # last outcome
+tail state/runs.jsonl                               # run history (feeds the dashboard)
 tail state/history.jsonl                            # what's been posted
 ```
 
@@ -130,6 +136,9 @@ bin/ingest.py            stage 1 — deterministic feeds + KEV + dedup
 prompts/analyst.md       stage 2 — the algorithm handed to `claude -p`
 bin/publish_linkedin.py  stage 3 — archive + review-hold / post + record
 bin/notify.py            ntfy helper
+bin/runlog.py            appends a run summary to state/runs.jsonl (dashboard timeline)
+bin/postlog.py           rolling-24h post counter (daily cap)
+bin/lint_post.py         post-quality linter + gate
 bin/run.sh               orchestrator (lock, logging, stage wiring)
 systemd/                 user timer + panel service + installer
 state/                   candidates.json, decision.json, pending.json, history.jsonl,
