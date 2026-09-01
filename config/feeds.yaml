@@ -1,0 +1,68 @@
+# CTI source feeds. `weight` (0.0-1.0) nudges the pre-score and breaks ties
+# between near-duplicate stories (higher-weight source wins the cluster).
+# All URLs below were reachability-checked 2026-09-01 with a browser UA.
+feeds:
+  # --- authoritative / vendor advisories ---
+  - name: CISA Advisories
+    url: https://www.cisa.gov/cybersecurity-advisories/all.xml
+    weight: 1.0
+  - name: CISA News
+    url: https://www.cisa.gov/news.xml
+    weight: 0.9
+  - name: Cisco PSIRT
+    url: https://sec.cloudapps.cisco.com/security/center/psirtrss20/CiscoSecurityAdvisory.xml
+    weight: 0.85
+  - name: CERT/CC Vulnerability Notes
+    url: https://www.kb.cert.org/vulfeed/
+    weight: 0.85
+  - name: Microsoft Security Blog
+    url: https://www.microsoft.com/en-us/security/blog/feed/
+    weight: 0.8
+
+  # --- research / threat intel teams ---
+  - name: Google Project Zero
+    url: https://googleprojectzero.blogspot.com/feeds/posts/default
+    weight: 0.85
+  - name: Cisco Talos
+    url: https://blog.talosintelligence.com/rss/
+    weight: 0.85
+  - name: Unit 42 (Palo Alto)
+    url: https://unit42.paloaltonetworks.com/feed/
+    weight: 0.8
+  - name: SANS Internet Storm Center
+    url: https://isc.sans.edu/rssfeed_full.xml
+    weight: 0.85
+  - name: Rapid7 Blog
+    url: https://www.rapid7.com/blog/rss/
+    weight: 0.7
+  - name: ESET WeLiveSecurity
+    url: https://www.welivesecurity.com/en/rss/feed/
+    weight: 0.7
+  - name: Kaspersky Securelist
+    url: https://securelist.com/feed/
+    weight: 0.7
+  - name: PortSwigger Research
+    url: https://portswigger.net/research/rss
+    weight: 0.7
+
+  # --- news desks ---
+  - name: The Hacker News
+    url: https://feeds.feedburner.com/TheHackersNews
+    weight: 0.72
+  - name: BleepingComputer
+    url: https://www.bleepingcomputer.com/feed/
+    weight: 0.8
+  - name: SecurityWeek
+    url: https://www.securityweek.com/feed/
+    weight: 0.7
+  - name: Dark Reading
+    url: https://www.darkreading.com/rss.xml
+    weight: 0.65
+  - name: Krebs on Security
+    url: https://krebsonsecurity.com/feed/
+    weight: 0.72
+
+  # --- ransomware tracking (high volume, low per-item weight) ---
+  - name: Ransomware.live
+    url: https://www.ransomware.live/rss.xml
+    weight: 0.45

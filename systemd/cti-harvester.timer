@@ -1,0 +1,13 @@
+[Unit]
+Description=Run the Blue Team CTI harvester every 6 hours
+
+[Timer]
+OnCalendar=*-*-* 02,08,14,20:00:00
+# catch up if the machine was asleep at the scheduled time
+Persistent=true
+# spread load / avoid every box firing on the dot
+RandomizedDelaySec=900
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,32 @@
+# ------------------------------------------------------------------
+# Runtime knobs. Anything secret lives in config/env (see env.example).
+# ------------------------------------------------------------------
+
+brand:
+  name: "Blue Team Podcast"
+  site: "securitycyber.uk"
+  audience: "blue team operators, SOC analysts, and enterprise defenders"
+
+ingest:
+  lookback_hours: 12          # only consider items published in this window
+  feed_timeout_seconds: 20
+  kev_recent_days: 21         # a KEV entry added within N days is a strong signal
+  max_candidates: 40          # cap handed to the analyst
+
+scoring:
+  min_score: 80               # only publish if the top item scores >= this
+
+publish:
+  # Master safety switch. true = draft + archive only, never calls LinkedIn.
+  # Override per-run with CTI_DRY_RUN=false in the environment.
+  dry_run: true
+  max_post_chars: 2900        # LinkedIn hard limit is 3000
+  linkedin_api_version: "202506"
+  visibility: "PUBLIC"        # PUBLIC | CONNECTIONS
+
+notify:
+  # Optional failure/health pings. Leave blank to disable.
+  # Any ntfy.sh-style topic URL works, e.g. https://ntfy.sh/my-cti-alerts
+  ntfy_url: ""
+  # Also ping on a successful post (not just failures)?
+  on_success: true

@@ -1,0 +1,15 @@
+# secrets
+config/env
+
+# runtime state & output
+state/*
+!state/.gitkeep
+drafts/*
+!drafts/.gitkeep
+logs/*
+!logs/.gitkeep
+
+# python
+__pycache__/
+*.pyc
+.venv/
