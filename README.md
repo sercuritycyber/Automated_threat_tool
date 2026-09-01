@@ -98,7 +98,8 @@ Everything below is in the panel (Settings / Feeds), or edit the files directly:
 |---|---|---|
 | add/remove/disable sources | Feeds | `config/feeds.yaml` |
 | change cadence | Settings → Schedule | `systemd/cti-harvester.timer` → `OnCalendar=` |
-| raise/lower the publish bar | Settings → Min score | `config/settings.yaml` → `scoring.min_score` |
+| raise/lower the publish bar | Settings → Min score | `config/settings.yaml` → `scoring.min_score` (65 default; 80 = KEV-only) |
+| cap posts per day | Settings → Max posts per day | `config/settings.yaml` → `publish.max_per_day` (default 5; extras held for review) |
 | widen the story window | Settings → Lookback | `config/settings.yaml` → `ingest.lookback_hours` |
 | auto-post vs approve-first | Settings → Mode | `config/settings.yaml` → `publish.mode` |
 | change the voice / scoring rubric | — | `prompts/analyst.md` |

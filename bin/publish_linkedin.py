@@ -33,6 +33,8 @@ try:
 except ImportError:  # linter optional
     def lint_text(_t, _c=None):
         return {"ok": True, "errors": [], "warnings": []}
+from postlog import count_last_24h
+
 STATE = ROOT / "state"
 DRAFTS = ROOT / "drafts"
 DRAFTS.mkdir(exist_ok=True)
@@ -326,7 +328,7 @@ def main() -> int:
         log(f"post_text {len(text)} chars > limit {limit} — refusing")
         write_last_run(decision="post", published=False, error=f"post too long ({len(text)}>{limit})")
         return 5
-    if not operator and sel.get("score", 0) < decision.get("min_score", 80):
+    if not operator and sel.get("score", 0) < decision.get("min_score", 65):
         log(f"score {sel.get('score')} < threshold {decision.get('min_score')} — not posting")
         write_last_run(decision="skip", published=False,
                        reason=f"score {sel.get('score')} below threshold {decision.get('min_score')}")
@@ -347,6 +349,20 @@ def main() -> int:
     if ql["errors"]:
         log("post-quality errors present but operator-approved — posting anyway: "
             + " | ".join(ql["errors"][:6]))
+
+    # daily post cap — an automatic run holds; an operator can override
+    max_day = int(settings.get("publish", {}).get("max_per_day", 5))
+    used = count_last_24h()
+    if used >= max_day and not operator:
+        log(f"daily post cap reached ({used}/{max_day} in 24h) — holding this one")
+        (STATE / "pending.json").write_text(json.dumps(
+            {"held_at": now_iso(), "decision": decision}, indent=2))
+        write_last_run(decision="pending_review", published=False,
+                       title=sel.get("title"), score=sel.get("score"),
+                       note=f"held: daily cap {used}/{max_day} — approve in the panel to override")
+        return 0
+    if used >= max_day:
+        log(f"daily cap {used}/{max_day} exceeded — operator override, posting anyway")
 
     # review mode: an automatic run holds the post for a human; --approve skips this
     if mode == "review" and not operator:

@@ -44,7 +44,16 @@ if [[ "$CAND_COUNT" == "0" ]]; then
   echo '{"run_at":"'"$TS"'","decision":"skip","reason":"no candidates from ingest"}' > "$ROOT/state/last_run.json"
   exit 0
 fi
-echo "[run] $CAND_COUNT candidates queued for the analyst"
+
+# Daily post cap — skip the (expensive) analyst call once we've hit it.
+USED="$(python3 "$ROOT/bin/postlog.py" 2>/dev/null || echo 0)"
+MAXDAY="$(python3 -c 'import yaml; print(yaml.safe_load(open("config/settings.yaml")).get("publish",{}).get("max_per_day",5))' 2>/dev/null || echo 5)"
+if [[ "$USED" -ge "$MAXDAY" ]]; then
+  echo "[run] daily post cap reached ($USED/$MAXDAY in the last 24h) — skipping analyst."
+  printf '{"run_at":"%s","decision":"skip","reason":"daily post cap reached (%s/%s in 24h)"}\n' "$TS" "$USED" "$MAXDAY" > "$ROOT/state/last_run.json"
+  exit 0
+fi
+echo "[run] $CAND_COUNT candidates queued for the analyst  ($USED/$MAXDAY posts used today)"
 
 echo "[run] stage 2/3 : analyst (claude -p)"
 claude -p "$(cat "$ROOT/prompts/analyst.md")" \

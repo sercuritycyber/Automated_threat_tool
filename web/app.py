@@ -129,6 +129,11 @@ try:
 except ImportError:
     def lint_post_text(t, c=None):
         return {"ok": True, "errors": [], "warnings": [], "stats": {}}
+try:
+    from postlog import real_posts as _real_posts  # noqa
+except ImportError:
+    def _real_posts(hours=None):
+        return []
 
 
 def real_history() -> list[dict]:
@@ -273,6 +278,11 @@ def dashboard(request: Request):
     tok_pill = ('<span class="pill good">LinkedIn token set</span>' if tok_ok
                 else '<span class="pill warn">no LinkedIn token</span>')
 
+    max_day = int(pub.get("max_per_day", 5))
+    used_day = len(_real_posts(24))
+    cap_cls = "bad" if used_day >= max_day else ("warn" if used_day >= max_day - 1 else "good")
+    cap_pill = f'<span class="pill {cap_cls}">{used_day}/{max_day} posts today</span>'
+
     hist = real_history()[-10:][::-1]
     dry_n = len(read_jsonl(STATE / "dry_runs.jsonl"))
     hist_rows = "".join(
@@ -322,7 +332,7 @@ def dashboard(request: Request):
 {pending_banner}
 <div class=card>
   <div class=row style="justify-content:space-between">
-    <div class=row>{mode_pill} {dry_pill} {tok_pill}</div>
+    <div class=row>{mode_pill} {dry_pill} {tok_pill} {cap_pill}</div>
     <div class=row>
       <form method=post action=/run><button class=btn>▶ Run pipeline now</button></form>
       <form method=post action=/reset-test onsubmit="return confirm('Clear pending post + dry-run history + this run\\'s candidates/decision? Real posted history is kept.')">
@@ -639,7 +649,8 @@ def settings_get(request: Request):
 <div><label>Lookback hours</label><input type=number name=lookback value="{e(ing.get('lookback_hours',12))}"></div>
 <div><label>KEV recent days</label><input type=number name=kevdays value="{e(ing.get('kev_recent_days',21))}"></div>
 <div><label>Max candidates</label><input type=number name=maxc value="{e(ing.get('max_candidates',40))}"></div>
-<div><label>Min score to publish</label><input type=number name=minscore value="{e(sc.get('min_score',80))}"></div>
+<div><label>Min score to publish <small>— 65 = solid signal, 80 = KEV-only</small></label><input type=number name=minscore value="{e(sc.get('min_score',65))}"></div>
+<div><label>Max posts per day <small>— rolling 24h; extras are held</small></label><input type=number name=maxday value="{e(pub.get('max_per_day',5))}"></div>
 </div></div>
 
 <h2>Publishing</h2><div class=card>
@@ -685,12 +696,13 @@ async def settings_post(request: Request):
         kev_recent_days=int(f.get("kevdays", 21)),
         max_candidates=int(f.get("maxc", 40)),
         feed_timeout_seconds=int(s.get("ingest", {}).get("feed_timeout_seconds", 20)))
-    s.setdefault("scoring", {})["min_score"] = int(f.get("minscore", 80))
+    s.setdefault("scoring", {})["min_score"] = int(f.get("minscore", 65))
     s.setdefault("publish", {}).update(
         mode=f.get("mode", "review"),
         dry_run=bool(f.get("dry_run")),
+        max_per_day=int(f.get("maxday", 5)),
         max_post_chars=int(f.get("maxchars", 2900)),
-        linkedin_api_version=f.get("apiver", "202506"),
+        linkedin_api_version=f.get("apiver", "202509"),
         visibility=f.get("visibility", "PUBLIC"))
     s.setdefault("notify", {}).update(
         ntfy_url=f.get("ntfy", ""), on_success=bool(f.get("on_success")))

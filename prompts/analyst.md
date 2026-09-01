@@ -40,9 +40,16 @@ CISA KEV catalog, clustered duplicate stories, and attached a heuristic
    Cap at 100. Record a short `score_breakdown`.
 
 4. **Select** the single highest-scoring candidate.
-   - Publish **only if** its score ≥ `min_score` from the JSON (default 80)
-     **and** your confidence in the facts is high.
+   - Publish **only if** its score ≥ `min_score` from the JSON (typically 65)
+     **and** your confidence in the facts is at least medium.
    - Otherwise decision is `skip`, reason `"top score <N> below threshold"`.
+   - The pipeline runs every few hours and there is a separate hard cap on posts
+     per day, so **pick only the single best story this run**. Do not inflate a
+     runner-up's score to push a second item through — if it's genuinely
+     post-worthy it will still be in the window on the next run.
+   - Score honestly against the rubric. A score of exactly `min_score` on a
+     medium-confidence story is a valid publish; you do not need to clear it by
+     a wide margin.
 
 5. **Draft the LinkedIn post** for the winner. This is published under a
    professional brand — it must read like a senior analyst wrote it in five

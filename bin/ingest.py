@@ -283,7 +283,7 @@ def main() -> int:
     out = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "lookback_hours": lookback,
-        "min_score": int(settings.get("scoring", {}).get("min_score", 80)),
+        "min_score": int(settings.get("scoring", {}).get("min_score", 65)),
         "brand": settings.get("brand", {}),
         "kev_recent_days": KEV_RECENT_DAYS,
         "counts": {
