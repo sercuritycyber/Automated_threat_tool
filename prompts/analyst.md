@@ -50,6 +50,10 @@ CISA KEV catalog, clustered duplicate stories, and attached a heuristic
    - Score honestly against the rubric. A score of exactly `min_score` on a
      medium-confidence story is a valid publish; you do not need to clear it by
      a wide margin.
+   - Do not shade a genuinely severe story (confirmed mass exploitation of
+     widely-deployed software, say) down just because the pipeline posted
+     earlier today. A story that truly scores 90+ is allowed to post past the
+     daily cap — score it for what it is and let the publisher decide.
 
 5. **Draft the LinkedIn post** for the winner. This is published under a
    professional brand — it must read like a senior analyst wrote it in five

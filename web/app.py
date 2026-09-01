@@ -457,7 +457,8 @@ def review(request: Request):
   <div class=row style="justify-content:space-between">
     <div><span class="pill good">score {e(sel.get('score'))}</span>
     <span class="pill dim">threshold {e(d.get('min_score'))}</span>
-    <span class="pill dim">confidence {e(sel.get('confidence'))}</span></div>
+    <span class="pill dim">confidence {e(sel.get('confidence'))}</span>
+    {'<span class="pill warn">manual fire — bypasses cap &amp; schedule</span>' if pending.get('manual') or d.get('manual') else ''}</div>
     <span class=dim>held {e(rel_time(pending.get('held_at','')))}</span>
   </div>
   <p><b>{e(sel.get('title'))}</b><br>
@@ -553,6 +554,123 @@ def review_rewrite(post_text: str = Form("")):
     return RedirectResponse("/review?m=Rewritten+—+review+the+new+draft+below", 303)
 
 
+DRAFT_ONE_PROMPT = """You are the CTI analyst and social editor for Blue Team Podcast (securitycyber.uk).
+The operator has hand-picked ONE story to publish now. Verify it, then draft the post.
+
+STORY
+title:     %(title)s
+url:       %(url)s
+source:    %(source)s
+published: %(published)s
+CVEs:      %(cves)s
+KEV:       %(kev)s
+summary:   %(summary)s
+
+STEPS
+1. WebFetch the url and read the article. Confirm CVE id(s), CVSS, affected
+   products/versions, exploitation status (in-the-wild / PoC only / theoretical),
+   and the fix or mitigation. If WebFetch fails, work from the summary above and
+   set confidence "low".
+2. Score it 0-100 honestly: +40 confirmed exploitation or zero-day, +25 recent
+   CISA KEV (+12 older KEV), +15 CVSS>=9 or vendor Critical, +15 widely deployed
+   or critical infrastructure, +15 supply-chain / MSP / identity blast radius,
+   +10 public PoC or named ransomware use, +5 clear patch exists. Penalties: -40
+   vendor marketing or roundup, -20 unconfirmed. Cap at 100.
+3. Draft the LinkedIn post. Plain text, 600-1600 chars, blank line between every block:
+
+      <hook: one sentence, <=200 chars, leads with the reader's stake>
+
+      • Vulnerability: <CVE> (CVSS <n>) - <what it is, <=15 words>
+      • Affected: <products + version ranges>; <exposure condition>
+      • Do now: <the one patch/mitigation action + exact versions>
+
+      <1-2 short attributed sentences: who is exploiting it per which source, what a defender hunts for>
+
+      <source url on its own line>
+
+      #BlueTeam #CyberSecurity #ThreatIntel <+1 optional real tag>
+
+   Every sentence <=25 words, active voice, British spelling. Exactly 3-4 real
+   community hashtags (#BlueTeam and #CyberSecurity always; never hype tags like
+   #PatchNow). At most one em-dash per sentence. No emoji, no markdown. Facts ONLY
+   from the source - never invent a CVE, CVSS, version, IOC or attribution.
+   Attribute exploitation and PoC claims ("Huntress reports...", "CISA added...").
+   Banned openers: "In today's threat landscape", "Threat actors are increasingly",
+   "Now more than ever", rhetorical questions, "Thoughts?", any ask to like/share/comment.
+
+OUTPUT
+Print ONLY this JSON on one line - no code fence, no commentary:
+{"decision":"post","reason":"<one sentence>","selected":{"title":"...","url":"...","source":"...","published":"...","cve_ids":["..."],"score":<int>,"score_breakdown":["+40 ...","..."],"confidence":"high|medium|low","post_text":"<full post, real \\n newlines>"}}
+"""
+
+
+def _claude_draft_one(cand: dict) -> tuple[dict | None, str]:
+    """Hand one operator-picked candidate to `claude -p` and get back a decision dict."""
+    prompt = DRAFT_ONE_PROMPT % {
+        "title": cand.get("title", ""),
+        "url": cand.get("url", ""),
+        "source": cand.get("source", ""),
+        "published": cand.get("published", ""),
+        "cves": ", ".join(cand.get("cve_ids", []) or []) or "none listed",
+        "kev": ", ".join(cand.get("kev_cves", []) or []) or "none",
+        "summary": (cand.get("summary", "") or "")[:1200],
+    }
+    try:
+        proc = subprocess.run(
+            ["claude", "-p", prompt, "--allowedTools", "WebFetch"],
+            cwd=ROOT, capture_output=True, text=True, timeout=240, env=_env_with_config(),
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError) as ex:
+        return None, f"analyst call failed: {str(ex)[:160]}"
+    m = re.search(r"\{.*\}", proc.stdout, re.S)
+    if not m:
+        return None, f"analyst returned no JSON (exit {proc.returncode})"
+    try:
+        dec = json.loads(m.group(0))
+    except json.JSONDecodeError as ex:
+        return None, f"analyst JSON was malformed: {str(ex)[:120]}"
+    sel = dec.get("selected") or {}
+    if not (sel.get("post_text") or "").strip():
+        return None, "analyst produced no post_text"
+    sel.setdefault("title", cand.get("title", ""))
+    sel.setdefault("url", cand.get("url", ""))
+    sel.setdefault("source", cand.get("source", ""))
+    sel.setdefault("published", cand.get("published", ""))
+    sel.setdefault("cve_ids", cand.get("cve_ids", []) or [])
+    sel.setdefault("confidence", "medium")
+    sel.setdefault("score", 0)
+    sel.setdefault("score_breakdown", [])
+    dec["selected"] = sel
+    dec["decision"] = "post"
+    dec.setdefault("reason", "operator hand-picked this story")
+    dec["run_at"] = datetime.now(timezone.utc).isoformat()
+    dec["min_score"] = int(load_yaml(CFG / "settings.yaml").get("scoring", {}).get("min_score", 65))
+    dec.setdefault("considered", [])
+    dec["manual"] = True
+    return dec, ""
+
+
+@app.post("/candidates/fire")
+def candidates_fire(url: str = Form("")):
+    url = url.strip()
+    c = read_json(STATE / "candidates.json") or {}
+    cand = next((x for x in c.get("candidates", []) if x.get("url") == url), None)
+    if not cand:
+        return RedirectResponse("/candidates?m=" + quote("Couldn't find that candidate — re-run ingest first"), 303)
+    if url in posted_urls():
+        return RedirectResponse("/candidates?m=" + quote("That story has already been posted"), 303)
+    replaced = (STATE / "pending.json").exists()
+    dec, err = _claude_draft_one(cand)
+    if err:
+        return RedirectResponse("/candidates?m=" + quote("Manual fire failed — " + err), 303)
+    (STATE / "pending.json").write_text(json.dumps(
+        {"held_at": datetime.now(timezone.utc).isoformat(), "decision": dec, "manual": True}, indent=2))
+    note = "Drafted from your pick — review it and click Approve & post. Manual posts ignore the daily cap."
+    if replaced:
+        note += " (This replaced the post that was awaiting approval.)"
+    return RedirectResponse("/review?m=" + quote(note), 303)
+
+
 @app.post("/review/approve")
 def review_approve(post_text: str = Form("")):
     _write_pending_text(post_text.strip())
@@ -587,18 +705,38 @@ def candidates(request: Request):
     if not c:
         return page("Candidates", "<div class=card class=dim>No candidates file yet — run the pipeline.</div>",
                     "/candidates")
-    rows = "".join(
-        f"<tr><td><b>{e(round(x.get('pre_score',0)))}</b></td>"
-        f"<td>{e(x.get('source'))}</td>"
-        f"<td><a href='{e(x.get('url'))}' target=_blank>{e((x.get('title') or '')[:95])}</a>"
-        f"{('<br><span class=dim>KEV: ' + e(', '.join(x.get('kev_cves',[]))) + '</span>') if x.get('kev_cves') else ''}</td>"
-        f"<td class=dim>{e(', '.join(x.get('cve_ids', []) or []))}</td></tr>"
-        for x in c.get("candidates", [])
-    )
+    posted = posted_urls()
+
+    def _row(x):
+        u = x.get("url", "")
+        kev = ('<br><span class=dim>KEV: ' + e(', '.join(x.get('kev_cves', []))) + '</span>') \
+            if x.get('kev_cves') else ''
+        if u in posted:
+            act = '<span class=dim>posted ✓</span>'
+        else:
+            act = (
+                f'<form method=post action=/candidates/fire '
+                f'onsubmit="return confirm(\'Draft a LinkedIn post for this story now and send it to the '
+                f'review queue? A manual fire ignores the daily cap and the schedule.\')">'
+                f'<input type=hidden name=url value="{e(u)}">'
+                f'<button class="btn ghost" style="padding:4px 10px;font-size:12px">Draft &amp; review →</button>'
+                f'</form>'
+            )
+        return (
+            f"<tr><td><b>{e(round(x.get('pre_score',0)))}</b></td>"
+            f"<td>{e(x.get('source'))}</td>"
+            f"<td><a href='{e(u)}' target=_blank>{e((x.get('title') or '')[:95])}</a>{kev}</td>"
+            f"<td class=dim>{e(', '.join(x.get('cve_ids', []) or []))}</td>"
+            f"<td>{act}</td></tr>"
+        )
+
+    rows = "".join(_row(x) for x in c.get("candidates", []))
     body = f"""<div class=card>Generated {e(rel_time(c.get('generated_at','')))} ·
-counts: {e(json.dumps(c.get('counts',{})))}</div>
+counts: {e(json.dumps(c.get('counts',{})))}
+<br><span class=dim>Hit <b>Draft &amp; review</b> on any story to push it into the review queue right now —
+manual fires skip the schedule and the daily post cap. You still approve the draft before it goes live.</span></div>
 <div class=card style="padding:0"><table>
-<tr><th>pre-score</th><th>source</th><th>headline</th><th>CVEs</th></tr>{rows}</table></div>"""
+<tr><th>pre-score</th><th>source</th><th>headline</th><th>CVEs</th><th>fire</th></tr>{rows}</table></div>"""
     return page("Candidates", body, "/candidates", flash_from(request))
 
 
@@ -651,6 +789,7 @@ def settings_get(request: Request):
 <div><label>Max candidates</label><input type=number name=maxc value="{e(ing.get('max_candidates',40))}"></div>
 <div><label>Min score to publish <small>— 65 = solid signal, 80 = KEV-only</small></label><input type=number name=minscore value="{e(sc.get('min_score',65))}"></div>
 <div><label>Max posts per day <small>— rolling 24h; extras are held</small></label><input type=number name=maxday value="{e(pub.get('max_per_day',5))}"></div>
+<div><label>Severity override score <small>— a story scoring ≥ this posts even past the daily cap</small></label><input type=number name=sevoverride value="{e(pub.get('severity_override_score',90))}"></div>
 </div></div>
 
 <h2>Publishing</h2><div class=card>
@@ -701,6 +840,7 @@ async def settings_post(request: Request):
         mode=f.get("mode", "review"),
         dry_run=bool(f.get("dry_run")),
         max_per_day=int(f.get("maxday", 5)),
+        severity_override_score=int(f.get("sevoverride", 90)),
         max_post_chars=int(f.get("maxchars", 2900)),
         linkedin_api_version=f.get("apiver", "202509"),
         visibility=f.get("visibility", "PUBLIC"))
@@ -708,11 +848,22 @@ async def settings_post(request: Request):
         ntfy_url=f.get("ntfy", ""), on_success=bool(f.get("on_success")))
     save_yaml(CFG / "settings.yaml", s)
 
-    # schedule
+    # schedule — only write a spec systemd can actually parse
     tf = ROOT / "systemd" / "cti-harvester.timer"
-    if tf.exists() and f.get("oncal"):
-        txt = re.sub(r"OnCalendar=.+", f"OnCalendar={f.get('oncal').strip()}", tf.read_text())
-        tf.write_text(txt)
+    oncal = (f.get("oncal") or "").strip()
+    if tf.exists() and oncal:
+        cur = re.search(r"OnCalendar=(.+)", tf.read_text())
+        if not cur or cur.group(1).strip() != oncal:
+            try:
+                ok = subprocess.run(["systemd-analyze", "calendar", oncal],
+                                    capture_output=True, timeout=10).returncode == 0
+            except (FileNotFoundError, subprocess.TimeoutExpired):
+                ok = True  # can't validate here — trust the operator
+            if not ok:
+                return RedirectResponse(
+                    "/settings?m=" + quote(f"Saved — but the schedule '{oncal}' is not a valid "
+                                           "systemd OnCalendar spec, so it was left unchanged."), 303)
+            tf.write_text(re.sub(r"OnCalendar=.+", f"OnCalendar={oncal}", tf.read_text()))
     return RedirectResponse("/settings?m=Saved", 303)
 
 

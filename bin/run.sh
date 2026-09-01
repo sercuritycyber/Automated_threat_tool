@@ -45,13 +45,14 @@ if [[ "$CAND_COUNT" == "0" ]]; then
   exit 0
 fi
 
-# Daily post cap — skip the (expensive) analyst call once we've hit it.
+# Daily post cap. Once hit, we still run the analyst — a story scoring at or
+# above publish.severity_override_score overrides the cap (publish stage enforces
+# this). Below that, publish just holds it for review.
 USED="$(python3 "$ROOT/bin/postlog.py" 2>/dev/null || echo 0)"
 MAXDAY="$(python3 -c 'import yaml; print(yaml.safe_load(open("config/settings.yaml")).get("publish",{}).get("max_per_day",5))' 2>/dev/null || echo 5)"
+SEVOR="$(python3 -c 'import yaml; print(yaml.safe_load(open("config/settings.yaml")).get("publish",{}).get("severity_override_score",90))' 2>/dev/null || echo 90)"
 if [[ "$USED" -ge "$MAXDAY" ]]; then
-  echo "[run] daily post cap reached ($USED/$MAXDAY in the last 24h) — skipping analyst."
-  printf '{"run_at":"%s","decision":"skip","reason":"daily post cap reached (%s/%s in 24h)"}\n' "$TS" "$USED" "$MAXDAY" > "$ROOT/state/last_run.json"
-  exit 0
+  echo "[run] daily post cap reached ($USED/$MAXDAY in 24h) — only a story scoring >= $SEVOR will post this run."
 fi
 echo "[run] $CAND_COUNT candidates queued for the analyst  ($USED/$MAXDAY posts used today)"
 

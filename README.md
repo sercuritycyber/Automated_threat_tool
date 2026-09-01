@@ -31,7 +31,7 @@ python3 web/app.py        # → http://127.0.0.1:8799   (localhost only, no exte
 |---|---|
 | **Dashboard** | live status (mode / dry-run / token), counts from the last run, recent posts, **Run pipeline now** button, a banner when a post is awaiting approval |
 | **Review queue** | the held post — edit the text inline, **Approve & post**, **Save edits**, or **Reject**; shows the score breakdown and everything else that was considered |
-| **Candidates** | the current `state/candidates.json` as a sortable table (pre-score, source, CVEs, KEV hits) |
+| **Candidates** | the current `state/candidates.json` as a table (pre-score, source, CVEs, KEV hits); **Draft & review** on any row hands that one story to `claude -p` now and drops the draft in the review queue — bypasses the schedule and the daily cap |
 | **Drafts** | every generated post, archived |
 | **Settings** | brand/voice, lookback, `min_score`, publish mode, **dry-run switch**, schedule (`OnCalendar`), notifications — writes `config/settings.yaml` |
 | **Feeds** | add / remove / enable / disable / re-weight sources, **Test all feeds** — writes `config/feeds.yaml` |
@@ -100,6 +100,8 @@ Everything below is in the panel (Settings / Feeds), or edit the files directly:
 | change cadence | Settings → Schedule | `systemd/cti-harvester.timer` → `OnCalendar=` |
 | raise/lower the publish bar | Settings → Min score | `config/settings.yaml` → `scoring.min_score` (65 default; 80 = KEV-only) |
 | cap posts per day | Settings → Max posts per day | `config/settings.yaml` → `publish.max_per_day` (default 5; extras held for review) |
+| let a severe story ignore the cap | Settings → Severity override score | `config/settings.yaml` → `publish.severity_override_score` (default 90) |
+| push a specific story out now | Candidates → **Draft & review** on its row | — (skips the schedule and the daily cap; still needs one approval) |
 | widen the story window | Settings → Lookback | `config/settings.yaml` → `ingest.lookback_hours` |
 | auto-post vs approve-first | Settings → Mode | `config/settings.yaml` → `publish.mode` |
 | change the voice / scoring rubric | — | `prompts/analyst.md` |

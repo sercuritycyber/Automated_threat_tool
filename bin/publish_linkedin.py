@@ -350,18 +350,26 @@ def main() -> int:
         log("post-quality errors present but operator-approved — posting anyway: "
             + " | ".join(ql["errors"][:6]))
 
-    # daily post cap — an automatic run holds; an operator can override
+    # daily post cap — an automatic run holds; an operator, or a severe-enough
+    # story, overrides it.
     max_day = int(settings.get("publish", {}).get("max_per_day", 5))
+    sev_override = int(settings.get("publish", {}).get("severity_override_score", 90))
     used = count_last_24h()
+    score = int(sel.get("score", 0) or 0)
     if used >= max_day and not operator:
-        log(f"daily post cap reached ({used}/{max_day} in 24h) — holding this one")
-        (STATE / "pending.json").write_text(json.dumps(
-            {"held_at": now_iso(), "decision": decision}, indent=2))
-        write_last_run(decision="pending_review", published=False,
-                       title=sel.get("title"), score=sel.get("score"),
-                       note=f"held: daily cap {used}/{max_day} — approve in the panel to override")
-        return 0
-    if used >= max_day:
+        if score >= sev_override:
+            log(f"daily cap {used}/{max_day} reached, but score {score} >= "
+                f"severity_override_score {sev_override} — posting anyway")
+        else:
+            log(f"daily post cap reached ({used}/{max_day} in 24h) — holding this one")
+            (STATE / "pending.json").write_text(json.dumps(
+                {"held_at": now_iso(), "decision": decision}, indent=2))
+            write_last_run(decision="pending_review", published=False,
+                           title=sel.get("title"), score=sel.get("score"),
+                           note=f"held: daily cap {used}/{max_day} — approve in the panel to override "
+                                f"(auto-override needs score >= {sev_override})")
+            return 0
+    elif used >= max_day:
         log(f"daily cap {used}/{max_day} exceeded — operator override, posting anyway")
 
     # review mode: an automatic run holds the post for a human; --approve skips this
