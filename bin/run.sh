@@ -26,8 +26,22 @@ fi
 # tee everything to a timestamped log
 exec > >(tee -a "$LOG") 2>&1
 
+TRIGGER="${CTI_TRIGGER:-timer}"
+
+# record every finished run (any exit path past this point) for the dashboard
+trap 'python3 "$ROOT/bin/runlog.py" "$TRIGGER" 2>/dev/null || true' EXIT
+
 fail() {
   echo "[run] FAILED at stage: $1 (exit $2)"
+  python3 - "$1" "$2" <<'PY' 2>/dev/null || true
+import json, sys, time
+from pathlib import Path
+Path("state/last_run.json").write_text(json.dumps({
+    "run_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    "decision": "error", "published": False,
+    "error": f"stage '{sys.argv[1]}' exited {sys.argv[2]}",
+}, indent=2))
+PY
   python3 "$ROOT/bin/notify.py" "CTI run FAILED at '$1' (exit $2). Log: $LOG" high || true
   exit "$2"
 }

@@ -19,7 +19,8 @@ import re
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from collections import Counter
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import quote
 
@@ -134,6 +135,42 @@ try:
 except ImportError:
     def _real_posts(hours=None):
         return []
+try:
+    from runlog import read as _runs_read  # noqa
+except ImportError:
+    def _runs_read(limit=40):
+        return []
+
+
+def next_run_iso() -> str:
+    """Next scheduled harvest, from the timer's OnCalendar — '' if it can't tell."""
+    tf = ROOT / "systemd" / "cti-harvester.timer"
+    if not tf.exists():
+        return ""
+    m = re.search(r"OnCalendar=(.+)", tf.read_text())
+    if not m:
+        return ""
+    try:
+        out = subprocess.run(["systemd-analyze", "calendar", "--iterations=1", m.group(1).strip()],
+                             capture_output=True, text=True, timeout=8).stdout
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return ""
+    nm = re.search(r"\(in UTC\):\s*(.+)", out) or re.search(r"Next elapse:\s*(.+)", out)
+    if not nm:
+        return ""
+    try:
+        from email.utils import parsedate_to_datetime  # noqa
+        dt = datetime.strptime(nm.group(1).strip(), "%a %Y-%m-%d %H:%M:%S %Z")
+        return dt.replace(tzinfo=timezone.utc).isoformat()
+    except ValueError:
+        return ""
+
+
+def day_key(iso: str) -> str:
+    try:
+        return datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone().strftime("%Y-%m-%d")
+    except (ValueError, AttributeError):
+        return ""
 
 
 def real_history() -> list[dict]:
@@ -219,6 +256,34 @@ pre{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:
 overflow:auto;font-size:12.5px;white-space:pre-wrap;word-break:break-word}
 .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
 .dim{color:var(--dim)}
+
+/* --- dashboard --- */
+.hero{display:flex;flex-wrap:wrap;gap:18px;align-items:center;justify-content:space-between;
+background:linear-gradient(135deg,var(--panel),var(--panel2));border:1px solid var(--line);
+border-radius:14px;padding:18px 22px;margin-bottom:16px}
+.hero .state{font-size:19px;font-weight:700;display:flex;align-items:center;gap:10px}
+.hero .sub{color:var(--dim);font-size:12.5px;margin-top:3px}
+.beacon{width:11px;height:11px;border-radius:50%;flex-shrink:0;box-shadow:0 0 0 0 currentColor;
+animation:pulse 2.4s infinite}
+@keyframes pulse{0%{box-shadow:0 0 0 0 currentColor}70%{box-shadow:0 0 0 9px transparent}100%{box-shadow:0 0 0 0 transparent}}
+.count{font-variant-numeric:tabular-nums;font-weight:700}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(132px,1fr));gap:10px;margin-bottom:16px}
+.tile{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+.tile .n{font-size:21px;font-weight:700;line-height:1.1}
+.tile .l{color:var(--dim);font-size:11px;margin-top:3px;text-transform:uppercase;letter-spacing:.04em}
+.tile.good{border-color:rgba(63,185,80,.4)}.tile.warn{border-color:rgba(210,153,34,.45)}
+.tile.bad{border-color:rgba(248,81,73,.45)}
+.bars{display:flex;align-items:flex-end;gap:5px;height:64px;padding-top:4px}
+.bars .b{flex:1;background:var(--panel2);border-radius:3px 3px 0 0;min-height:3px;position:relative}
+.bars .b.has{background:var(--accent)}
+.bars .b span{position:absolute;top:-16px;left:0;right:0;text-align:center;font-size:10px;color:var(--dim)}
+.slots{display:flex;gap:6px;flex-wrap:wrap}
+.slot{padding:3px 9px;border-radius:20px;font-size:11px;font-weight:600;border:1px solid var(--line);color:var(--dim)}
+.slot.past{opacity:.45}.slot.next{border-color:var(--accent);color:#fff;background:rgba(59,130,246,.18)}
+.tl{list-style:none;margin:0;padding:0}
+.tl li{display:flex;gap:10px;padding:7px 0;border-bottom:1px solid var(--line);font-size:12.5px;align-items:baseline}
+.tl li:last-child{border-bottom:0}
+.tl .t{color:var(--dim);white-space:nowrap;font-size:11.5px;min-width:64px}
 """
 
 NAV = [
@@ -272,26 +337,102 @@ def dashboard(request: Request):
     mode = pub.get("mode", "auto")
     tok_ok = bool(env.get("LINKEDIN_ACCESS_TOKEN"))
 
-    mode_pill = f'<span class="pill {"warn" if mode == "review" else "good"}">mode: {e(mode)}</span>'
-    dry_pill = ('<span class="pill bad">DRY-RUN — nothing is posted</span>' if dry
-                else '<span class="pill good">LIVE — posts for real</span>')
-    tok_pill = ('<span class="pill good">LinkedIn token set</span>' if tok_ok
-                else '<span class="pill warn">no LinkedIn token</span>')
-
     max_day = int(pub.get("max_per_day", 5))
-    used_day = len(_real_posts(24))
-    cap_cls = "bad" if used_day >= max_day else ("warn" if used_day >= max_day - 1 else "good")
-    cap_pill = f'<span class="pill {cap_cls}">{used_day}/{max_day} posts today</span>'
+    sev = int(pub.get("severity_override_score", 90))
+    min_score = int(settings.get("scoring", {}).get("min_score", 65))
 
-    hist = real_history()[-10:][::-1]
+    all_real = _real_posts()
+    used_day = len(_real_posts(24))
+    week = len(_real_posts(24 * 7))
+    scores7 = [r["score"] for r in _real_posts(24 * 7) if isinstance(r.get("score"), (int, float))]
+    avg7 = round(sum(scores7) / len(scores7)) if scores7 else "—"
+    last_post_when = rel_time(all_real[-1]["posted_at"]) if all_real else "never"
+    cap_cls = "bad" if used_day >= max_day else ("warn" if used_day >= max_day - 1 else "good")
+
+    hist = real_history()[-8:][::-1]
     dry_n = len(read_jsonl(STATE / "dry_runs.jsonl"))
     hist_rows = "".join(
         f"<tr><td>{e(rel_time(h.get('posted_at','')))}</td>"
-        f"<td>{e(h.get('score'))}</td>"
-        f"<td><a href='{e(h.get('url'))}' target=_blank>{e((h.get('title') or '')[:75])}</a></td>"
+        f"<td><b>{e(h.get('score'))}</b></td>"
+        f"<td><a href='{e(h.get('url'))}' target=_blank>{e((h.get('title') or '')[:70])}</a>"
+        f"<br><span class=dim>{e(h.get('source',''))}"
+        f"{(' · ' + e(', '.join(h.get('cve_ids', [])))) if h.get('cve_ids') else ''}</span></td>"
         f"<td>{('<a target=_blank href=' + e(h.get('post_url')) + '>on LinkedIn ↗</a>') if h.get('post_url') else '<span class=dim>—</span>'}</td></tr>"
         for h in hist
     ) or "<tr><td colspan=4 class=dim>nothing has been posted for real yet</td></tr>"
+
+    # ---- hero state ----
+    if not tok_ok:
+        st_txt, st_col = "NEEDS A LINKEDIN TOKEN", "var(--bad)"
+        st_sub = "Add one in Secrets — the pipeline runs and drafts, but can't post without it."
+    elif dry:
+        st_txt, st_col = "DRY-RUN — drafting only", "var(--warn)"
+        st_sub = "Stories are drafted and archived but never sent. Hit “Go live” when you're ready."
+    elif mode == "review":
+        st_txt, st_col = "ARMED — holding for approval", "var(--accent)"
+        st_sub = "Every story that clears the bar waits in the review queue for one click."
+    else:
+        st_txt, st_col = "LIVE — posting automatically", "var(--good)"
+        st_sub = (f"Auto-posts stories scoring ≥ {min_score}, up to {max_day}/day. "
+                  f"A story ≥ {sev} posts even past the daily cap.")
+
+    nxt = next_run_iso()
+    target_ms = 0
+    if nxt:
+        try:
+            target_ms = int(datetime.fromisoformat(nxt).timestamp() * 1000)
+        except ValueError:
+            target_ms = 0
+    nxt_abs = ""
+    if nxt:
+        try:
+            nxt_abs = "≈ " + datetime.fromisoformat(nxt).astimezone().strftime("%a %H:%M") + " (+ jitter)"
+        except ValueError:
+            nxt_abs = ""
+
+    # ---- today's run slots ----
+    slots_html = ""
+    tfile = ROOT / "systemd" / "cti-harvester.timer"
+    mh = re.search(r"OnCalendar=\S+\s+([\d,]+):", tfile.read_text()) if tfile.exists() else None
+    if mh:
+        hours = sorted({int(x) for x in mh.group(1).split(",") if x.isdigit()})
+        now_h = datetime.now().astimezone().hour
+        future = [h for h in hours if h > now_h]
+        nxt_slot = future[0] if future else None
+        for h in hours:
+            cls = "next" if h == nxt_slot else ("past" if h <= now_h else "")
+            slots_html += f'<span class="slot {cls}">{h:02d}:00</span>'
+
+    # ---- 14-day activity ----
+    bycount = Counter(day_key(r["posted_at"]) for r in all_real if r.get("posted_at"))
+    days = [(datetime.now().astimezone() - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(13, -1, -1)]
+    mx = max([bycount[d] for d in days] + [1])
+    bars_html = "".join(
+        f'<div class="b {"has" if bycount[d] else ""}" title="{d}: {bycount[d]} post(s)" '
+        f'style="height:{max(3, round(bycount[d] / mx * 58))}px">'
+        + (f'<span>{bycount[d]}</span>' if bycount[d] else '') + '</div>'
+        for d in days
+    )
+
+    # ---- run history timeline ----
+    def _rbadge(r: dict) -> str:
+        if r.get("published"):
+            return '<span class="pill good">posted</span>'
+        if r.get("error"):
+            return '<span class="pill bad">failed</span>'
+        if r.get("decision") == "pending_review":
+            return '<span class="pill warn">held</span>'
+        if r.get("dry_run") and r.get("decision") == "post":
+            return '<span class="pill warn">dry-run</span>'
+        return '<span class="pill dim">skip</span>'
+
+    runs = _runs_read(14)
+    runs_html = "".join(
+        f'<li><span class=t>{e(rel_time(r.get("ts", "")))}</span>{_rbadge(r)}'
+        f'<span>{e((r.get("title") or r.get("note") or "—")[:78])}</span>'
+        f'<span class=dim style="margin-left:auto">{e(r.get("trigger", ""))}</span></li>'
+        for r in runs
+    ) or '<li class=dim>no runs recorded yet — they show up here after the next harvest</li>'
 
     # ---- "what happened last" card ----
     lr_d, when = last.get("decision", "—"), rel_time(last.get("run_at", ""))
@@ -328,15 +469,50 @@ def dashboard(request: Request):
             f'<a class="btn good" style="margin-left:8px" href="/review">Review &amp; approve →</a></div>'
         )
 
+    cand_n = counts.get("candidates", 0) or 0
+    live_toggle = ('<button class="btn good">▶ Go live</button>' if dry
+                   else '<button class="btn ghost">⏸ Pause (dry-run)</button>')
+
+    script = (
+        "<script>(function(){var T=" + str(target_ms) + ";"
+        "var el=document.getElementById('cd');"
+        "function f(){if(!el){return;}if(!T){el.textContent='—';return;}"
+        "var s=Math.max(0,Math.round((T-Date.now())/1000));"
+        "var h=Math.floor(s/3600),m=Math.floor((s%3600)/60),x=s%60;"
+        "el.textContent=h>0?(h+'h '+m+'m'):(m>0?(m+'m '+x+'s'):(x+'s'));}"
+        "f();setInterval(f,1000);setTimeout(function(){location.reload();},60000);})();</script>"
+    )
+
     body = f"""
 {pending_banner}
+<div class=hero>
+  <div>
+    <div class=state><span class=beacon style="color:{st_col};background:{st_col}"></span>{e(st_txt)}</div>
+    <div class=sub>{st_sub}</div>
+  </div>
+  <div style="text-align:right">
+    <div class=sub>next automated run</div>
+    <div class=state style="justify-content:flex-end"><span class=count id=cd>—</span></div>
+    <div class=sub>{e(nxt_abs) or 'schedule unknown'}</div>
+  </div>
+</div>
+
+<div class=tiles>
+  <div class="tile {cap_cls}"><div class=n>{used_day}<span class=dim style="font-size:14px">/{max_day}</span></div><div class=l>posts today</div></div>
+  <div class=tile><div class=n>{week}</div><div class=l>last 7 days</div></div>
+  <div class=tile><div class=n>{avg7}</div><div class=l>avg score · 7d</div></div>
+  <div class=tile><div class=n>{cand_n}</div><div class=l>in the queue</div></div>
+  <div class="tile {'bad' if not tok_ok else 'good'}"><div class=n style="font-size:15px;padding-top:4px">{'token set' if tok_ok else 'no token'}</div><div class=l>linkedin</div></div>
+  <div class=tile><div class=n style="font-size:15px;padding-top:4px">{e(last_post_when)}</div><div class=l>last post</div></div>
+</div>
+
 <div class=card>
   <div class=row style="justify-content:space-between">
-    <div class=row>{mode_pill} {dry_pill} {tok_pill} {cap_pill}</div>
+    <div class=row style="gap:6px">{slots_html or '<span class=dim>no schedule</span>'}</div>
     <div class=row>
-      <form method=post action=/run><button class=btn>▶ Run pipeline now</button></form>
-      <form method=post action=/reset-test onsubmit="return confirm('Clear pending post + dry-run history + this run\\'s candidates/decision? Real posted history is kept.')">
-        <button class="btn ghost">Clear test data</button></form>
+      <form method=post action=/run><button class=btn>▶ Run now</button></form>
+      <form method=post action=/fire-top onsubmit="return confirm('Draft the top-ranked candidate now and send it to the review queue?')"><button class="btn ghost">⚡ Fire top candidate</button></form>
+      <form method=post action=/toggle-armed onsubmit="return confirm('{'Switch to LIVE — the next cleared story posts to LinkedIn for real?' if dry else 'Pause posting (dry-run) — drafts only, nothing sent?'}')">{live_toggle}</form>
     </div>
   </div>
 </div>
@@ -346,9 +522,26 @@ def dashboard(request: Request):
 <br><span class=dim>ingest {e(rel_time(cand.get('generated_at','')))} · lookback {e(cand.get('lookback_hours','?'))}h
 · threshold {e(cand.get('min_score','?'))} · {e(counts.get('candidates','—'))} candidates / {e(counts.get('clusters','—'))} clusters</span></div>
 
-<h2>Posted to LinkedIn {('· ' + str(dry_n) + ' dry-run sims not shown') if dry_n else ''}</h2>
+<h2>Activity · last 14 days</h2>
+<div class=card><div class=bars>{bars_html}</div></div>
+
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:start">
+<div>
+<h2>Recent posts {('· ' + str(dry_n) + ' sims hidden') if dry_n else ''}</h2>
 <div class=card style="padding:0">
-<table><tr><th>when</th><th>score</th><th>headline</th><th>link</th></tr>{hist_rows}</table></div>
+<table><tr><th>when</th><th>score</th><th>story</th><th></th></tr>{hist_rows}</table></div>
+</div>
+<div>
+<h2>Run history</h2>
+<div class=card><ul class=tl>{runs_html}</ul>
+<div class=row style="margin-top:10px">
+<a class="btn ghost" href="/logs">Full logs →</a>
+<form method=post action=/reset-test onsubmit="return confirm('Clear pending post + sim history + this run\\'s candidates/decision? Real posted history is kept.')">
+<button class="btn ghost">Clear test data</button></form>
+</div></div>
+</div>
+</div>
+{script}
 """
     return page("Dashboard", body, "/", flash_from(request))
 
@@ -363,11 +556,49 @@ def reset_test():
 @app.post("/run")
 def run_now():
     log = LOGS / f"run-{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}-ui.log"
+    env = _env_with_config()
+    env["CTI_TRIGGER"] = "ui"
     with log.open("w") as fh:
         subprocess.Popen(["bash", str(ROOT / "bin" / "run.sh")],
                          cwd=ROOT, stdout=fh, stderr=subprocess.STDOUT,
-                         start_new_session=True)
-    return RedirectResponse("/?m=Pipeline+started+—+check+Logs+in+a+minute", 303)
+                         start_new_session=True, env=env)
+    return RedirectResponse("/?m=Pipeline+started+—+refreshing+shortly", 303)
+
+
+@app.post("/toggle-armed")
+def toggle_armed():
+    s = load_yaml(CFG / "settings.yaml")
+    env = load_env()
+    # the env override wins over settings.yaml, so clear it and flip the file
+    now_dry = str(env.get("CTI_DRY_RUN", s.get("publish", {}).get("dry_run", True))).lower() \
+        in ("1", "true", "yes", "on")
+    s.setdefault("publish", {})["dry_run"] = not now_dry
+    save_yaml(CFG / "settings.yaml", s)
+    if "CTI_DRY_RUN" in env:
+        save_env({"CTI_DRY_RUN": None})
+    msg = "Now LIVE — the next cleared story posts for real." if now_dry \
+        else "Paused — dry-run only, nothing will be sent."
+    return RedirectResponse("/?m=" + quote(msg), 303)
+
+
+@app.post("/fire-top")
+def fire_top():
+    c = read_json(STATE / "candidates.json") or {}
+    posted = posted_urls()
+    pool = [x for x in c.get("candidates", []) if x.get("url") and x["url"] not in posted]
+    if not pool:
+        return RedirectResponse("/?m=" + quote("No fresh candidates to fire — run the pipeline first"), 303)
+    top = max(pool, key=lambda x: x.get("pre_score", 0))
+    replaced = (STATE / "pending.json").exists()
+    dec, err = _claude_draft_one(top)
+    if err:
+        return RedirectResponse("/?m=" + quote("Fire failed — " + err), 303)
+    (STATE / "pending.json").write_text(json.dumps(
+        {"held_at": datetime.now(timezone.utc).isoformat(), "decision": dec, "manual": True}, indent=2))
+    note = f"Drafted “{(top.get('title') or '')[:50]}” — review and approve to post."
+    if replaced:
+        note += " (Replaced the post that was awaiting approval.)"
+    return RedirectResponse("/review?m=" + quote(note), 303)
 
 
 # ----------------------------------------------------------------------------- review queue
