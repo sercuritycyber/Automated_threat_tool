@@ -96,8 +96,10 @@ async function route(request, env, ctx, url, path, cfg) {
     if (!priced || !env.STRIPE_SECRET_KEY)
       return html(simple(cfg, "Almost there", "Checkout isn't switched on yet",
         "Billing for this plan is being finalised — check back shortly."));
+    // ?cadence= carries the monthly/weekly choice made on the pricing cards.
+    const pre = url.searchParams.get("cadence");
     return html(subscribeForm(cfg, tier, url.searchParams.get("m") || "", url.searchParams.get("k") || "",
-      channelAvailability(env, cfg)));
+      channelAvailability(env, cfg), ["monthly", "weekly"].includes(pre) ? pre : ""));
   }
   if (path === "/subscribe" && m === "POST") return subscribeSubmit(request, env, cfg);
 

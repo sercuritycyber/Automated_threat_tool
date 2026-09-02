@@ -52,6 +52,13 @@ ok("landing shows the team tier + one-off brief", landHtml.includes("£18 / mont
 const subHtml = subscribeForm(cNoPrice, "individual", "", "", channelAvailability({ RESEND_API_KEY: "re_x" }, cNoPrice));
 ok("subscribe form offers both cadences", /value="monthly"/.test(subHtml) && /value="weekly"/.test(subHtml));
 ok("subscribe form has a submit path", subHtml.includes('action="/subscribe"'));
+// Pricing is decided on ONE page: the cards carry both cadences + a toggle,
+// and the CTA passes the choice through to /subscribe.
+ok("pricing has a monthly/weekly toggle", landHtml.includes("billtoggle") && landHtml.includes('data-cad=weekly'));
+ok("buy links carry the chosen cadence", landHtml.includes("cadence=monthly"));
+ok("subscribe preselects the cadence from the link",
+  /value="weekly" checked/.test(subscribeForm(cNoPrice, "individual", "", "", null, "weekly"))
+  && /value="monthly" checked/.test(subscribeForm(cNoPrice, "individual", "", "", null, "monthly")));
 
 // ---- channel availability (graceful degradation) ----
 const availNone = channelAvailability({}, cNoPrice);

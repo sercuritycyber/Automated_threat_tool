@@ -29,6 +29,10 @@ h3{font-family:var(--display);font-weight:700;font-size:15px;color:var(--white);
 p{margin:.6em 0}.lede{font-size:17px;color:var(--dim);line-height:1.6}.muted{color:var(--dim);font-size:14px}
 .card{background:var(--bg2);border:1px solid var(--line-dim);border-radius:var(--radius-lg);padding:22px;margin:16px 0}
 .tiers{display:grid;grid-template-columns:repeat(auto-fit,minmax(224px,1fr));gap:16px;margin:20px 0}
+.billtoggle{display:inline-flex;gap:2px;background:var(--bg3);border:1px solid var(--line);border-radius:999px;padding:3px;margin:14px 0 2px}
+.bt{background:none;border:0;color:var(--dim);font:600 .84rem var(--body);padding:7px 18px;border-radius:999px;cursor:pointer;transition:all .18s}
+.bt.on{background:var(--accent);color:#fff;box-shadow:0 2px 10px rgba(59,130,246,.3)}
+.bt:not(.on):hover{color:var(--white)}
 .tier{background:var(--bg2);border:1px solid var(--line-dim);border-radius:var(--radius-lg);padding:22px;position:relative;overflow:hidden}
 .tier::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:var(--accent);transform:scaleX(0);transform-origin:left;transition:transform .3s}
 .tier:hover::before{transform:scaleX(1)}
@@ -143,12 +147,18 @@ export function landing(cfg, flash = "", flashKind = "") {
     const t = cfg.tiers[name]; if (!t) continue;
     const chans = (t.channels || []).map(chanLabel).join(" · ");
     const hasM = Number(t.monthly_pence) > 0, hasW = Number(t.weekly_pence) > 0;
-    let price;
-    if (hasM && hasW) price = `${esc(t.monthly_display)} <span class=p2>or ${esc(t.weekly_display)}</span>`;
-    else if (hasW) price = esc(t.weekly_display);
-    else price = esc(t.monthly_display);
+    // Both cadences live in the card; the toggle above swaps which is shown,
+    // so the whole decision happens here instead of on the next page.
+    // Only emit a cadence that actually has a price, so the toggle can never
+    // reveal an empty one.
+    const perM = hasM ? `<span class=per data-cad=monthly>${esc(t.monthly_display)}</span>` : "";
+    const perW = hasW ? `<span class=per data-cad=weekly>${esc(t.weekly_display)}</span>` : "";
+    const alt = hasM && hasW
+      ? `<div class=p2><span data-cad=monthly>that's ${esc(t.weekly_display)} billed weekly instead</span>`
+        + `<span data-cad=weekly hidden>that's ${esc(t.monthly_display)} billed monthly instead</span></div>`
+      : "";
     tiers += `<div class=tier><h3>${cap(name)}</h3>
-<div class=p1>${price}</div>
+<div class=p1>${perM}${perW}</div>${alt}
 <p class=muted style="margin-top:8px">${esc(t.blurb || "")}</p>
 <ul>
 <li>Only what clears the bar — nothing routine, nothing you can't act on</li>
@@ -157,7 +167,7 @@ ${t.attach_json ? "<li>Machine-readable JSON with every alert — pipe it straig
 <li>Filter to your stack: name the vendors you run, ignore the rest</li>
 <li>Goes to ${esc(chans)}</li>
 </ul>
-<a class=btn href="/subscribe?tier=${name}">Choose ${cap(name)} →</a></div>`;
+<a class="btn buy" data-tier="${name}" href="/subscribe?tier=${name}&cadence=monthly">Choose ${cap(name)} →</a></div>`;
   }
   const b = cfg.brief || {};
   const briefCard = `<div class=tier><h3>One-off brief</h3>
@@ -271,10 +281,31 @@ bad week, you get the full picture — fast.</p></div>
 
 <div class=section id=pricing>
 <h2>Plans</h2>
+<div class=billtoggle role=group aria-label="Billing period">
+<button type=button class="bt on" data-cad=monthly aria-pressed=true>Monthly</button>
+<button type=button class=bt data-cad=weekly aria-pressed=false>Weekly</button>
+</div>
 <div class=tiers>${tiers}${briefCard}</div>
 <p class=muted style="margin-top:12px">Weekly or monthly, cancel anytime, no contract.
 Card handled by Stripe — it never touches our servers. Prices in GBP, no VAT.</p>
 </div>
+<script>(function(){
+var cad='monthly';
+function apply(){
+  document.querySelectorAll('#pricing [data-cad]').forEach(function(el){
+    if(el.classList.contains('bt')){
+      var on=el.dataset.cad===cad;el.classList.toggle('on',on);el.setAttribute('aria-pressed',on);
+    }else{ el.hidden = el.dataset.cad!==cad; }
+  });
+  document.querySelectorAll('#pricing a.buy').forEach(function(a){
+    a.href='/subscribe?tier='+a.dataset.tier+'&cadence='+cad;
+  });
+}
+document.querySelectorAll('#pricing .bt').forEach(function(b){
+  b.addEventListener('click',function(){cad=b.dataset.cad;apply();});
+});
+apply();
+})();</script>
 
 <div class=section id=faq>
 <h2>Questions</h2>
@@ -326,16 +357,19 @@ and the next exploited vulnerability that touches your stack will find you — n
   return page(cfg, "Threat intelligence alerts for defenders", body, flash, flashKind);
 }
 
-export function subscribeForm(cfg, tier, flash = "", flashKind = "", avail = null) {
+export function subscribeForm(cfg, tier, flash = "", flashKind = "", avail = null, preCadence = "") {
   const t = cfg.tiers[tier];
   const allowed = (t.channels || []).filter((x) => CHAN_META[x]);
   // A cadence is offered when it has a price in pence. The Stripe price id is
   // optional — billing.ensureTierPrice() creates one on the first checkout.
   const hasM = Number(t.monthly_pence) > 0, hasW = Number(t.weekly_pence) > 0;
   let cadOpts = "";
+  // Honour the cadence picked on the pricing cards, else default to monthly.
+  const want = ["monthly", "weekly"].includes(preCadence) ? preCadence
+    : (hasM ? "monthly" : "weekly");
   for (const [cad, on, disp] of [["monthly", hasM, t.monthly_display], ["weekly", hasW, t.weekly_display]]) {
     if (!on) continue;
-    const chk = (cad === "monthly" && hasM) || (cad === "weekly" && !hasM) ? " checked" : "";
+    const chk = cad === want ? " checked" : "";
     cadOpts += `<label><input type=radio name=cadence value="${cad}"${chk}><span>${esc(disp)}</span></label>`;
   }
   const platOpts = allowed.map((p) => {
