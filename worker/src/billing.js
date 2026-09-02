@@ -250,7 +250,23 @@ export async function handleEvent(env, cfg, event) {
     if (sub) { await db.setStatus(D, sub.id, "cancelled", "stripe: subscription deleted"); result = { action: "cancelled", subscriber_id: sub.id }; }
   } else if (etype === "invoice.payment_failed") {
     const sub = await db.getByStripeCustomer(D, obj.customer);
-    if (sub) { await db.setStatus(D, sub.id, "past_due", "stripe: payment failed"); result = { action: "notify_owner", detail: `${sub.email} payment failed` }; }
+    if (sub) {
+      // Stripe retries a failed card over several days. One failure is often a
+      // bank blip, so we hold access on the first attempt and only cut it off
+      // once Stripe has tried `cancel_after_failed_payments` times.
+      const attempts = Number(obj.attempt_count || 1);
+      const limit = Number(cfg.cancel_after_failed_payments ?? 2);
+      await db.setStatus(D, sub.id, "past_due", `stripe: payment failed (attempt ${attempts})`);
+      if (attempts >= limit) {
+        await db.setStatus(D, sub.id, "cancelled", `stripe: ${attempts} failed payment attempts`);
+        await db.logEvent(D, "billing:cancelled_after_failures", sub.id, { attempts, limit });
+        result = { action: "cancelled", subscriber_id: sub.id,
+                   detail: `${sub.email} cancelled after ${attempts} failed payment attempts` };
+      } else {
+        result = { action: "notify_owner", subscriber_id: sub.id,
+                   detail: `${sub.email} payment failed (attempt ${attempts} of ${limit})` };
+      }
+    }
   } else if (["invoice.paid", "invoice.payment_succeeded"].includes(etype)) {
     const sub = await db.getByStripeCustomer(D, obj.customer);
     if (sub && sub.status === "past_due") { await db.setStatus(D, sub.id, "active", "stripe: payment recovered"); result = { action: "recovered", subscriber_id: sub.id }; }

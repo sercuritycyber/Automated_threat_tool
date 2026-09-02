@@ -115,6 +115,56 @@ export async function removeFromGuild(env, userId) {
   return true;
 }
 
+// ---- one-time invites -------------------------------------------------
+// A single-use, short-lived invite to the subscriber channel.
+//
+// Read this before relying on invites for access control: Discord does NOT
+// report who redeemed an invite. An invite alone therefore gives us no user
+// id, and with no user id there is nobody to remove when a subscription ends.
+// So an invite is the FALLBACK path — used only when OAuth guilds.join is
+// unavailable — and a subscriber who joins that way is flagged as
+// unenforceable rather than silently treated as revocable.
+export async function createOneTimeInvite(env, { maxAgeSec = 86400 } = {}) {
+  const channel = env.DISCORD_INVITE_CHANNEL_ID || env.DISCORD_ALERT_CHANNEL_ID;
+  if (!channel) throw new DiscordError("DISCORD_INVITE_CHANNEL_ID is not set");
+  const inv = await api(env, "POST", `/channels/${channel}/invites`, {
+    max_uses: 1,          // burns on first use
+    max_age: maxAgeSec,   // and expires anyway
+    unique: true,         // never reuse an existing invite
+    temporary: false,
+  });
+  if (!inv.code) throw new DiscordError("invite created but has no code");
+  return { code: inv.code, url: `https://discord.gg/${inv.code}`, expires_in: maxAgeSec };
+}
+
+export async function revokeInvite(env, code) {
+  try { await api(env, "DELETE", `/invites/${code}`); return true; }
+  catch { return false; }
+}
+
+// ---- channel broadcast -------------------------------------------------
+// Posts to the subscribers' intel channel via its webhook. This is a shared
+// feed: everyone in the channel sees the same thing, so it CANNOT honour an
+// individual score threshold or vendor filter. Per-subscriber filtering lives
+// in the DM path below; this is the community view.
+export async function postToChannel(env, content) {
+  const url = env.DISCORD_ALERT_WEBHOOK;
+  if (!url) return { ok: false, error: "DISCORD_ALERT_WEBHOOK not set" };
+  if (!/^https:\/\/(discord|discordapp)\.com\/api\/webhooks\//.test(url))
+    return { ok: false, error: "DISCORD_ALERT_WEBHOOK is not a discord webhook URL" };
+  let body = content;
+  if (body.length > 2000) body = body.slice(0, 1970).trimEnd() + "\n…";
+  try {
+    const r = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "User-Agent": UA },
+      // suppress embeds and never let alert text ping anyone
+      body: JSON.stringify({ content: body, flags: 4, allowed_mentions: { parse: [] } }),
+    });
+    return r.ok ? { ok: true } : { ok: false, error: `HTTP ${r.status}: ${(await r.text()).slice(0, 150)}` };
+  } catch (e) { return { ok: false, error: String(e).slice(0, 200) }; }
+}
+
 // Delivery — a DM, so each subscriber's own threshold and vendor filter still
 // apply. Opening a DM channel is cheap and Discord dedupes it per recipient.
 export async function dm(env, userId, content) {

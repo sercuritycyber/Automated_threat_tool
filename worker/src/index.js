@@ -4,6 +4,7 @@ import { config, problems, advisories, priceToTier, monthlyPence,
 import * as db from "./db.js";
 import * as billing from "./billing.js";
 import * as discord from "./discord.js";
+import { alertEmailHtml } from "./emailtpl.js";
 import { send, verifyTarget, channelAvailability } from "./channels.js";
 import { sign, verify, newId, BadToken, timingSafeEqual } from "./tokens.js";
 import { page, landing, subscribeForm, managePage, simple, briefPage, paidPage, feedXml, LOGO_SVG, chanLabel } from "./pages.js";
@@ -35,8 +36,9 @@ export default {
     // turn every retention run into a second digest.
     const isRetention = /^\s*30\s+3\s/.test(event.cron || "");
     if (isRetention) {
-      const a = await db.purgeUnconfirmed(D, cfg.retention_days_unconfirmed);
-      const b = await db.purgeCancelled(D, cfg.retention_days_cancelled);
+      await db.ensureForeverFree(D, cfg.forever_free_emails).catch((e) => console.error("forever-free", e));
+      const a = await db.purgeUnconfirmed(D, cfg.retention_days_unconfirmed, cfg.forever_free_emails);
+      const b = await db.purgeCancelled(D, cfg.retention_days_cancelled, cfg.forever_free_emails);
       const c = await db.purgeIntents(D, 48);
       await db.trimPostsLog(D, 500);
       await db.kvSet(D, "last_retention", nowIso());
@@ -760,6 +762,7 @@ async function internalIngest(request, env, cfg, ctx) {
   // Filtering on post_text alone silently dropped every subscriber-only alert.
   const posts = (body.posts || []).filter((p) =>
     (p.subscriber_text || "").trim() || (p.post_text || "").trim());
+  await db.ensureForeverFree(env.DB, cfg.forever_free_emails).catch((e) => console.error("forever-free", e));
   for (const p of posts) {
     p.post_key = normKey(p);
     await db.logPost(env.DB, p);
@@ -768,8 +771,35 @@ async function internalIngest(request, env, cfg, ctx) {
   ctx.waitUntil((async () => {
     const subs = (await db.activeForDelivery(env.DB)).filter((s) => s.status === "active");
     for (const s of subs) await deliverInstant(env, cfg, s, posts, "instant").catch((e) => console.error("instant", s.id, e));
+    // Shared subscriber channel on Discord. Everyone in the channel sees the
+    // same feed, so it uses one fixed threshold, not anyone's personal filter.
+    // Per-subscriber filtering is the DM / RSS / email path above.
+    if (env.DISCORD_ALERT_WEBHOOK) {
+      const bar = Number(cfg.discord_channel_min_score ?? 50);
+      for (const p of posts) {
+        if (Number(p.score || 0) < bar) continue;
+        if (await db.kvGet(env.DB, "dch:" + p.post_key)) continue;   // once per story, across runs
+        const r = await discord.postToChannel(env, discordChannelPost(cfg, p));
+        if (r.ok) await db.kvSet(env.DB, "dch:" + p.post_key, nowIso());
+        else console.error("discord channel post", r.error);
+      }
+    }
   })());
   return json({ received: posts.length });
+}
+
+// The shared-channel version of an alert: the action line, the depth, the CVEs,
+// the source. Same substance as a DM, formatted for a public channel.
+function discordChannelPost(cfg, p) {
+  const cves = (p.cve_ids || []).join(", ");
+  const parts = [
+    `**${p.title || "Threat alert"}**${p.score != null ? `  ·  impact ${p.score}/100` : ""}`,
+    (p.action || "").trim() ? `**Do now:** ${p.action.trim()}` : "",
+    (p.subscriber_text || p.post_text || "").trim(),
+    cves ? `CVE: ${cves}` : "",
+    p.url ? `<${p.url}>` : "",
+  ].filter(Boolean);
+  return parts.join("\n\n");
 }
 
 function normKey(p) {
@@ -839,9 +869,14 @@ async function deliverInstant(env, cfg, sub, posts, mode) {
     const subject = (post.title || (post.post_text || post.subscriber_text || "").split("\n")[0]
       || "Threat alert").slice(0, 180);
     const jsonp = tierCfg.attach_json ? { posts: [post] } : null;
+    const mtok = await sign(env, { sub: sub.id, act: "manage" }, 90 * 86400).catch(() => "");
+    const links = mtok ? { manage: `${cfg.site_url}/manage?t=${mtok}`,
+      unsubscribe: `${cfg.site_url}/unsubscribe?t=${mtok}` } : {};
     for (const ch of verified) {
       const r = await send(env, cfg, ch.kind, ch.target, subject, alertBody(post), {
         priority: "instant", shortText: post.short_text || "",
+        html: ch.kind === "email" ? alertEmailHtml(cfg, post, links) : "",
+        listUnsub: ch.kind === "email" ? links.unsubscribe : "",
         jsonPayload: ["email", "webhook"].includes(ch.kind) ? jsonp : null,
       });
       await db.recordDelivery(env.DB, sub.id, post.post_key, ch.kind, mode, r.ok, r.ok ? null : r.error);

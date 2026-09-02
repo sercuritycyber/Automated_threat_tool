@@ -259,6 +259,30 @@ export async function activeForDelivery(db) {
   return Promise.all(subs.map((s) => hydrateSub(db, s)));
 }
 
+// ---- forever-free subscribers --------------------------------
+// Permanently active, unbilled. Used to test live delivery and for the
+// brand's own address. Idempotent: safe to call on every ingest.
+export async function ensureForeverFree(db, emails = []) {
+  for (const raw of emails) {
+    const email = String(raw || "").trim().toLowerCase();
+    if (!email.includes("@")) continue;
+    let s = await getByEmail(db, email);
+    if (!s) {
+      const r = await run(db,
+        `INSERT INTO subscribers(email, tier, cadence, status, source, created_at, confirmed_at)
+         VALUES (?, 'team', 'monthly', 'active', 'free', ?, ?)`, email, nowIso(), nowIso());
+      const id = r.meta.last_row_id;
+      await run(db, "INSERT INTO prefs(subscriber_id, updated_at) VALUES (?, ?)", id, nowIso());
+      await run(db, "INSERT INTO channels(subscriber_id, kind, target, verified, created_at) VALUES (?, 'email', ?, 1, ?)",
+        id, email, nowIso());
+      await logEvent(db, "created", id, { source: "free", note: "forever-free" });
+    } else if (s.status !== "active" || s.source !== "free") {
+      await run(db, "UPDATE subscribers SET status='active', source='free', cancelled_at=NULL WHERE id=?", s.id);
+      await logEvent(db, "status:active", s.id, { reason: "forever-free re-asserted" });
+    }
+  }
+}
+
 // ---- DSAR ------------------------------------------------------
 export async function exportSubscriber(db, id) {
   const s = await get(db, id, false);
@@ -283,17 +307,19 @@ export async function eraseSubscriber(db, id, reason = "DSAR erasure") {
 }
 
 // ---- retention ------------------------------------------------
-export async function purgeUnconfirmed(db, days) {
+export async function purgeUnconfirmed(db, days, keepEmails = []) {
+  const keep = new Set((keepEmails || []).map((e) => e.toLowerCase()));
   const ids = (await many(db,
-    "SELECT id FROM subscribers WHERE status IN ('pending_payment','unconfirmed') AND created_at < ?",
-    isoDaysAgo(days))).map((r) => r.id);
+    "SELECT id, email FROM subscribers WHERE status IN ('pending_payment','unconfirmed') AND created_at < ?",
+    isoDaysAgo(days))).filter((r) => !keep.has((r.email || "").toLowerCase())).map((r) => r.id);
   for (const id of ids) await eraseSubscriber(db, id, `retention: unconfirmed > ${days}d`);
   return ids.length;
 }
-export async function purgeCancelled(db, days) {
+export async function purgeCancelled(db, days, keepEmails = []) {
+  const keep = new Set((keepEmails || []).map((e) => e.toLowerCase()));
   const ids = (await many(db,
-    "SELECT id FROM subscribers WHERE status='cancelled' AND COALESCE(cancelled_at, created_at) < ?",
-    isoDaysAgo(days))).map((r) => r.id);
+    "SELECT id, email FROM subscribers WHERE status='cancelled' AND COALESCE(cancelled_at, created_at) < ?",
+    isoDaysAgo(days))).filter((r) => !keep.has((r.email || "").toLowerCase())).map((r) => r.id);
   for (const id of ids) await eraseSubscriber(db, id, `retention: cancelled > ${days}d`);
   return ids.length;
 }

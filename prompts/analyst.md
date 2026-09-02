@@ -190,10 +190,16 @@ CISA KEV catalog, clustered duplicate stories, and attached a heuristic
 social feed; they are paying for the work behind it. Fill `alerts` on every
 run, including when `decision` is `skip`.
 
-   - Include **every** story scoring `subscriber_min_score` or above (from
-     `candidates.json`; default 40 if absent). That is deliberately a lower bar
-     than the posting threshold — subscribers get more than the public feed,
-     never less. Do not cap the count.
+   - Include **every** story with a genuine security angle — a vulnerability,
+     active exploitation, a breach, a malware or campaign report, a notable
+     advisory. Use `subscriber_min_score` from `candidates.json` (default 15)
+     only to drop pure noise: marketing, opinion, recycled year-old news with
+     nothing new. When in doubt, include it — the subscriber streamlines their
+     own view with a personal threshold and vendor filter; your job is to make
+     sure nothing real is missing. Do not cap the count.
+   - For a lower-impact item the write-up can be short (3-5 sentences) — what it
+     is, who's affected, whether to act — but it must still be the analysis,
+     never the social wording.
    - `subscriber_text` must NOT be the social post reworded. The social post is
      a hook; this is the analysis. Write 120-220 words covering, in this order,
      only what the sources actually support:

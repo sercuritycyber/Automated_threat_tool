@@ -10,6 +10,16 @@ const DEFAULTS = {
   // Delivery kinds to hide from signup regardless of secrets, e.g. ["slack"].
   // Anything listed here shows as "unavailable" and is rejected server-side.
   channels_disabled: [],
+  // Stripe retries a failed card for days; cut access once it has tried this
+  // many times. 2 keeps a bank blip from costing you a customer.
+  cancel_after_failed_payments: 2,
+  // Shared Discord channel: post a story here once it clears this score. A
+  // community feed, so a single fixed bar — not a per-subscriber one.
+  discord_channel_min_score: 50,
+  // Permanently-active free subscribers: the brand's own address, plus any
+  // test address. Never lapse, never billed. Also settable via
+  // FOREVER_FREE_EMAILS (comma list) in wrangler.toml [vars].
+  forever_free_emails: ["securitycyber_cti@securitycyber.uk"],
   rate_limit_per_min: 20,
   retention_days_cancelled: 180,
   retention_days_unconfirmed: 7,
@@ -37,9 +47,11 @@ const DEFAULTS = {
       monthly_pence: 800, weekly_pence: 200,
       blurb: "Instant alerts for anything scoring 90+, plus a daily digest.",
       instant_min_score: 70, attach_json: false,
-      // Anything from here up reaches them at all (digest + feed); the free
-      // social feed posts at 60, so paid always sees strictly more.
-      min_score: 45,
+      // min_score is the floor below which a story never reaches them. 15 keeps
+      // out only pure noise; everything with a real security angle flows into
+      // the digest and private feed, and the subscriber raises their own
+      // threshold if they want less. instant_min_score is what INTERRUPTS.
+      min_score: 15,
       channels: ["email", "rss", "discord", "telegram", "ntfy"], max_channels: 3,
     },
     team: {
@@ -53,7 +65,7 @@ const DEFAULTS = {
       monthly_pence: 1800, weekly_pence: 0,
       blurb: "Everything scoring 75+ instantly, a daily digest, machine-readable JSON, Slack and Discord.",
       instant_min_score: 55, attach_json: true,
-      min_score: 35,
+      min_score: 10,
       channels: ["email", "rss", "discord", "discord_webhook", "slack", "telegram", "webhook", "ntfy"], max_channels: 8,
     },
   },
@@ -89,6 +101,10 @@ export function config(env) {
   c.support_email = env.SUPPORT_EMAIL || env.CONTACT_EMAIL || "";
   c.company_legal_name = env.COMPANY_LEGAL_NAME || "";
   c.ico_reg = env.ICO_REG || "";
+  if (env.FOREVER_FREE_EMAILS)
+    c.forever_free_emails = [...new Set([...(c.forever_free_emails || []),
+      ...env.FOREVER_FREE_EMAILS.split(",").map((x) => x.trim().toLowerCase()).filter(Boolean)])];
+  c.forever_free_emails = (c.forever_free_emails || []).map((x) => String(x).toLowerCase());
   c.terms_version = env.TERMS_VERSION || "2026-09-02";
   return c;
 }

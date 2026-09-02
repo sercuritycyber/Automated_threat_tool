@@ -4,6 +4,8 @@ import { sign, verify, newId, BadToken, timingSafeEqual } from "../src/tokens.js
 import { config, priceToTier, priceId, monthlyPence, problems } from "../src/config.js";
 import { verifyTarget, teaser, channelAvailability } from "../src/channels.js";
 import { landing, subscribeForm, feedXml } from "../src/pages.js";
+import { alertEmailHtml, alertEmailText } from "../src/emailtpl.js";
+import { discordConfigured } from "../src/discord.js";
 import * as billing from "../src/billing.js";
 import { mdToHtml, esc } from "../src/util.js";
 import { legalHtml } from "../src/legal.js";
@@ -147,6 +149,37 @@ ok("unavailable channels render disabled on the form",
   ok("link_only does NOT demand STRIPE_SECRET_KEY",
     !problems(lo, { RESEND_API_KEY: "re_x", SUBS_TOKEN_SECRET: "s", STRIPE_WEBHOOK_SECRET: "whsec_x" })
       .some((x) => /STRIPE_SECRET_KEY/.test(x)));
+}
+
+// ---- HTML alert email ----
+{
+  const al = { title: "Acme <RCE> \"now\"", url: "https://ex.co/a?x=1&y=2", source: "CISA KEV feed",
+    score: 96, cve_ids: ["CVE-2026-1"], action: "Patch to 4.2.1.",
+    subscriber_text: "Line one.\n\nLine two with <tag> & ampersand." };
+  const h = alertEmailHtml(cNoPrice, al, { manage: "https://x/manage?t=abc", unsubscribe: "https://x/u?t=abc" });
+  ok("alert email is a full HTML doc", h.startsWith("<!doctype html>") && h.includes("</html>"));
+  ok("alert email escapes hostile alert text",
+    h.includes("Acme &lt;RCE&gt;") && h.includes("&amp; ampersand") && !/<tag>/.test(h));
+  ok("alert email shows score, CVE, action and both links",
+    h.includes("96/100") && h.includes("CVE-2026-1") && h.includes("Patch to 4.2.1")
+    && h.includes("https://x/manage?t=abc") && h.includes("https://x/u?t=abc"));
+  ok("alert email flags KEV from the source", h.includes("CISA KEV"));
+  const t = alertEmailText(cNoPrice, al, { manage: "https://x/m" });
+  ok("alert email has a plain-text part", t.includes("DO NOW: Patch to 4.2.1") && t.includes("Line two"));
+}
+
+// ---- Discord membership ----
+ok("discord needs the app + bot to be configured",
+  !discordConfigured({}) && discordConfigured({ DISCORD_CLIENT_ID: "1", DISCORD_CLIENT_SECRET: "2", DISCORD_BOT_TOKEN: "3", DISCORD_GUILD_ID: "4" }));
+
+// ---- forever-free config ----
+{
+  const c1 = config({ ...cenv });
+  ok("forever-free defaults to the CTI address",
+    c1.forever_free_emails.includes("securitycyber_cti@securitycyber.uk"));
+  const c2 = config({ ...cenv, FOREVER_FREE_EMAILS: "a@b.co, C@D.CO" });
+  ok("FOREVER_FREE_EMAILS merges + lowercases",
+    c2.forever_free_emails.includes("a@b.co") && c2.forever_free_emails.includes("c@d.co"));
 }
 
 // ---- private RSS feed ----

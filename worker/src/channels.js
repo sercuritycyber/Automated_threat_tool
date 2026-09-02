@@ -46,12 +46,13 @@ export function channelAvailability(env, cfg) {
 }
 
 // ---- Resend (email) ----------------------------------------------------
-async function sendEmail(env, cfg, to, subject, body, jsonPayload, listUnsub) {
+async function sendEmail(env, cfg, to, subject, body, jsonPayload, listUnsub, htmlBody) {
   if (!env.RESEND_API_KEY) return res("email", false, "", "RESEND_API_KEY not set");
   const from = `${cfg.brand} CTI <${cfg.from_email}>`;
   const payload = {
     from, to: [to], subject,
     text: body,
+    html: htmlBody || undefined,
     reply_to: cfg.support_email || undefined,
   };
   if (listUnsub) payload.headers = { "List-Unsubscribe": `<${listUnsub}>`, "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" };
@@ -138,6 +139,16 @@ async function sendWebhook(env, url, subject, body, jsonPayload) {
   } catch (e) { return res("webhook", false, "", String(e).slice(0, 200)); }
 }
 
+// ntfy carries the title in an HTTP HEADER, which must be ASCII — an em-dash
+// or middle-dot in an alert title threw a TypeError and killed the delivery.
+function asciiHeader(s) {
+  return String(s || "")
+    .replace(/[\u2010-\u2015]/g, "-").replace(/[\u2018\u2019]/g, "'")
+    .replace(/[\u201C\u201D]/g, '"').replace(/\u2026/g, "...").replace(/\u00B7/g, "-")
+    // eslint-disable-next-line no-control-regex
+    .replace(/[^\x20-\x7E]/g, "");
+}
+
 // ---- ntfy -------------------------------------------------------
 async function sendNtfy(url, subject, body, priority) {
   if (!/^https?:\/\/[^/]+\/.+/.test(url || "")) return res("ntfy", false, "", "not a topic URL");
@@ -145,7 +156,7 @@ async function sendNtfy(url, subject, body, priority) {
   try {
     const r = await fetch(url, {
       method: "POST", body,
-      headers: { Title: subject.slice(0, 250), Priority: pr, Tags: "warning,shield", "User-Agent": UA },
+      headers: { Title: asciiHeader(subject).slice(0, 250), Priority: pr, Tags: "warning,shield", "User-Agent": UA },
     });
     return r.ok ? res("ntfy", true, "posted") : res("ntfy", false, "", `HTTP ${r.status}`);
   } catch (e) { return res("ntfy", false, "", String(e).slice(0, 200)); }
@@ -153,9 +164,9 @@ async function sendNtfy(url, subject, body, priority) {
 
 // ---- dispatch -------------------------------------------------
 export async function send(env, cfg, kind, target, subject, body, opts = {}) {
-  const { jsonPayload = null, priority = "default", listUnsub = "", shortText = "" } = opts;
+  const { jsonPayload = null, priority = "default", listUnsub = "", shortText = "", html = "" } = opts;
   switch (kind) {
-    case "email": return sendEmail(env, cfg, target, subject, body, jsonPayload, listUnsub);
+    case "email": return sendEmail(env, cfg, target, subject, body, jsonPayload, listUnsub, html);
     case "discord": {
       // target is their Discord user id — DM it, so their own score threshold
       // and vendor filter still decide what they receive.
