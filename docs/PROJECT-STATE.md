@@ -39,7 +39,36 @@ Two things that share a codebase:
 | Python | 3.14 system; pipeline uses `~/Threatintel/.venv` |
 | claude CLI | `~/.local/bin/claude` (2.1.259), OAuth-authed (`~/.claude.json`) |
 
-### 2026-09-03: laptop cutover complete
+### 2026-09-03: VM ROOT FS FAILED — laptop re-enabled as fallback
+
+Minutes after cutover the VM's btrfs root went **read-only** from disk I/O
+errors:
+
+    BTRFS: error (device sda3) in write_all_supers: errno=-5 IO failure
+    BTRFS info: forced readonly
+    [/dev/sda3].write_io_errs  16
+    remounting read-write after error is not allowed
+
+Not a space issue (51% used). The virtual disk or the Proxmox storage behind
+it is failing writes. **The VM pipeline is dead until this is fixed** —
+`sudo reboot` from the Proxmox console first (clears it if transient), then
+check the host: storage-pool free space, SMART/health of the backing disk,
+the VM disk config. This VM almost certainly needs a **new, larger, healthy
+disk** — see also §3 on the disk being too small.
+
+The **laptop** `cti-harvester.timer` + `cti-panel.service` were re-enabled so
+CTI coverage doesn't lapse. `state/history.jsonl` + `seen.jsonl` are intact on
+the laptop; they were copied to the VM before the failure so nothing is lost.
+Once the VM disk is healthy: re-clone, restore state, re-run the native setup
+(§2), then stop the laptop again.
+
+The **agent-bus poller** (`bin/agent_bus_poll.sh`, `deploy/agent-poll.*`,
+`agent-bus/PROMPT-claude.md`) is committed and ready but NOT deployed — the VM
+was read-only when I tried. Deploy it on both machines once the VM is back
+(VM: `AGENT=claude BUS=~/agent-bus`; laptop: same plus
+`BUS_REMOTE=securitycyber@securitycybercti:agent-bus`).
+
+### 2026-09-03: laptop cutover (SUPERSEDED by the FS failure above)
 
 The laptop's `cti-harvester.timer` + `cti-panel.service` are **stopped and
 disabled**. The laptop repo at `~/Threatintel` stays as a cold backup (do not
