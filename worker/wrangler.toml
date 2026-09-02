@@ -93,4 +93,99 @@ CONFIG = """
 #   ADMIN_TOKEN              32+ random bytes   (owner panel → /admin auth)
 #   BRIEF_PRICE_ID           optional — a Stripe Price id for the one-off threat
 #                            brief. If unset, a product+price is created once on
+#                            the first purchase and cached in D1.name = "automated-threat-tool"
+main = "src/index.js"
+compatibility_date = "2025-01-15"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = false
+
+# NO [assets] / [site] block — this Worker serves everything from src/index.js.
+# `web/` at the repo root is the private owner panel (FastAPI) and must never
+# be deployed. Do not add an assets directory here.
+
+# Production route — the DNS record `cti` must exist (proxied) in the zone.
+[[routes]]
+pattern = "cti.securitycyber.uk/*"
+zone_name = "securitycyber.uk"
+
+# Subscriber database. Create once:  npx wrangler d1 create cti-subs
+# then paste the id below.
+[[d1_databases]]
+binding = "DB"
+database_name = "cti-subs"
+database_id = "2d514521-9be2-4c8e-8bf0-73c68bcaeafd"
+
+[triggers]
+# 08:15 UTC daily digest · 03:30 UTC Sunday retention + intent purge
+crons = ["15 8 * * *", "30 3 * * 0"]
+
+[observability]
+enabled = true
+head_sampling_rate = 1
+
+[observability.logs]
+enabled = true
+invocation_logs = true
+
+[vars]
+BRAND = "SecurityCyber"
+SITE_URL = "https://cti.securitycyber.uk"
+MAIN_SITE = "https://securitycyber.uk"
+FROM_EMAIL = "securitycyber_cti@securitycyber.uk"
+CONTACT_EMAIL = "securitycyber_cti@securitycyber.uk"
+SUPPORT_EMAIL = "securitycyber_cti@securitycyber.uk"
+COMPANY_LEGAL_NAME = "Charlie Collins"
+ICO_REG = ""   # <-- register at ico.org.uk and paste the number here before go-live
+TERMS_VERSION = "2026-09-02"
+# Everything tunable in one JSON blob. Edit and re-deploy.
+CONFIG = """
+{
+  "live": false,
+  "rate_limit_per_min": 20,
+  "retention_days_cancelled": 180,
+  "retention_days_unconfirmed": 7,
+  "digest_window_hours": 24,
+  "brief": {
+    "price_id": "",
+    "name": "SecurityCyber — on-demand threat brief",
+    "currency": "gbp",
+    "unit_amount": 4900,
+    "display": "£49"
+  },
+  "tiers": {
+    "individual": {
+      "monthly_price_id": "", "weekly_price_id": "",
+      "monthly_display": "£8 / month", "weekly_display": "£2 / week",
+      "monthly_pence": 800, "weekly_pence": 200,
+      "blurb": "Instant alerts for anything scoring 90+, plus a daily digest.",
+      "instant_min_score": 90, "attach_json": false,
+      "channels": ["email", "discord", "telegram", "ntfy"], "max_channels": 2
+    },
+    "team": {
+      "monthly_price_id": "", "weekly_price_id": "",
+      "monthly_display": "£18 / month", "weekly_display": "£5 / week",
+      "monthly_pence": 1800, "weekly_pence": 500,
+      "blurb": "Everything scoring 75+ instantly, a daily digest, machine-readable JSON, Slack and Discord.",
+      "instant_min_score": 75, "attach_json": true,
+      "channels": ["email", "discord", "slack", "telegram", "webhook", "ntfy"], "max_channels": 6
+    }
+  }
+}
+
+
+
+"""
+
+# Secrets — set with:  npx wrangler secret put <NAME>
+#   STRIPE_SECRET_KEY        sk_test_… then sk_live_…
+#   STRIPE_WEBHOOK_SECRET    whsec_…   (from the Stripe dashboard webhook)
+#   RESEND_API_KEY           re_…
+#   TELEGRAM_BOT_TOKEN       from @BotFather   (optional)
+#   TELEGRAM_BOT_USERNAME    without the @      (optional)
+#   TELEGRAM_WEBHOOK_SECRET  any random string  (optional)
+#   SUBS_TOKEN_SECRET        32+ random bytes   (signs subscriber links)
+#   INGEST_SECRET            32+ random bytes   (pipeline → worker auth)
+#   ADMIN_TOKEN              32+ random bytes   (owner panel → /admin auth)
+#   BRIEF_PRICE_ID           optional — a Stripe Price id for the one-off threat
+#                            brief. If unset, a product+price is created once on
 #                            the first purchase and cached in D1.
