@@ -78,29 +78,38 @@ Files are ready: `deploy/Containerfile`, `deploy/threatintel.container`,
     /bin/sh: error while loading shared libraries: /lib64/libc.so.6:
       cannot apply additional memory protection after relocation: Permission denied
 
-**Diagnosis so far:** glibc 2.41+ in the container calls `mprotect`/`mseal`
-on its RELRO segment during relocation; something in this VM's stack denies it
-(`EPERM`). Tried and did NOT fix it:
-  - `--security-opt seccomp=unconfined`
-  - `--isolation=chroot`
-  - `setsebool -P container_use_execmem 1` — boolean doesn't exist here
-  - subuid/subgid ARE set; `podman unshare` works; overlay storage; rootless ok
+**DIAGNOSIS — CONFIRMED: it is SELinux.**
 
-**Next things to try (you have local shell — iterate fast):**
-  1. `sudo ausearch -m AVC -ts recent` right after a failed `podman run` — is
-     SELinux denying it? If yes: `sudo setenforce 0`, retry, confirm, then
-     write a targeted policy module instead of leaving it permissive.
-  2. `podman run --rm --security-opt label=disable alpine echo ok`
-  3. `podman run --rm --cap-add SYS_RESOURCE ...` or `--privileged` (test only).
-  4. Check `sysctl kernel.unprivileged_userns_clone` and
-     `/proc/sys/vm/overcommit_memory`.
-  5. If it's a glibc/kernel-hardening interaction: base the image on
+    $ sudo setenforce 0 && podman run --rm alpine:3.20 echo OK  →  "OK"   (works)
+    $ sudo setenforce 1 && podman run --rm alpine:3.20 echo OK  →  (nothing)
+
+`ausearch -m AVC -ts recent` shows `<no matches>` — the denial is
+dontaudit-suppressed (likely `execmem`/`execmod` on `container_t`, which
+glibc 2.41+ needs for RELRO). Did NOT fix it: `--security-opt
+seccomp=unconfined`, `--isolation=chroot`, `--security-opt label=disable`
+attempts; there is no `container_use_execmem` boolean on this system.
+
+**The fix is a SELinux-policy decision for Charlie (a Claude session was
+blocked from making it):**
+  1. FIRST TRY: `sudo dnf update -y container-selinux` then retry — often a
+     stale policy vs a new glibc.
+  2. If still failing, scope it (do NOT leave global permissive):
+     `sudo semanage permissive -a container_t` — only the container domain
+     goes permissive, the rest of the host stays enforcing.
+  3. Or generate a targeted module:
+     `sudo semodule -DB` (turn off dontaudit) → reproduce → 
+     `sudo ausearch -m AVC -ts recent | audit2allow -M podman-glibc241` →
+     `sudo semodule -i podman-glibc241.pp` → `sudo semodule -B`.
+
+**Other options if the SELinux fix is unwanted:**
+  4. base the image on
      `debian:12-slim` / `python:3.12-slim` (glibc 2.36, no mseal) instead of
      Fedora. The `claude` binary must still run there — test
      `podman run --rm -v ~/.local/share/claude:/c python:3.12-slim /c/versions/2.1.259 --version`.
      If claude won't run on Debian glibc, bake it via its installer in a
-     Debian image and test again.
-  6. `podman-docker` for the `docker` command: `sudo dnf install -y podman-docker`.
+     Debian image and test again. (Debian glibc 2.36 sidesteps the RELRO
+     mprotect that trips the SELinux denial — this may just work.)
+  5. `podman-docker` for the `docker` command: `sudo dnf install -y podman-docker`.
 
 **Also: disk.** 3 GB free is marginal for an image + rebuilds. Ask Charlie to
 resize the Proxmox disk (Hardware → Disk → Resize → +20 GB, then on the VM:
