@@ -33,6 +33,13 @@ ok("priceId lookup", priceId(c, "individual", "weekly") === "price_iw");
 ok("monthlyPence normalises weekly", monthlyPence(c, "individual", "weekly") === Math.round(200 * 52 / 12));
 ok("problems() clean when configured", problems(c, { RESEND_API_KEY: "re_x", STRIPE_SECRET_KEY: "sk_test_x" }).length === 0);
 ok("problems() flags missing resend", problems(c, {}).some((x) => /RESEND/.test(x)));
+const cNoIco = config({ ...cenv, ICO_REG: "" });
+ok("problems() does NOT block test-mode deploy on missing ICO",
+  problems(cNoIco, { RESEND_API_KEY: "re_x", STRIPE_SECRET_KEY: "sk_test_x" }).length === 0);
+ok("problems() DOES block go-live on missing ICO",
+  problems(config({ ...cenv, ICO_REG: "", CONFIG: JSON.stringify({ ...JSON.parse(cenv.CONFIG), live: true }) }),
+    { RESEND_API_KEY: "re_x", STRIPE_SECRET_KEY: "sk_live_x", STRIPE_WEBHOOK_SECRET: "whsec_x" })
+    .some((x) => /ICO/.test(x)));
 
 // ---- channels ----
 ok("verifyTarget discord ok", verifyTarget("discord", "https://discord.com/api/webhooks/123/abc")[0]);

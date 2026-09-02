@@ -89,22 +89,34 @@ export function monthlyPence(c, tier, cadence) {
 }
 
 // go-live blockers — empty array = ready
+// Hard blockers — the site can't function correctly (or lawfully, once live)
+// until these are resolved. Deploying the Worker is never blocked by this.
 export function problems(c, env) {
   const out = [];
   if (!c.from_email) out.push("FROM_EMAIL var is not set");
   if (!c.contact_email) out.push("CONTACT_EMAIL var is not set (privacy policy)");
   if (!c.company_legal_name) out.push("COMPANY_LEGAL_NAME var is not set (terms)");
-  if (!c.ico_reg) out.push("ICO_REG var is not set — register with the ICO first");
   for (const [name, t] of Object.entries(c.tiers)) {
     if (!t.monthly_price_id && !t.weekly_price_id) out.push(`tier '${name}' has no Stripe price id`);
   }
   if (!env.RESEND_API_KEY) out.push("RESEND_API_KEY secret is not set");
   if (c.live) {
+    // going live = taking real money for a service that holds a customer list
+    if (!c.ico_reg) out.push("live=true but ICO_REG is not set — you must register with the ICO before taking real subscribers");
     if (!/^sk_live_/.test(env.STRIPE_SECRET_KEY || "")) out.push("live=true but STRIPE_SECRET_KEY is not sk_live_");
     if (!env.STRIPE_WEBHOOK_SECRET) out.push("STRIPE_WEBHOOK_SECRET secret is not set");
   } else if (!env.STRIPE_SECRET_KEY) {
     out.push("STRIPE_SECRET_KEY secret is not set (use sk_test_ while live=false)");
   }
+  return out;
+}
+
+// Non-blocking things to sort before flipping CONFIG.live to true.
+export function advisories(c) {
+  const out = [];
+  if (!c.live && !c.ico_reg)
+    out.push("ICO registration not set yet — required before CONFIG.live: true. Deploy + test now, register at ico.org.uk, then paste ICO_REG.");
+  if (!c.live) out.push("Stripe is in TEST mode (CONFIG.live: false) — no real charges. Run a full test checkout before going live.");
   return out;
 }
 

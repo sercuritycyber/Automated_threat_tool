@@ -138,12 +138,12 @@ def problems() -> list[str]:
         out.append("subscriptions.contact_email is not set (required in the privacy policy)")
     if not c["company_legal_name"]:
         out.append("subscriptions.company_legal_name is not set (required in the terms)")
-    if not c["ico_registration"]:
-        out.append("subscriptions.ico_registration is not set — register with the ICO first")
     for name, t in c["tiers"].items():
         if not (t.get("monthly_price_id") or t.get("weekly_price_id")):
             out.append(f"tier '{name}' has no Stripe price id (monthly or weekly)")
     if c["live"]:
+        if not c["ico_registration"]:
+            out.append("subscriptions.live is true but ICO registration is not set — register with the ICO before taking real subscribers")
         if not os.getenv("STRIPE_SECRET_KEY", "").startswith("sk_live_"):
             out.append("subscriptions.live is true but STRIPE_SECRET_KEY is not an sk_live_ key")
         if not os.getenv("STRIPE_WEBHOOK_SECRET"):
@@ -154,10 +154,25 @@ def problems() -> list[str]:
     return out
 
 
+def advisories() -> list[str]:
+    """Non-blocking reminders to sort before flipping subscriptions.live to true."""
+    c = load()
+    out = []
+    if not c["live"] and not c["ico_registration"]:
+        out.append("ICO registration not set yet — required before going live. Deploy + test now, "
+                   "register at ico.org.uk, then set subscriptions.ico_registration.")
+    if not c["live"]:
+        out.append("Stripe is in TEST mode (subscriptions.live is false) — no real charges.")
+    return out
+
+
 if __name__ == "__main__":
     import json
     c = load()
     print(json.dumps(c, indent=2))
     print("\nblockers:")
     for p in problems():
+        print("  -", p)
+    print("\nadvisories:")
+    for p in advisories():
         print("  -", p)

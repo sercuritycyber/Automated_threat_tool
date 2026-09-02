@@ -1,5 +1,5 @@
 // SecurityCyber CTI Alerts — Cloudflare Worker entrypoint.
-import { config, problems, priceToTier, monthlyPence } from "./config.js";
+import { config, problems, advisories, priceToTier, monthlyPence } from "./config.js";
 import * as db from "./db.js";
 import * as billing from "./billing.js";
 import { send, verifyTarget } from "./channels.js";
@@ -570,7 +570,7 @@ async function adminApi(request, env, cfg, url, path) {
     let mrr = 0;
     for (const r of s.active) mrr += r.n * monthlyPence(cfg, r.tier, r.cadence || "monthly");
     return json({
-      ...s, mrr_pence: mrr, problems: problems(cfg, env),
+      ...s, mrr_pence: mrr, problems: problems(cfg, env), advisories: advisories(cfg),
       briefs_24h: await db.purchaseCount24h(D),
       last_digest: await db.kvGet(D, "last_digest"), last_retention: await db.kvGet(D, "last_retention"),
     });

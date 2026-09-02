@@ -2094,12 +2094,16 @@ npx wrangler d1 execute cti-subs --remote --file schema.sql   # first time only<
     c = subsconfig.load()
     env = load_env()
     probs = subsconfig.problems()
+    advs = subsconfig.advisories()
     stripe_state = ("live sk_live_ key" if env.get("STRIPE_SECRET_KEY", "").startswith("sk_live_")
                     else "test sk_test_ key" if env.get("STRIPE_SECRET_KEY", "").startswith("sk_test_")
                     else "not set")
     ready = ('<div class="flash good">Ready to accept subscribers.</div>' if not probs else
              '<div class="card" style="border-color:var(--warn)"><b>Before this can go live:</b><ul>'
              + "".join(f"<li>{e(x)}</li>" for x in probs) + "</ul></div>")
+    if advs:
+        ready += ('<div class="card"><b>Reminders (not blocking):</b><ul>'
+                  + "".join(f"<li>{e(x)}</li>" for x in advs) + "</ul></div>")
 
     def ck(v):
         return "checked" if v else ""
