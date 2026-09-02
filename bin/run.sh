@@ -76,7 +76,7 @@ claude -p "$(cat "$ROOT/prompts/analyst.md")" \
   --permission-mode acceptEdits \
   || fail analyst $?
 
-echo "[run] stage 3/3 : publish"
+echo "[run] stage 3/4 : publish"
 set +e
 python3 "$ROOT/bin/publish_linkedin.py" --decision "$ROOT/state/decision.json"
 PUB_RC=$?
@@ -86,6 +86,11 @@ case "$PUB_RC" in
   3|4) echo "[run] publish skipped (rc $PUB_RC — no fresh decision)" ;;
   *) fail publish "$PUB_RC" ;;
 esac
+
+# stage 4: push instant alerts to paying subscribers (no-op unless
+# subscriptions.enabled). Never fatal — the brand's post already went out.
+echo "[run] stage 4/4 : subscriber alerts"
+python3 "$ROOT/bin/deliver.py" --instant --from "$ROOT/state/decision.json" || echo "[run] deliver returned $? (non-fatal)"
 
 # success ping (optional)
 if python3 -c 'import json,sys; d=json.load(open("state/last_run.json")); sys.exit(0 if d.get("decision")=="post" and not d.get("dry_run") else 1)' 2>/dev/null; then

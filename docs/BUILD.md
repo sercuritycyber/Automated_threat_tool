@@ -12,9 +12,11 @@ Legend:  `[ ]` todo  `[~]` in progress  `[x]` done + tested  `[!]` blocked (see 
 ---
 
 ## RESUME HERE
-> Phase 0 ✅ done + tested (`python3 bin/selftest_subs.py` — 28/28).
-> Next: **Phase 1 — delivery engine** (`lib/channels.py`, `bin/deliver.py`).
-> Commits so far: Phase 0 = `<pending>`.
+> Phase 0 ✅ (`bin/selftest_subs.py` 28/28) · Phase 1 ✅ (`bin/selftest_deliver.py` 15/15).
+> Next: **Phase 2 — Stripe billing** (`lib/billing.py` + webhook handling; the
+> webhook route itself lands in Phase 3's public app, so Phase 2 = the library
+> + idempotency + recorded-payload tests).
+> Commits: P0 `f8397f3` · P1 `<pending>`.
 
 ## ⚠ OPEN BLOCKER — Turso credentials
 User wants PII in a **Turso** DB (EU region — good for UK GDPR). No `turso` CLI
@@ -114,15 +116,15 @@ SUBS_TOKEN_SECRET=            # random 32+ bytes, for signed links (auto-gen if 
 - [x] `.gitignore` covers `state/subscribers.db*` + `config/subscribers.json`
 - [x] `bin/selftest_subs.py` — 28 checks, all green on sqlite
 
-### Phase 1 — delivery engine
-- [ ] `lib/channels.py` — send(channel, target, subject, text, json_attach?) for email / slack / telegram / webhook / ntfy; each returns a result dict
-- [ ] `bin/deliver.py` — modes: `--instant` (from state/last_run posts, high-sev per tier) · `--digest` (last 24h collated) · `--test <sub_id>`
-- [ ] vendor-filter matching (subscriber `vendors[]` vs post cve/title/product text)
-- [ ] per-tier rule application
-- [ ] dedupe: `deliveries` table so a sub never gets the same post twice (instant then digest)
-- [ ] hook into `bin/run.sh` (after publish; non-fatal) + new `systemd/cti-digest.timer` (09:00 daily)
-- [ ] dry-run honoured (subscriptions.live=false → log only, no real sends) + global CTI_DRY_RUN
-- [ ] tests with a temp db + mocked channel senders
+### Phase 1 — delivery engine ✅
+- [x] `lib/channels.py` — `send(kind, target, subject, body, json_payload=…)` for email / slack (incoming webhook) / telegram (bot) / webhook (signed) / ntfy; `verify_target()` for channel validation
+- [x] `bin/deliver.py` — `--instant` (from decision.json) · `--digest` (last 24h from `state/posts_log.jsonl`) · `--test <id>` · `--list`
+- [x] vendor-filter matching (subscriber `vendors[]` vs title+text+cve)
+- [x] per-tier rules (instant_min_score, channels allow-list, attach_json)
+- [x] dedupe via `deliveries` table (instant never re-sends; digest once per day)
+- [x] hooked into `bin/run.sh` stage 4/4 (non-fatal) + `systemd/cti-digest.{service,timer}` (08:15 daily)
+- [x] `CTI_DRY_RUN` / `--dry` honoured; `subscriptions.enabled` false → clean no-op
+- [x] `bin/selftest_deliver.py` — 15 checks, mocked sends, all green
 
 ### Phase 2 — Stripe billing
 - [ ] `lib/billing.py` — create_checkout_session(tier, email) · verify_webhook(payload, sig) · price_id→tier map · portal_session(customer)

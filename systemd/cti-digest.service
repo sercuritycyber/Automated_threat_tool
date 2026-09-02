@@ -1,0 +1,16 @@
+[Unit]
+Description=Blue Team CTI — daily subscriber digest
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/Threatintel
+ExecStart=/usr/bin/env python3 %h/Threatintel/bin/deliver.py --digest
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+# deliver.py reads config/env itself
+TimeoutStartSec=600
+Nice=10
+
+[Install]
+WantedBy=default.target

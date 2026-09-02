@@ -1,0 +1,11 @@
+[Unit]
+Description=Run the Blue Team CTI subscriber digest once a day
+
+[Timer]
+OnCalendar=*-*-* 08:15:00
+Persistent=true
+RandomizedDelaySec=300
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target
