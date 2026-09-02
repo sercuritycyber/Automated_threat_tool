@@ -835,7 +835,9 @@ async function deliverInstant(env, cfg, sub, posts, mode) {
   for (const post of posts) {
     if (mode !== "test" && !wants(post, sub, tierCfg, "instant")) continue;
     if (mode !== "test" && await db.alreadyDelivered(env.DB, sub.id, post.post_key)) continue;
-    const subject = (post.title || (post.post_text || "").split("\n")[0]).slice(0, 180);
+    // A subscriber-only alert may have neither a title nor social copy.
+    const subject = (post.title || (post.post_text || post.subscriber_text || "").split("\n")[0]
+      || "Threat alert").slice(0, 180);
     const jsonp = tierCfg.attach_json ? { posts: [post] } : null;
     for (const ch of verified) {
       const r = await send(env, cfg, ch.kind, ch.target, subject, alertBody(post), {

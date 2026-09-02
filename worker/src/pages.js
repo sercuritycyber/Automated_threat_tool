@@ -527,7 +527,9 @@ if(s){s.addEventListener('change',u);u();}})();</script></div>
 <div class=card><form method=post action="/manage/prefs"><input type=hidden name=t value="${esc(tok)}">
 <label>Vendors / keywords <small>— comma-separated. Blank = everything. e.g. Fortinet, Cisco, VMware</small></label>
 <input type=text name=vendors value="${esc(p.vendors.join(", "))}">
-<label>Only alert me at score ≥ <small>— blank = your plan default (${esc(tierCfg.instant_min_score)})</small></label>
+<label>Only alert me at score ≥ <small>— blank = your plan's defaults: everything from
+${esc(tierCfg.min_score ?? 0)} reaches your digest and feed, ${esc(tierCfg.instant_min_score)}+ interrupts you.
+Setting a number here uses it for both (it can't go below ${esc(tierCfg.min_score ?? 0)}).</small></label>
 <input type=text name=min_score value="${esc(p.min_score_override ?? "")}" style="max-width:120px">
 <label class=row style="gap:8px;font-weight:400"><input type=checkbox name=instant ${p.instant ? "checked" : ""}> Instant alerts</label>
 <label class=row style="gap:8px;font-weight:400"><input type=checkbox name=digest ${p.digest ? "checked" : ""}> Daily digest</label>
