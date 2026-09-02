@@ -27,8 +27,11 @@ export default {
   async scheduled(event, env, ctx) {
     const cfg = config(env);
     const D = env.DB;
-    // 03:30 Sunday cron = retention; everything else = digest
-    const isRetention = event.cron === "30 3 * * 0";
+    // 03:30 Sunday cron = retention; everything else = digest.
+    // Matched on the time fields only — the day-of-week is written as SUN
+    // (Cloudflare rejects `0`), and an exact-string compare would silently
+    // turn every retention run into a second digest.
+    const isRetention = /^\s*30\s+3\s/.test(event.cron || "");
     if (isRetention) {
       const a = await db.purgeUnconfirmed(D, cfg.retention_days_unconfirmed);
       const b = await db.purgeCancelled(D, cfg.retention_days_cancelled);

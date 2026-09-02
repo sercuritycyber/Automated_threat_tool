@@ -8,12 +8,14 @@ workers_dev = false
 # `web/` at the repo root is the private owner panel (FastAPI) and must never
 # be deployed. Do not add an assets directory here.
 
-# Production route. Attach the hostname via the dashboard:
-#   Workers & Pages -> cti-alerts -> Settings -> Domains & Routes -> Add ->
-#   Custom Domain -> cti.securitycyber.uk   (this creates the DNS record for you)
+# Production hostname, as a Custom Domain rather than a plain route.
+# `custom_domain = true` makes `wrangler deploy` CREATE the proxied DNS record
+# for cti.securitycyber.uk itself — a plain route does not, which is why the
+# first deploy succeeded but the hostname stayed NXDOMAIN. Note the pattern is
+# the bare hostname here: no `/*` (a custom domain always takes every path).
 [[routes]]
-pattern = "cti.securitycyber.uk/*"
-zone_name = "securitycyber.uk"
+pattern = "cti.securitycyber.uk"
+custom_domain = true
 
 # Subscriber database. Create once:  npx wrangler d1 create cti-subs
 # then paste the id below.
@@ -23,8 +25,10 @@ database_name = "cti-subs"
 database_id = "2d514521-9be2-4c8e-8bf0-73c68bcaeafd"
 
 [triggers]
-# 08:15 UTC daily digest · 03:30 UTC Sunday retention + intent purge
-crons = ["15 8 * * *", "30 3 * * 0"]
+# 08:15 UTC daily digest · 03:30 UTC Sunday retention + intent purge.
+# Day-of-week must be SUN-SAT or 1-7 — Cloudflare's API rejects `0`
+# ("invalid cron string ... [code: 10100]"), so this is SUN, not 0.
+crons = ["15 8 * * *", "30 3 * * SUN"]
 
 [observability]
 enabled = true
