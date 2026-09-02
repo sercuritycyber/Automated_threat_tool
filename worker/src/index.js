@@ -1,6 +1,6 @@
 // SecurityCyber CTI Alerts — Cloudflare Worker entrypoint.
 import { config, problems, advisories, priceToTier, monthlyPence,
-  paymentLink, paymentLinkUrl, canCheckout, buyableMap } from "./config.js";
+  paymentLink, paymentLinkUrl, canCheckout, buyableMap, takingRealMoney } from "./config.js";
 import * as db from "./db.js";
 import * as billing from "./billing.js";
 import { send, verifyTarget, channelAvailability } from "./channels.js";
@@ -739,7 +739,7 @@ async function adminApi(request, env, cfg, url, path) {
     let mrr = 0;
     for (const r of s.active) mrr += r.n * monthlyPence(cfg, r.tier, r.cadence || "monthly");
     return json({
-      ...s, mrr_pence: mrr, problems: problems(cfg, env), advisories: advisories(cfg),
+      ...s, mrr_pence: mrr, problems: problems(cfg, env), advisories: advisories(cfg, env),
       // Presence only — never the values. Lets the owner dashboard show which
       // secrets are actually reaching the running Worker.
       secrets: Object.fromEntries(["STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET", "RESEND_API_KEY",
@@ -747,6 +747,7 @@ async function adminApi(request, env, cfg, url, path) {
         "TELEGRAM_BOT_USERNAME", "TELEGRAM_WEBHOOK_SECRET"].map((k) => [k, !!env[k]])),
       channels: channelAvailability(env, cfg),
       live: !!cfg.live,
+      taking_real_money: takingRealMoney(cfg, env),
       stripe_mode: /^sk_live_/.test(env.STRIPE_SECRET_KEY || "") ? "live"
         : (env.STRIPE_SECRET_KEY ? "test" : "unset"),
       briefs_24h: await db.purchaseCount24h(D),

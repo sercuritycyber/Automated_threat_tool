@@ -41,6 +41,23 @@ ok("problems() flags missing resend", problems(c, {}).some((x) => /RESEND/.test(
 const cNoIco = config({ ...cenv, ICO_REG: "" });
 ok("problems() does NOT block test-mode deploy on missing ICO",
   problems(cNoIco, OKENV).length === 0);
+// A live Stripe key means real money and real customer data, whatever
+// CONFIG.live says — so ICO becomes a blocker and nothing may claim "test mode".
+{
+  const { takingRealMoney, advisories } = await import("../src/config.js");
+  const liveKey = { ...OKENV, STRIPE_SECRET_KEY: "sk_live_x" };
+  ok("sk_live_ counts as taking real money even when CONFIG.live is false",
+    takingRealMoney(cNoIco, liveKey) && !cNoIco.live);
+  ok("sk_live_ + no ICO is a blocker",
+    problems(cNoIco, liveKey).some((x) => /ICO/.test(x)));
+  const adv = advisories(cNoIco, liveKey);
+  ok("advisory warns about the live-key / CONFIG.live mismatch",
+    adv.some((x) => /CAUTION/.test(x) && /sk_live_/.test(x)));
+  ok("advisory never claims test mode while the key is live",
+    !adv.some((x) => /TEST mode|no real charges/i.test(x)));
+  ok("sk_test_ still reports as test",
+    advisories(cNoIco, OKENV).some((x) => /sk_test_|no real charges/i.test(x)));
+}
 ok("problems() DOES block go-live on missing ICO",
   problems(config({ ...cenv, ICO_REG: "", CONFIG: JSON.stringify({ ...JSON.parse(cenv.CONFIG), live: true }) }),
     { ...OKENV, STRIPE_SECRET_KEY: "sk_live_x" })

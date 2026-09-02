@@ -152,6 +152,18 @@ export function monthlyPence(c, tier, cadence) {
   return cadence === "weekly" ? Math.round((p * 52) / 12) : p;
 }
 
+// Are we actually taking real money right now?
+//
+// CONFIG.live is a statement of intent; it does NOT gate anything once you
+// sell through Stripe Payment Links, because a link charges in whatever mode
+// it was created in no matter what this Worker thinks. So the honest signal is
+// the Stripe key: an sk_live_ key means live cards, live money, live
+// obligations — regardless of CONFIG.live. Treat either as live and never
+// reassure the operator they're in test mode when they aren't.
+export function takingRealMoney(c, env) {
+  return !!c.live || /^sk_live_/.test(env.STRIPE_SECRET_KEY || "");
+}
+
 // go-live blockers — empty array = ready
 // Hard blockers — the site can't function correctly (or lawfully, once live)
 // until these are resolved. Deploying the Worker is never blocked by this.
@@ -188,23 +200,31 @@ export function problems(c, env) {
     out.push("STRIPE_SECRET_KEY secret is not set (use sk_test_ while live=false)");
   }
 
-  if (c.live) {
-    // going live = taking real money for a service that holds a customer list
-    if (!c.ico_reg) out.push("live=true but ICO_REG is not set — you must register with the ICO before taking real subscribers");
-    if (env.STRIPE_SECRET_KEY && !/^sk_live_/.test(env.STRIPE_SECRET_KEY))
-      out.push("live=true but STRIPE_SECRET_KEY is not sk_live_");
-    if (!linkOnly && !env.STRIPE_SECRET_KEY)
-      out.push("live=true but STRIPE_SECRET_KEY is not set");
+  // Taking real money = holding a real customer list, which in the UK needs
+  // ICO registration. Keyed off the live Stripe key, not CONFIG.live, so this
+  // can't be dodged by leaving a flag switched off.
+  if (takingRealMoney(c, env)) {
+    if (!c.ico_reg)
+      out.push("Live Stripe key in use — ICO_REG must be set. You are taking real money and holding real customer data; UK registration is required (ico.org.uk, £40-52/yr).");
   }
+  if (c.live && !linkOnly && !env.STRIPE_SECRET_KEY)
+    out.push("live=true but STRIPE_SECRET_KEY is not set");
   return out;
 }
 
 // Non-blocking things to sort before flipping CONFIG.live to true.
-export function advisories(c) {
+export function advisories(c, env = {}) {
   const out = [];
-  if (!c.live && !c.ico_reg)
-    out.push("ICO registration not set yet — required before CONFIG.live: true. Deploy + test now, register at ico.org.uk, then paste ICO_REG.");
-  if (!c.live) out.push("Stripe is in TEST mode (CONFIG.live: false) — no real charges. Run a full test checkout before going live.");
+  const live = takingRealMoney(c, env);
+  const keyLive = /^sk_live_/.test(env.STRIPE_SECRET_KEY || "");
+  // The dangerous case: a live key while CONFIG.live says otherwise. Saying
+  // "test mode, no real charges" there would be a lie that costs someone money.
+  if (keyLive && !c.live)
+    out.push("CAUTION: the Stripe key is sk_live_ but CONFIG.live is false. Payment Links charge in whatever mode they were created in, so CONFIG.live gates nothing — treat this as LIVE. Real cards will be charged.");
+  else if (live) out.push("LIVE — real cards are being charged.");
+  else if (env.STRIPE_SECRET_KEY) out.push("Stripe key is sk_test_ — no real charges. Run a full test checkout before switching to a live key.");
+  if (!live && !c.ico_reg)
+    out.push("ICO registration not set yet — required before you take real money. Register at ico.org.uk, then paste ICO_REG.");
   if (c.checkout_mode === "link_only") {
     const gaps = [];
     for (const [name, t] of Object.entries(c.tiers)) {
