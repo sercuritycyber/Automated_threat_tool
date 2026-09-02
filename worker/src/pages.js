@@ -33,6 +33,11 @@ p{margin:.6em 0}.lede{font-size:17px;color:var(--dim);line-height:1.6}.muted{col
 .bt{background:none;border:0;color:var(--dim);font:600 .84rem var(--body);padding:7px 18px;border-radius:999px;cursor:pointer;transition:all .18s}
 .bt.on{background:var(--accent);color:#fff;box-shadow:0 2px 10px rgba(59,130,246,.3)}
 .bt:not(.on):hover{color:var(--white)}
+.paid{text-align:center;padding:18px 0 4px}
+.paid h1{font-size:33px}
+.tick{width:58px;height:58px;margin:0 auto 8px;border-radius:50%;display:flex;align-items:center;
+justify-content:center;font-size:30px;color:#fff;background:var(--good);
+box-shadow:0 6px 22px rgba(34,197,94,.32)}
 .tier{background:var(--bg2);border:1px solid var(--line-dim);border-radius:var(--radius-lg);padding:22px;position:relative;overflow:hidden}
 .tier::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:var(--accent);transform:scaleX(0);transform-origin:left;transition:transform .3s}
 .tier:hover::before{transform:scaleX(1)}
@@ -536,6 +541,47 @@ ${portal}
 export function simple(cfg, title, heading, lede, extra = "") {
   // transactional / link-gated pages — keep them out of search indexes
   return page(cfg, title, `<h1>${esc(heading)}</h1><p class=lede>${esc(lede)}</p>${extra}`, "", "", true);
+}
+
+// Where a Payment Link drops the customer after a successful payment.
+// Written for the gap it has to survive: Stripe redirects the browser
+// immediately, but our webhook may land a second or two later, so the
+// confirmation email might not have sent yet. Never say "we've emailed you"
+// as though it already happened.
+const DEFAULT_PAID_STEPS = [
+  ["Check your email", "We're sending a confirmation link to the address you paid with. It usually arrives within a minute — occasionally a little longer at busy times."],
+  ["Click the link in it", "That switches your alerts on and takes you to your preferences, where you can set your impact threshold, filter to the vendors you actually run, and change where alerts are delivered."],
+  ["That's it", "The next thing that clears your bar comes to you. Nothing routine, nothing you can't act on."],
+];
+
+export function paidPage(cfg, opts = {}) {
+  const support = cfg.support_email || cfg.contact_email || "";
+  const body = `
+<div class=paid>
+<div class=tick aria-hidden="true">✓</div>
+<h1>${esc(opts.heading || "Payment received")}</h1>
+<p class=lede>${esc(opts.lede || "Thank you — you're set up. One quick step and your alerts start.")}</p>
+</div>
+
+<div class=steps style="margin-top:26px">
+${(opts.steps || DEFAULT_PAID_STEPS).map(([h, b]) =>
+    `<div class=step><h3>${esc(h)}</h3><p class=muted>${esc(b)}</p></div>`).join("\n")}
+</div>
+
+<div class=card style="margin-top:24px">
+<h3>${esc(opts.helpTitle || "Nothing after a few minutes?")}</h3>
+<p class=muted style="margin-top:6px">${opts.helpBody ? esc(opts.helpBody)
+    : `Check your spam or junk folder first — then use <b>Already subscribed?</b> on the
+<a href="/">home page</a> to have the link sent again. Your payment is safe either way;
+nothing is lost.`}</p>
+${support ? `<p class=muted>Still stuck: <a href="mailto:${esc(support)}">${esc(support)}</a></p>` : ""}
+</div>
+
+<div class=row style="margin-top:20px">
+<a class=btn href="/">Back to SecurityCyber CTI</a>
+<a class="btn ghost" href="${esc(cfg.main_site)}">securitycyber.uk</a>
+</div>`;
+  return page(cfg, opts.heading || "Payment received", body, "", "", true);
 }
 
 export function briefPage(cfg, flash = "", flashKind = "") {

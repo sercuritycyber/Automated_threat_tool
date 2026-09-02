@@ -5,7 +5,7 @@ import * as db from "./db.js";
 import * as billing from "./billing.js";
 import { send, verifyTarget, channelAvailability } from "./channels.js";
 import { sign, verify, newId, BadToken, timingSafeEqual } from "./tokens.js";
-import { page, landing, subscribeForm, managePage, simple, briefPage, feedXml, LOGO_SVG, chanLabel } from "./pages.js";
+import { page, landing, subscribeForm, managePage, simple, briefPage, paidPage, feedXml, LOGO_SVG, chanLabel } from "./pages.js";
 import { legalHtml } from "./legal.js";
 import { html, text, json, redirect, q, esc, clientIp, rateLimit, nowIso } from "./util.js";
 
@@ -112,10 +112,9 @@ async function route(request, env, ctx, url, path, cfg) {
   }
   if (path === "/subscribe" && m === "POST") return subscribeSubmit(request, env, cfg);
 
-  if (path === "/welcome" && m === "GET")
-    return html(simple(cfg, "Payment received", "Payment received — one more step",
-      "Check your inbox for a confirmation email and click the link to switch your alerts on.",
-      "<p class=muted>Didn't get it? Check spam, or use “Already subscribed?” on the home page.</p>"));
+  // Where the subscription Payment Links redirect after payment. NOT the
+  // webhook — that's /webhooks/stripe, which Stripe's servers call directly.
+  if (path === "/welcome" && m === "GET") return html(paidPage(cfg));
 
   // ---- one-off threat brief (Checkout `payment` mode) ----
   if (path === "/brief" && m === "GET") {
@@ -125,11 +124,19 @@ async function route(request, env, ctx, url, path, cfg) {
     return html(briefPage(cfg, url.searchParams.get("m") || "", url.searchParams.get("k") || ""));
   }
   if (path === "/brief/buy" && m === "POST") return briefBuy(request, env, cfg);
+  // Where the one-off brief Payment Link redirects after payment.
   if (path === "/brief/thanks" && m === "GET")
-    return html(simple(cfg, "Thank you", "Payment received — thank you",
-      "Your threat brief is on its way. We'll email it, usually within two working days. "
-      + "A receipt is in your inbox now.",
-      "<p class=muted>Reply to the receipt any time to add detail on what you'd like covered.</p>"));
+    return html(paidPage(cfg, {
+      heading: "Payment received",
+      lede: "Thank you — your threat brief is booked in.",
+      steps: [
+        ["Check your email", "A receipt is on its way to the address you paid with."],
+        ["Tell us more, if you want to", "Reply to that receipt with anything else you'd like the brief to cover — your stack, what's worrying you, how deep to go."],
+        ["We write it", "An analyst-written brief, researched from the primary sources, emailed to you — usually within two working days."],
+      ],
+      helpTitle: "No receipt after a few minutes?",
+      helpBody: "Check spam or junk first. Your payment is safe either way — get in touch and we'll sort it.",
+    }));
 
   // ---- webhooks ----
   if (path === "/webhooks/stripe" && m === "POST") return stripeWebhook(request, env, cfg);
