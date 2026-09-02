@@ -3,6 +3,12 @@
 The public subscription service for the SecurityCyber CTI alert feed. Same
 deploy model as securitycyber.uk: code in GitHub → push → Cloudflare builds.
 
+- **Worker name:** `automated-threat-tool` (matches the repo; set in `wrangler.toml`)
+- **Repo:** `github.com/sercuritycyber/Automated_threat_tool`
+- **Workers Builds root directory:** `worker` — this repo's top level is the
+  Python pipeline; the Worker lives in `worker/`. In the Cloudflare dashboard
+  (Workers → the Worker → Settings → Builds) set **Root directory = `worker`**,
+  deploy command `npx wrangler deploy`. Without that it will try to build the repo root.
 - **Route:** `cti.securitycyber.uk/*`
 - **Storage:** D1 (`cti-subs`) — all subscriber PII
 - **Email:** Resend
@@ -58,10 +64,10 @@ npx wrangler secret put TELEGRAM_WEBHOOK_SECRET
 # 4. DNS: add an A/AAAA (or CNAME) record `cti` in the securitycyber.uk zone,
 #    proxied (orange cloud).
 
-# 5. deploy
+# 5. deploy   (run from this worker/ directory)
 npx wrangler deploy
-#    or connect this repo in the Cloudflare dashboard (Workers → Builds) so
-#    `git push` deploys, like securitycyber.uk.
+#    or: Cloudflare dashboard → Workers → automated-threat-tool → Settings →
+#    Builds → connect this repo, Root directory = worker, so `git push` deploys.
 
 # 6. Stripe webhook endpoint:
 #    https://cti.securitycyber.uk/webhooks/stripe   → copy signing secret to STRIPE_WEBHOOK_SECRET

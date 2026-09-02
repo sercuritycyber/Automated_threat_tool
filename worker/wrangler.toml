@@ -1,4 +1,4 @@
-name = "cti-alerts"
+name = "automated-threat-tool"
 main = "src/index.js"
 compatibility_date = "2025-01-15"
 compatibility_flags = ["nodejs_compat"]

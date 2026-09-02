@@ -1,5 +1,5 @@
 {
-  "name": "cti-alerts-worker",
+  "name": "automated-threat-tool-worker",
   "version": "1.0.0",
   "private": true,
   "type": "module",
