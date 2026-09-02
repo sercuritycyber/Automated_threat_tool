@@ -285,6 +285,8 @@ animation:pulse 2.4s infinite}
 .tile .l{color:var(--dim);font-size:11px;margin-top:3px;text-transform:uppercase;letter-spacing:.04em}
 .tile.good{border-color:rgba(63,185,80,.4)}.tile.warn{border-color:rgba(210,153,34,.45)}
 .tile.bad{border-color:rgba(248,81,73,.45)}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:start}
+@media(max-width:900px){.grid2{grid-template-columns:1fr}}
 .bars{display:flex;align-items:flex-end;gap:5px;height:64px;padding-top:4px}
 .bars .b{flex:1;background:var(--panel2);border-radius:3px 3px 0 0;min-height:3px;position:relative}
 .bars .b.has{background:var(--accent)}
@@ -304,6 +306,7 @@ NAV = [
     ("/compose", "Compose"),
     ("/candidates", "Candidates"),
     ("/drafts", "Drafts"),
+    ("/service", "CTI service"),
     ("/subscribers", "Subscribers"),
     ("/purchases", "Purchases"),
     ("/d1", "D1 tables"),
@@ -2050,6 +2053,161 @@ def purchases_list(request: Request):
 </table></div>
 """
     return page("Purchases", body, "/purchases", flash_from(request))
+
+
+SECRET_HELP = {
+    "STRIPE_SECRET_KEY": ("checkout can't run at all", "sk_test_… from dashboard.stripe.com/apikeys"),
+    "STRIPE_WEBHOOK_SECRET": ("customers pay but are NEVER provisioned", "whsec_… from the Stripe webhook you point at /webhooks/stripe"),
+    "SUBS_TOKEN_SECRET": ("confirm / preferences / unsubscribe links all 500", "any 32+ random bytes"),
+    "RESEND_API_KEY": ("email delivery is offered as 'unavailable'", "re_… from resend.com"),
+    "INGEST_SECRET": ("the pipeline can't push alerts in", "must equal CTI_INGEST_SECRET in config/env"),
+    "ADMIN_TOKEN": ("this dashboard can't read the Worker", "must equal CTI_ADMIN_TOKEN in config/env"),
+    "TELEGRAM_BOT_TOKEN": ("Telegram shows as unavailable (optional)", "from @BotFather"),
+    "TELEGRAM_BOT_USERNAME": ("Telegram shows as unavailable (optional)", "the bot name, without the @"),
+    "TELEGRAM_WEBHOOK_SECRET": ("Telegram replies aren't verified (optional)", "any random string"),
+}
+CRITICAL_SECRETS = ("STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET", "SUBS_TOKEN_SECRET",
+                    "RESEND_API_KEY", "INGEST_SECRET", "ADMIN_TOKEN")
+
+
+@app.get("/service", response_class=HTMLResponse)
+def service_console(request: Request):
+    """Operator console for the public CTI service (the Cloudflare Worker)."""
+    base, tok = _worker()
+    if not base:
+        return page("CTI service",
+                    "<div class=card>Set <span class=mono>CTI_WORKER_URL</span> and "
+                    "<span class=mono>CTI_ADMIN_TOKEN</span> on the <a href=/secrets>Secrets</a> "
+                    "page to manage the live service from here.</div>", "/service")
+
+    # Reachability is checked separately from auth so we can tell them apart.
+    health, health_err = "", ""
+    try:
+        r = requests.get(f"{base}/healthz", timeout=10)
+        health = "ok" if r.ok and r.text.strip() == "ok" else f"HTTP {r.status_code} {r.text[:60]}"
+    except Exception as ex:  # noqa
+        health_err = str(ex)[:160]
+
+    st, api_err = None, ""
+    try:
+        st = worker_api("GET", "/admin/stats")
+    except Exception as ex:  # noqa
+        api_err = str(ex)[:200]
+
+    def banner():
+        if health_err:
+            return ('<div class="flash" style="border-color:var(--bad)"><b>Worker unreachable.</b> '
+                    f'<span class=mono>{e(base)}</span> — {e(health_err)}</div>')
+        if st is None:
+            hint = ""
+            if "401" in api_err or "unauthor" in api_err.lower():
+                hint = ("<p>The Worker is up but rejected this dashboard's token — "
+                        "<span class=mono>ADMIN_TOKEN</span> on the Worker does not match "
+                        "<span class=mono>CTI_ADMIN_TOKEN</span> in <span class=mono>config/env</span>. "
+                        "Fix by running, in <span class=mono>~/Threatintel/worker</span>:</p>"
+                        "<pre class=mono>npx wrangler secret put ADMIN_TOKEN</pre>"
+                        "<p>and pasting the value from the <a href=/secrets>Secrets</a> page.</p>")
+            return ('<div class="flash" style="border-color:var(--bad)"><b>Worker is up but the admin API '
+                    f'failed.</b> {e(api_err)}{hint}</div>')
+        return ('<div class="flash" style="border-color:var(--good)">Connected · '
+                f'<span class=mono>{e(base)}</span> · healthz <b>{e(health)}</b></div>')
+
+    body = banner()
+    if st is None:
+        body += ('<div class=card><b>What this page shows once connected</b><ul>'
+                 '<li>which Worker secrets are actually live (Stripe, Resend, tokens)</li>'
+                 '<li>which delivery channels subscribers can pick right now</li>'
+                 '<li>subscribers, MRR, alerts sent, past-due count</li>'
+                 '<li>go-live blockers and reminders</li></ul></div>')
+        return page("CTI service", body, "/service", flash_from(request))
+
+    secrets = st.get("secrets") or {}
+    missing_critical = [k for k in CRITICAL_SECRETS if not secrets.get(k)]
+    if missing_critical:
+        rows = "".join(
+            f"<li><span class=mono>{e(k)}</span> — <b>{e(SECRET_HELP[k][0])}</b><br>"
+            f"<span class=dim>{e(SECRET_HELP[k][1])}</span></li>" for k in missing_critical)
+        cmds = "\n".join(f"npx wrangler secret put {k}" for k in missing_critical)
+        body += ('<div class="flash" style="border-color:var(--bad)">'
+                 f'<b>{len(missing_critical)} required secret(s) missing on the Worker.</b>'
+                 f'<ul>{rows}</ul>'
+                 '<p>From <span class=mono>~/Threatintel/worker</span>:</p>'
+                 f'<pre class=mono>{e(cmds)}</pre>'
+                 '<p class=dim>Then <span class=mono>npx wrangler deploy</span>.</p></div>')
+
+    def _sec_row(k, present):
+        crit = k in CRITICAL_SECRETS
+        pill = ('<span class="pill good">set</span>' if present else
+                (f'<span class="pill bad">MISSING</span>' if crit else '<span class=pill>not set</span>'))
+        return (f"<tr><td class=mono>{e(k)}</td><td>{pill}</td>"
+                f"<td class=dim>{e(SECRET_HELP.get(k, ('', ''))[0])}</td></tr>")
+
+    chans = st.get("channels") or {}
+
+    def _chan_row(k, v):
+        pill = ('<span class="pill good">available</span>' if v.get("ok")
+                else f'<span class="pill bad">unavailable</span>')
+        return f"<tr><td>{e(k)}</td><td>{pill}</td><td class=dim>{e(v.get('why') or '')}</td></tr>"
+
+    probs = st.get("problems") or []
+    advs = st.get("advisories") or []
+    by_status = st.get("by_status") or {}
+    mode = st.get("stripe_mode", "unset")
+    mode_pill = {"live": "good", "test": "warn", "unset": "bad"}.get(mode, "dim")
+
+    blockers = ("" if not probs else
+                '<div class="flash" style="border-color:var(--warn)"><b>Go-live blockers:</b><ul>'
+                + "".join(f"<li>{e(x)}</li>" for x in probs) + "</ul></div>")
+    reminders = ("" if not advs else
+                 '<div class=card><b>Reminders (not blocking)</b><ul>'
+                 + "".join(f"<li>{e(x)}</li>" for x in advs) + "</ul></div>")
+
+    body += f"""
+<div class=tiles>
+  <div class=tile><div class=n>{st.get('total_active', 0)}</div><div class=l>active subscribers</div></div>
+  <div class=tile><div class=n>£{st.get('mrr_pence', 0) / 100:,.0f}</div><div class=l>est. MRR</div></div>
+  <div class=tile><div class=n>{st.get('sent_24h', 0)}</div><div class=l>alerts sent · 24h</div></div>
+  <div class="tile {'bad' if by_status.get('past_due') else ''}"><div class=n>{by_status.get('past_due', 0)}</div><div class=l>past due</div></div>
+  <div class=tile><div class=n>{st.get('briefs_24h', 0)}</div><div class=l>briefs · 24h</div></div>
+</div>
+<div class=card>
+  <div class=row>
+    <span>Stripe: <span class="pill {mode_pill}">{e(mode)} mode</span></span>
+    <span>Selling: <span class="pill {'good' if st.get('live') else 'warn'}">{'LIVE' if st.get('live') else 'test only'}</span></span>
+    <a class="btn ghost" href="{e(base)}" target=_blank>open public site ↗</a>
+    <a class="btn ghost" href="/d1">D1 tables</a>
+    <a class="btn ghost" href="/subscribers">subscribers</a>
+  </div>
+  <p class=dim style="margin-top:10px">last digest {e(rel_time(st.get('last_digest') or ''))} ·
+  last retention {e(rel_time(st.get('last_retention') or ''))}</p>
+</div>
+{blockers}{reminders}
+<div class=grid2>
+<div>
+<h2 style="font-size:15px">Worker secrets</h2>
+<div class=card style="padding:0"><table>
+<tr><th>name</th><th>state</th><th>if missing</th></tr>
+{''.join(_sec_row(k, secrets.get(k)) for k in SECRET_HELP)}
+</table></div>
+</div>
+<div>
+<h2 style="font-size:15px">Delivery channels</h2>
+<div class=card style="padding:0"><table>
+<tr><th>channel</th><th>state</th><th>why</th></tr>
+{''.join(_chan_row(k, v) for k, v in sorted(chans.items()))}
+</table></div>
+<p class=dim>Turn one off deliberately with <span class=mono>CONFIG.channels_disabled</span> in
+<span class=mono>worker/wrangler.toml</span>.</p>
+</div>
+</div>
+<div class=card>
+  <b>Subscribers by status</b>
+  <div style="margin-top:8px">{''.join(
+        f'<a class="btn ghost" style="padding:4px 10px;font-size:12px" href="/subscribers?status={k}">{e(k)} ({v})</a> '
+        for k, v in sorted(by_status.items())) or '<span class=dim>none yet</span>'}</div>
+</div>
+"""
+    return page("CTI service", body, "/service", flash_from(request))
 
 
 @app.get("/d1", response_class=HTMLResponse)
