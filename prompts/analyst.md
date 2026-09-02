@@ -172,6 +172,7 @@ CISA KEV catalog, clustered duplicate stories, and attached a heuristic
       "source": "...",
       "cve_ids": ["..."],
       "score": <int 0-100>,
+      "confidence": "high" | "medium" | "low",
       "action": "<one imperative line: the single thing to do now>",
       "subscriber_text": "<the paid write-up, with real newlines — see below>"
     }
@@ -222,6 +223,9 @@ run, including when `decision` is `skip`.
        * **How you'd spot it** — a log source, artefact, IOC or query. Say
          "no public detection guidance yet" rather than inventing one.
    - `action` is the one-line version of "Do this now".
+   - `confidence` reflects how well the sources support the write-up: `high`
+     if you WebFetched and the facts are consistent, `medium` for a solid
+     single source, `low` for a summary-only item or conflicting reports.
    - Never speculate to fill a section. If a source does not give version
      numbers or detection guidance, say so plainly. A subscriber who acts on an
      invented version number is worse off than one who reads "not stated".
