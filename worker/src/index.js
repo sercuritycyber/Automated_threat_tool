@@ -4,7 +4,7 @@ import * as db from "./db.js";
 import * as billing from "./billing.js";
 import { send, verifyTarget } from "./channels.js";
 import { sign, verify, newId, BadToken, timingSafeEqual } from "./tokens.js";
-import { page, landing, subscribeForm, managePage, simple, LOGO_SVG, chanLabel } from "./pages.js";
+import { page, landing, subscribeForm, managePage, simple, briefPage, LOGO_SVG, chanLabel } from "./pages.js";
 import { legalHtml } from "./legal.js";
 import { html, text, json, redirect, q, esc, clientIp, rateLimit, nowIso } from "./util.js";
 
@@ -92,6 +92,16 @@ async function route(request, env, ctx, url, path, cfg) {
     return html(simple(cfg, "Payment received", "Payment received — one more step",
       "Check your inbox for a confirmation email and click the link to switch your alerts on.",
       "<p class=muted>Didn't get it? Check spam, or use “Already subscribed?” on the home page.</p>"));
+
+  // ---- one-off threat brief (Checkout `payment` mode) ----
+  if (path === "/brief" && m === "GET")
+    return html(briefPage(cfg, url.searchParams.get("m") || "", url.searchParams.get("k") || ""));
+  if (path === "/brief/buy" && m === "POST") return briefBuy(request, env, cfg);
+  if (path === "/brief/thanks" && m === "GET")
+    return html(simple(cfg, "Thank you", "Payment received — thank you",
+      "Your threat brief is on its way. We'll email it, usually within two working days. "
+      + "A receipt is in your inbox now.",
+      "<p class=muted>Reply to the receipt any time to add detail on what you'd like covered.</p>"));
 
   // ---- webhooks ----
   if (path === "/webhooks/stripe" && m === "POST") return stripeWebhook(request, env, cfg);
@@ -202,6 +212,27 @@ async function subscribeSubmit(request, env, cfg) {
   }
 }
 
+// ---------------------------------------------------------------- one-off brief
+async function briefBuy(request, env, cfg) {
+  const over = rl(request, "brief", cfg, 10); if (over) return over;
+  const f = await form(request);
+  const email = (f.email || "").trim().toLowerCase();
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email))
+    return redirect("/brief?m=" + q("That email doesn't look right.") + "&k=bad");
+  if (f.topic) await db.kvSet(env.DB, "brief_topic:" + email, String(f.topic).slice(0, 500));
+  try {
+    const sess = await billing.createBriefCheckout(env, cfg, {
+      email,
+      successUrl: `${cfg.site_url}/brief/thanks`,
+      cancelUrl: `${cfg.site_url}/brief?m=` + q("Checkout cancelled — no charge made."),
+    });
+    return redirect(sess.url);
+  } catch (e) {
+    return html(simple(cfg, "Checkout error", "Couldn't start checkout", String(e),
+      "<p><a href='/brief'>Try again</a></p>"));
+  }
+}
+
 // ---------------------------------------------------------------- stripe webhook
 async function stripeWebhook(request, env, cfg) {
   const payload = await request.text();
@@ -221,6 +252,18 @@ async function stripeWebhook(request, env, cfg) {
       `Confirm your email to switch your alerts on:\n\n${cfg.site_url}/confirm?t=${t}\n\n` +
       `Your alerts will go to: ${where}.\nThis link works for 14 days. If you didn't subscribe, ignore this and email ${cfg.contact_email}.`);
     await db.logEvent(env.DB, "confirm_email_sent", res.subscriber_id, { cadence: res.cadence });
+  } else if (res.action === "brief_purchased") {
+    const topic = res.email ? await db.kvGet(env.DB, "brief_topic:" + res.email) : null;
+    const amount = res.purchase?.amount_total != null
+      ? `${(res.purchase.currency || "gbp").toUpperCase()} ${(res.purchase.amount_total / 100).toFixed(2)}` : "";
+    if (res.email) {
+      await send(env, cfg, "email", res.email, "Your SecurityCyber threat brief — receipt",
+        `Thanks — payment received${amount ? ` (${amount})` : ""}.\n\n` +
+        `We'll research and send your threat brief by email, usually within two working days.\n` +
+        (topic ? `\nYou asked us to cover: ${topic}\n` : `\nReply to this email to tell us what you'd like the brief to cover.\n`) +
+        `\nQuestions: ${cfg.contact_email}`);
+    }
+    await notifyOwner(env, cfg, `threat brief purchased${res.email ? " by " + res.email : ""}${topic ? " — " + topic : ""}`);
   } else if (res.action === "notify_owner") {
     await notifyOwner(env, cfg, res.detail || "payment issue");
   } else if (["cancelled", "recovered"].includes(res.action)) {
@@ -520,7 +563,20 @@ async function adminApi(request, env, cfg, url, path) {
     const s = await db.stats(D);
     let mrr = 0;
     for (const r of s.active) mrr += r.n * monthlyPence(cfg, r.tier, r.cadence || "monthly");
-    return json({ ...s, mrr_pence: mrr, problems: problems(cfg, env), last_digest: await db.kvGet(D, "last_digest"), last_retention: await db.kvGet(D, "last_retention") });
+    return json({
+      ...s, mrr_pence: mrr, problems: problems(cfg, env),
+      briefs_24h: await db.purchaseCount24h(D),
+      last_digest: await db.kvGet(D, "last_digest"), last_retention: await db.kvGet(D, "last_retention"),
+    });
+  }
+  if (seg[1] === "purchases" && request.method === "GET") {
+    const rows = await db.listPurchases(D, 200);
+    for (const r of rows) r.topic = r.email ? await db.kvGet(D, "brief_topic:" + r.email) : null;
+    return json({ purchases: rows });
+  }
+  if (seg[1] === "purchases" && seg[2] && request.method === "POST" && seg[3] === "fulfilled") {
+    await db.markPurchaseFulfilled(D, seg[2]);
+    return json({ ok: true });
   }
   if (seg[1] === "subscribers" && request.method === "GET" && !seg[2]) {
     return json({ subscribers: await db.listSubscribers(D, { status: url.searchParams.get("status") || undefined, qstr: url.searchParams.get("q") || undefined }) });

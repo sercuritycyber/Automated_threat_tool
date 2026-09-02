@@ -113,6 +113,22 @@ CREATE TABLE IF NOT EXISTS kv (
   value TEXT NOT NULL
 );
 
+-- One-off purchases (paid threat briefs) — Stripe Checkout in `payment` mode.
+CREATE TABLE IF NOT EXISTS purchases (
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  stripe_session_id TEXT NOT NULL UNIQUE,
+  payment_intent    TEXT,
+  email             TEXT,
+  subscriber_id     INTEGER REFERENCES subscribers(id) ON DELETE SET NULL,
+  item              TEXT NOT NULL DEFAULT 'brief',
+  amount_total      INTEGER,
+  currency          TEXT,
+  status            TEXT NOT NULL DEFAULT 'pending',
+  fulfilled_at      TEXT,
+  created_at        TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_purchase_email ON purchases(email);
+
 CREATE TABLE IF NOT EXISTS ratelimit (
   bucket TEXT PRIMARY KEY,
   count  INTEGER NOT NULL,

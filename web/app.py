@@ -305,6 +305,7 @@ NAV = [
     ("/candidates", "Candidates"),
     ("/drafts", "Drafts"),
     ("/subscribers", "Subscribers"),
+    ("/purchases", "Purchases"),
     ("/settings", "Settings"),
     ("/feeds", "Feeds"),
     ("/secrets", "Secrets"),
@@ -2008,6 +2009,56 @@ def subscriber_erase(sid: int):
             pass
     SUBS.erase_subscriber(sid, "operator DSAR erasure")
     return RedirectResponse("/subscribers?m=" + quote(f"Subscriber #{sid} erased"), 303)
+
+
+@app.get("/purchases", response_class=HTMLResponse)
+def purchases_list(request: Request):
+    if not _worker()[0]:
+        return page("Purchases",
+                    "<div class=card>One-off purchases (threat briefs) are handled by the "
+                    "CTI Alerts Worker. Set <span class=mono>CTI_WORKER_URL</span> on the "
+                    "<a href=/secrets>Secrets</a> page.</div>", "/purchases")
+    try:
+        rows = worker_api("GET", "/admin/purchases")["purchases"]
+    except Exception as ex:  # noqa
+        return page("Purchases", f'<div class="flash" style="border-color:var(--bad)">'
+                    f'Worker error: {e(str(ex)[:200])}</div>', "/purchases")
+
+    def _row(p):
+        amt = (f"£{p['amount_total'] / 100:,.2f}" if p.get("amount_total") is not None else "—")
+        stc = {"paid": "good", "fulfilled": "dim", "pending": "warn"}.get(p["status"], "dim")
+        fulfil = ("" if p["status"] == "fulfilled" else
+                  f'<form method=post action=/purchases/{quote(p["stripe_session_id"])}/fulfilled style=display:inline>'
+                  f'<button class="btn ghost" style="padding:3px 9px;font-size:12px">mark delivered</button></form>')
+        return (f"<tr><td class=dim>{e(rel_time(p['created_at']))}</td><td>{e(p.get('email') or '')}</td>"
+                f"<td>{e(p.get('item'))}</td><td>{amt}</td>"
+                f"<td><span class='pill {stc}'>{e(p['status'])}</span></td>"
+                f"<td class=dim>{e((p.get('topic') or '')[:60])}</td><td>{fulfil}</td></tr>")
+
+    paid = sum(1 for p in rows if p["status"] in ("paid", "fulfilled"))
+    revenue = sum((p.get("amount_total") or 0) for p in rows if p["status"] in ("paid", "fulfilled"))
+    body = f"""
+<div class=tiles>
+  <div class=tile><div class=n>{paid}</div><div class=l>briefs sold</div></div>
+  <div class=tile><div class=n>£{revenue / 100:,.0f}</div><div class=l>one-off revenue</div></div>
+  <div class="tile {'warn' if any(p['status'] == 'paid' for p in rows) else ''}"><div class=n>{sum(1 for p in rows if p['status'] == 'paid')}</div><div class=l>awaiting delivery</div></div>
+</div>
+<div class=card style="padding:0"><table>
+<tr><th>when</th><th>email</th><th>item</th><th>amount</th><th>status</th><th>topic</th><th></th></tr>
+{''.join(_row(p) for p in rows) or '<tr><td colspan=7 class=dim>no purchases yet</td></tr>'}
+</table></div>
+"""
+    return page("Purchases", body, "/purchases", flash_from(request))
+
+
+@app.post("/purchases/{session_id}/fulfilled")
+def purchase_fulfilled(session_id: str):
+    if _worker()[0]:
+        try:
+            worker_api("POST", f"/admin/purchases/{quote(session_id)}/fulfilled", {})
+        except Exception:  # noqa
+            pass
+    return RedirectResponse("/purchases?m=" + quote("Marked delivered"), 303)
 
 
 @app.get("/subscriptions", response_class=HTMLResponse)

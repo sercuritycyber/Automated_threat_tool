@@ -16,9 +16,13 @@ Legend: `[ ]` todo · `[~]` wip · `[x]` done+tested · `[!]` blocked
 ---
 
 ## RESUME HERE
-> **W0–W7 all done + tested.** `node worker/test/run.mjs` (26/26) +
-> `node worker/test/flow.mjs` vs `wrangler dev` (19/19). Panel ↔ Worker
-> admin API verified. Committed + pushed.
+> **W0–W7 done + tested**, plus a **one-off "threat brief"** (Stripe Checkout
+> `mode: payment`): `/brief` + `/brief/buy` + `billing.createBriefCheckout` /
+> `ensureBriefPrice` (auto-creates product+price once, caches in D1) + webhook
+> branch on `obj.mode` → `purchases` table + receipt email + owner ping;
+> panel `/purchases` page (Worker `/admin/purchases`); Python `lib/billing.py`
+> parity (`create_one_time_checkout`). `node worker/test/run.mjs` (28/28) +
+> `worker/test/flow.mjs` (25/25). Committed + pushed.
 > Owner to do (Cloudflare account side — see worker/README.md): `wrangler login`,
 > `d1 create cti-subs` + paste id, `secret put` each, edit wrangler.toml vars
 > (legal name / ICO / CONFIG price ids), add DNS `cti`, deploy, wire Stripe +

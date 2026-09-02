@@ -150,6 +150,9 @@ bin/push_to_worker.py   pipeline stage 4 — POSTs each run's posts to the
                         Worker's /internal/ingest (it owns fan-out + digest)
 ```
 
+Also `/brief` — a **one-off threat brief** sold as a single Stripe payment (no
+subscription); purchases land in the panel's **Purchases** page to fulfil.
+
 - **Storage:** Cloudflare **D1** (`cti-subs`) — all subscriber PII.
 - **Email:** **Resend** (same provider as securitycyber.uk).
 - **Payments:** Stripe hosted Checkout + Customer Portal — no card data touches

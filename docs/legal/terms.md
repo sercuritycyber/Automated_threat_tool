@@ -31,6 +31,15 @@ matter for defenders, with a suggested action.
 Every alert links to the underlying public source. Facts in an alert are drawn
 from that source. Third-party names and trademarks belong to their owners.
 
+## 3a. One-off threat briefs
+
+We also sell individual "threat briefs" — a one-time payment for a single
+analyst-written report on a vulnerability or incident of your choosing. The same
+"informational only, no SLA" position in section 2 applies. Briefs are delivered
+by email, normally within two working days. As a service supplied immediately at
+your request, the consumer cooling-off refund does not apply once we have begun
+work; we may still offer a refund at our discretion.
+
 ## 4. Subscription, billing and renewal
 
 - Subscriptions are billed in advance through Stripe on the plan you choose.

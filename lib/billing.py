@@ -107,6 +107,52 @@ def portal_session(customer_id: str, return_url: str) -> dict:
     return {"url": p["url"]}
 
 
+# --------------------------------------------------------------------------- one-off purchase
+def ensure_brief_price() -> str:
+    """Stripe price id for the one-off threat brief. Uses a configured id if set,
+    else creates a product + default price once (per the blueprint) and caches it."""
+    import os
+
+    from subscribers import kv_get, kv_set  # type: ignore
+    cfg = subsconfig.load().get("brief", {})
+    configured = os.getenv("BRIEF_PRICE_ID") or cfg.get("price_id")
+    if configured:
+        return configured
+    cached = kv_get("brief_price_id")
+    if cached:
+        return cached
+    product = _req("POST", "/products", {
+        "name": cfg.get("name", "SecurityCyber — on-demand threat brief"),
+        "default_price_data": {
+            "currency": cfg.get("currency", "gbp"),
+            "unit_amount": int(cfg.get("unit_amount", 4900)),
+        },
+    })
+    price = product.get("default_price")
+    if not price:
+        raise StripeError("product created but has no default_price")
+    kv_set("brief_price_id", price)
+    return price
+
+
+def create_one_time_checkout(email: str | None, success_url: str, cancel_url: str,
+                             price_id: str | None = None) -> dict:
+    payload = {
+        "mode": "payment",
+        "line_items": [{"price": price_id or ensure_brief_price(), "quantity": 1}],
+        "success_url": success_url,
+        "cancel_url": cancel_url,
+        "allow_promotion_codes": True,
+        "billing_address_collection": "auto",
+        "metadata": {"item": "brief"},
+        "payment_intent_data": {"metadata": {"item": "brief"}},
+    }
+    if email:
+        payload["customer_email"] = email
+    s = _req("POST", "/checkout/sessions", payload)
+    return {"id": s["id"], "url": s["url"]}
+
+
 def get_subscription(sub_id: str) -> dict:
     return _req("GET", f"/subscriptions/{sub_id}")
 
@@ -162,6 +208,18 @@ def handle_event(event: dict) -> dict:
         return {"action": "duplicate", "type": etype}
 
     result: dict = {"action": "ignored", "type": etype}
+
+    # one-off purchase (Checkout `payment` mode) — the Worker is the store of
+    # record; here we just recognise it and log it.
+    if etype == "checkout.session.completed" and (
+            obj.get("mode") == "payment" or (obj.get("metadata") or {}).get("item") == "brief"):
+        email = (obj.get("customer_details") or {}).get("email") or obj.get("customer_email")
+        S.log_event("stripe:brief_purchased", None,
+                    {"session": obj.get("id"), "email": email, "amount": obj.get("amount_total")})
+        if eid:
+            S.mark_stripe_event(eid)
+        return {"action": "brief_purchased", "email": email, "session_id": obj.get("id"),
+                "amount_total": obj.get("amount_total"), "currency": obj.get("currency")}
 
     if etype == "checkout.session.completed":
         email = (obj.get("customer_details") or {}).get("email") or obj.get("customer_email")

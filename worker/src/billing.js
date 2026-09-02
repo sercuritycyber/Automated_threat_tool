@@ -74,6 +74,47 @@ export async function portalSession(env, customerId, returnUrl) {
   const p = await req(env, "POST", "/billing_portal/sessions", { customer: customerId, return_url: returnUrl });
   return { url: p.url };
 }
+
+// ---- one-off "threat brief" purchase (Checkout in `payment` mode) --------
+// Returns the price id to put in checkout line_items. Uses BRIEF_PRICE_ID /
+// CONFIG.brief.price_id if set, otherwise creates a product+price once and
+// caches its default_price in D1 kv.
+export async function ensureBriefPrice(env, cfg) {
+  const b = cfg.brief || {};
+  const configured = env.BRIEF_PRICE_ID || b.price_id;
+  if (configured) return configured;
+  const cached = await db.kvGet(env.DB, "brief_price_id");
+  if (cached) return cached;
+  const product = await req(env, "POST", "/products", {
+    name: b.name || `${cfg.brand} — on-demand threat brief`,
+    default_price_data: {
+      currency: b.currency || "gbp",
+      unit_amount: Number(b.unit_amount || 4900),
+    },
+  });
+  const priceId = product.default_price;
+  if (!priceId) throw new StripeError("product created but has no default_price");
+  await db.kvSet(env.DB, "brief_price_id", priceId);
+  return priceId;
+}
+
+export async function createBriefCheckout(env, cfg, { email, successUrl, cancelUrl, clientRef }) {
+  const price = await ensureBriefPrice(env, cfg);
+  const payload = {
+    mode: "payment",
+    line_items: [{ price, quantity: 1 }],
+    success_url: successUrl,
+    cancel_url: cancelUrl,
+    allow_promotion_codes: true,
+    billing_address_collection: "auto",
+    metadata: { item: "brief" },
+    payment_intent_data: { metadata: { item: "brief" } },
+  };
+  if (email) payload.customer_email = email;
+  if (clientRef) payload.client_reference_id = clientRef;
+  const s = await req(env, "POST", "/checkout/sessions", payload);
+  return { id: s.id, url: s.url };
+}
 export const getSubscription = (env, id) => req(env, "GET", `/subscriptions/${id}`);
 export const cancelSubscription = (env, id) => req(env, "DELETE", `/subscriptions/${id}`);
 
@@ -109,6 +150,25 @@ export async function handleEvent(env, cfg, event) {
   if (eid && await db.seenStripeEvent(D, eid)) return { action: "duplicate", type: etype };
 
   let result = { action: "ignored", type: etype };
+
+  // ---- one-off purchase (Checkout `payment` mode) ----
+  if (etype === "checkout.session.completed" && (obj.mode === "payment" || obj.metadata?.item === "brief")) {
+    const email = obj.customer_details?.email || obj.customer_email || null;
+    let subId = null;
+    if (email) { const s = await db.getByEmail(D, email); if (s) subId = s.id; }
+    const row = await db.recordPurchase(D, {
+      stripe_session_id: obj.id,
+      payment_intent: obj.payment_intent || null,
+      email, subscriber_id: subId,
+      item: obj.metadata?.item || "brief",
+      amount_total: obj.amount_total ?? null,
+      currency: obj.currency || null,
+      status: obj.payment_status === "paid" ? "paid" : "pending",
+    });
+    await db.logEvent(D, "stripe:brief_purchased", subId, { session: obj.id, amount: obj.amount_total });
+    if (eid) await db.markStripeEvent(D, eid);
+    return { action: "brief_purchased", email, session_id: obj.id, purchase: row };
+  }
 
   if (etype === "checkout.session.completed") {
     let email = obj.customer_details?.email || obj.customer_email;

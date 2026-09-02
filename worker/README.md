@@ -90,13 +90,23 @@ node test/run.mjs                  # unit checks
 node test/flow.mjs                 # full lifecycle vs the running dev server
 ```
 
+## One-off threat brief
+
+`/brief` sells a single analyst-written report as a **one-time payment**
+(Stripe Checkout `mode: payment`), separate from the subscription. Price:
+`CONFIG.brief` (£49 default) or `BRIEF_PRICE_ID`. On
+`checkout.session.completed` (payment mode) the Worker records the purchase in
+`purchases`, emails a receipt, and pings the owner. Deliver + mark done in the
+panel → **Purchases**.
+
 ## Routes
 
-Public: `/` `/subscribe` `/welcome` `/confirm` `/manage` (+ `/manage/*`)
-`/unsubscribe` `/channel/telegram` `/privacy` `/terms` `/cookies` `/logo.svg`
-`/healthz` `/robots.txt`
+Public: `/` `/subscribe` `/welcome` `/brief` `/brief/thanks` `/confirm`
+`/manage` (+ `/manage/*`) `/unsubscribe` `/channel/telegram`
+`/privacy` `/terms` `/cookies` `/logo.svg` `/healthz` `/robots.txt`
+POST: `/subscribe` `/brief/buy` `/account`
 Webhooks: `/webhooks/stripe` `/webhooks/telegram`
 Internal (bearer `INGEST_SECRET`): `POST /internal/ingest`
 Admin (bearer `ADMIN_TOKEN`): `/admin/stats`, `/admin/subscribers[?status=&q=]`,
 `/admin/subscribers/{id}`, `/admin/subscribers/{id}/{export|edit|erase|channel|test}`,
-`/admin/add`
+`/admin/add`, `/admin/purchases`, `/admin/purchases/{session_id}/fulfilled`

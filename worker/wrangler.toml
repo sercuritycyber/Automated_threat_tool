@@ -38,6 +38,13 @@ CONFIG = """
   "retention_days_cancelled": 180,
   "retention_days_unconfirmed": 7,
   "digest_window_hours": 24,
+  "brief": {
+    "price_id": "",
+    "name": "SecurityCyber — on-demand threat brief",
+    "currency": "gbp",
+    "unit_amount": 4900,
+    "display": "£49"
+  },
   "tiers": {
     "individual": {
       "monthly_price_id": "", "weekly_price_id": "",
@@ -69,3 +76,6 @@ CONFIG = """
 #   SUBS_TOKEN_SECRET        32+ random bytes   (signs subscriber links)
 #   INGEST_SECRET            32+ random bytes   (pipeline → worker auth)
 #   ADMIN_TOKEN              32+ random bytes   (owner panel → /admin auth)
+#   BRIEF_PRICE_ID           optional — a Stripe Price id for the one-off threat
+#                            brief. If unset, a product+price is created once on
+#                            the first purchase and cached in D1.

@@ -207,6 +207,31 @@ export async function postsSince(db, hours) {
 export const trimPostsLog = (db, keep = 500) =>
   run(db, "DELETE FROM posts_log WHERE post_key NOT IN (SELECT post_key FROM posts_log ORDER BY seen_at DESC LIMIT ?)", keep);
 
+// ---- one-off purchases (paid threat briefs) -----------------------
+export async function recordPurchase(db, p) {
+  await run(db,
+    `INSERT INTO purchases(stripe_session_id, payment_intent, email, subscriber_id, item,
+       amount_total, currency, status, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(stripe_session_id) DO UPDATE SET
+       payment_intent=excluded.payment_intent, amount_total=excluded.amount_total,
+       currency=excluded.currency, status=excluded.status`,
+    p.stripe_session_id, p.payment_intent || null, p.email || null, p.subscriber_id || null,
+    p.item || "brief", p.amount_total ?? null, p.currency || null, p.status || "paid", nowIso());
+  return one(db, "SELECT * FROM purchases WHERE stripe_session_id = ?", p.stripe_session_id);
+}
+export const getPurchaseBySession = (db, sid) =>
+  one(db, "SELECT * FROM purchases WHERE stripe_session_id = ?", sid);
+export async function markPurchaseFulfilled(db, sid) {
+  await run(db, "UPDATE purchases SET status='fulfilled', fulfilled_at=? WHERE stripe_session_id=?", nowIso(), sid);
+}
+export const listPurchases = (db, limit = 200) =>
+  many(db, "SELECT * FROM purchases ORDER BY created_at DESC LIMIT ?", limit);
+export async function purchaseCount24h(db) {
+  return (await one(db, "SELECT COUNT(*) n FROM purchases WHERE status IN ('paid','fulfilled') AND created_at > ?",
+    isoDaysAgo(1))).n;
+}
+
 // ---- delivery feed ----------------------------------------------
 export async function activeForDelivery(db) {
   const subs = await many(db, "SELECT * FROM subscribers WHERE status IN ('active','paused')");

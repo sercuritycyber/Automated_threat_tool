@@ -29,6 +29,16 @@ DEFAULTS: dict = {
     "retention_days_unconfirmed": 7,
     "digest_hour_utc": 8,
     "rate_limit_per_min": 20,
+    "brief": {
+        "price_id": "",
+        "name": "SecurityCyber — on-demand threat brief",
+        "currency": "gbp",
+        "unit_amount": 4900,
+        "display": "£49",
+        "blurb": "A one-off analyst-written deep dive on a vulnerability or incident of your "
+                 "choosing — impact, exposure, detection and response — by email within two "
+                 "working days.",
+    },
     "tiers": {
         "individual": {
             "monthly_price_id": "",

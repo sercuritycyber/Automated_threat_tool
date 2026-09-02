@@ -97,6 +97,34 @@ ok("re-ingest deduped (same delivery count)", d4.deliveries.length === d3.delive
 r = await fetch(`${BASE}/cdn-cgi/handler/scheduled?cron=${encodeURIComponent("15 8 * * *")}`, { method: "POST" });
 ok("scheduled digest handler runs", r.status === 200 || r.status === 204);
 
+// 6b. one-off threat brief — checkout.session.completed in `payment` mode
+r = await fetch(`${BASE}/brief`);
+const briefHtml = await r.text();
+ok("/brief page renders", r.status === 200 && /threat brief/i.test(briefHtml) && briefHtml.includes('action="/brief/buy"'));
+const briefEmail = `brief${Date.now()}@example.com`;
+const briefSess = "cs_brief_" + Date.now();
+const bev = JSON.stringify({
+  id: "evt_brief_" + Date.now(), type: "checkout.session.completed",
+  data: { object: {
+    id: briefSess, mode: "payment", payment_status: "paid", payment_intent: "pi_1",
+    amount_total: 4900, currency: "gbp", customer_details: { email: briefEmail },
+    metadata: { item: "brief" },
+  } },
+});
+r = await fetch(`${BASE}/webhooks/stripe`, { method: "POST", headers: { "stripe-signature": await stripeSig(bev) }, body: bev });
+ok("brief webhook -> brief_purchased", r.status === 200 && (await r.json()).action === "brief_purchased");
+const padmin = await adminGet("purchases");
+const purchases = padmin.purchases || [];
+const pr = purchases.find((p) => p.email === briefEmail);
+ok("purchase recorded (paid, £49, brief)", !!pr && pr.status === "paid" && pr.amount_total === 4900 && pr.item === "brief");
+if (pr) {
+  r = await fetch(`${BASE}/webhooks/stripe`, { method: "POST", headers: { "stripe-signature": await stripeSig(bev) }, body: bev });
+  ok("brief webhook idempotent", (await r.json()).action === "duplicate");
+  r = await adminPost(`purchases/${pr.stripe_session_id}/fulfilled`, {});
+  ok("mark fulfilled", r.ok);
+}
+ok("purchases list is all one-off items", purchases.length > 0 && purchases.every((p) => p.item === "brief"));
+
 // 7. DSAR export + erase
 const exp = await adminGet(`subscribers/${sid}/export`);
 ok("DSAR export has sections", exp.subscriber && exp.consents && exp.deliveries);

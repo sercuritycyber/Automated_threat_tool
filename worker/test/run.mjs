@@ -63,6 +63,15 @@ try { await billing.verifyWebhook(body, await stripeSig(body, "wrong"), "whsec_t
 catch (e) { ok("stripe bad sig rejected", e instanceof billing.WebhookError); }
 try { await billing.verifyWebhook(body, "garbage", "whsec_test"); ok("stripe malformed sig rejected", false); }
 catch (e) { ok("stripe malformed sig rejected", e instanceof billing.WebhookError); }
+// one-off checkout payload shape (blueprint: line_items[{price,quantity}], mode:payment)
+const briefEnc = billing._formEncode({
+  mode: "payment", line_items: [{ price: "price_123", quantity: 1 }],
+  success_url: "https://x/ok", cancel_url: "https://x/no", metadata: { item: "brief" },
+});
+ok("one-off checkout: mode=payment + line_items", briefEnc.includes("mode=payment")
+  && briefEnc.includes("line_items%5B0%5D%5Bprice%5D=price_123")
+  && briefEnc.includes("line_items%5B0%5D%5Bquantity%5D=1")
+  && briefEnc.includes("metadata%5Bitem%5D=brief"));
 
 // ---- markdown / legal ----
 ok("mdToHtml headings+links", mdToHtml("# Hi\n[x](https://y.z)").includes("<h1>Hi</h1>") && mdToHtml("[x](https://y.z)").includes('href="https://y.z"'));

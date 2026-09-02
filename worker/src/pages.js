@@ -121,6 +121,8 @@ what's affected, and the single action to take.</p>
 <div class=tiers>${tiers}</div>
 <p class=muted>Weekly or monthly billing, cancel anytime. Pick your platform —
 Discord, Slack, Telegram, email, a webhook or ntfy — during sign-up.</p>
+<p class=muted>Just need one deep dive? Buy a
+<a href="/brief">one-off threat brief</a> — no subscription.</p>
 <h2>How it works</h2>
 <div class=card><p>Every few hours an automated pipeline pulls the major security feeds,
 cross-references the CISA Known Exploited Vulnerabilities catalog, removes near-duplicates,
@@ -231,4 +233,34 @@ ${portal}
 
 export function simple(cfg, title, heading, lede, extra = "") {
   return page(cfg, title, `<h1>${esc(heading)}</h1><p class=lede>${esc(lede)}</p>${extra}`);
+}
+
+export function briefPage(cfg, flash = "", flashKind = "") {
+  const b = cfg.brief || {};
+  const contact = cfg.contact_email || "securitycyber_cti@securitycyber.uk";
+  const body = `
+<h1>On-demand threat brief — ${esc(b.display || "")}</h1>
+<p class=lede>${esc(b.blurb || "")}</p>
+<div class=card>
+<h3>What you get</h3>
+<ul class=muted style="list-style:none;padding:0">
+<li>▸ One vulnerability or incident of your choosing, researched from the primary sources</li>
+<li>▸ Impact, affected versions, exploitation status, and the exact fix</li>
+<li>▸ Detection guidance — what to hunt for, log sources, indicators</li>
+<li>▸ A short response checklist for your environment</li>
+<li>▸ Delivered as a PDF by email, usually within two working days</li>
+</ul>
+<p class=muted>One-off payment, no subscription. Card handled by Stripe — it never touches our servers.</p>
+</div>
+<form method=post action="/brief/buy">
+<label>Your email <small>— where the brief is delivered</small></label>
+<input type=email name=email required placeholder="you@example.com">
+<label>What should the brief cover? <small>— optional, you can also reply to the receipt</small></label>
+<input type=text name=topic placeholder="e.g. CVE-2026-… on our Fortinet estate">
+<div class=row style="margin-top:16px">
+<button class=btn>Buy the brief — ${esc(b.display || "")} →</button>
+<a class="btn ghost" href="/">Back</a></div>
+<p class=muted style="margin-top:10px">Questions first? <a href="mailto:${esc(contact)}">${esc(contact)}</a></p>
+</form>`;
+  return page(cfg, "On-demand threat brief", body, flash, flashKind);
 }

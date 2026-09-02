@@ -7,6 +7,14 @@ const DEFAULTS = {
   retention_days_cancelled: 180,
   retention_days_unconfirmed: 7,
   digest_window_hours: 24,
+  brief: {
+    price_id: "",            // set to skip the auto-created product
+    name: "SecurityCyber — on-demand threat brief",
+    currency: "gbp",
+    unit_amount: 4900,       // pence
+    display: "£49",
+    blurb: "A one-off, analyst-written deep dive on a vulnerability or incident of your choosing — impact, exposure, detection and response — delivered by email within two working days.",
+  },
   tiers: {
     individual: {
       monthly_price_id: "", weekly_price_id: "",
@@ -48,6 +56,7 @@ export function config(env) {
   for (const name of Object.keys(DEFAULTS.tiers)) {
     c.tiers[name] = deepMerge(DEFAULTS.tiers[name], (over.tiers || {})[name] || {});
   }
+  c.brief = deepMerge(DEFAULTS.brief, over.brief || {});
   c.brand = env.BRAND || "SecurityCyber";
   c.site_url = (env.SITE_URL || "").replace(/\/$/, "");
   c.main_site = env.MAIN_SITE || "https://securitycyber.uk";
