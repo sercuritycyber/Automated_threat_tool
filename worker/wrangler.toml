@@ -27,8 +27,8 @@ MAIN_SITE = "https://securitycyber.uk"
 FROM_EMAIL = "securitycyber_cti@securitycyber.uk"
 CONTACT_EMAIL = "securitycyber_cti@securitycyber.uk"
 SUPPORT_EMAIL = "securitycyber_cti@securitycyber.uk"
-COMPANY_LEGAL_NAME = ""
-ICO_REG = ""
+COMPANY_LEGAL_NAME = "Charlie Collins"
+ICO_REG = ""   # <-- register at ico.org.uk and paste the number here before go-live
 TERMS_VERSION = "2026-09-02"
 # Everything tunable in one JSON blob. Edit and re-deploy.
 CONFIG = """
