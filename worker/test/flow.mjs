@@ -199,6 +199,24 @@ ok("purchases list is all one-off items", purchases.length > 0 && purchases.ever
     JSON.stringify(ev).match(/"kind":"rss","target":"[A-Za-z0-9_-]{16,}"/) !== null || kinds.includes("channel:rss_created"));
 }
 
+// 6e. A v2 "thin" event destination carries no object data. It must be
+//     acknowledged (so Stripe stops retrying) but never treated as a payment.
+{
+  const thin = JSON.stringify({
+    id: "evt_thin_" + Date.now(), object: "v2.core.event", livemode: true,
+    type: "v2.core.event_destination.ping",
+    related_object: { id: "ed_x", type: "v2.core.event_destination" },
+  });
+  const r = await fetch(`${BASE}/webhooks/stripe`, {
+    method: "POST", headers: { "stripe-signature": await stripeSig(thin) }, body: thin });
+  const j = await r.json();
+  ok("v2 thin ping is acknowledged, not 400'd", r.status === 200 && j.received === true);
+  ok("v2 thin ping is explicitly ignored with a hint",
+    j.ignored === "v2.core.event_destination.ping" && /snapshot/.test(j.hint || ""));
+  const subs = (await adminGet("subscribers")).subscribers || [];
+  ok("v2 thin ping created no subscriber", !subs.some((x) => /thin/.test(x.email || "")));
+}
+
 // 7. DSAR export + erase
 const exp = await adminGet(`subscribers/${sid}/export`);
 ok("DSAR export has sections", exp.subscriber && exp.consents && exp.deliveries);

@@ -375,8 +375,29 @@ async function stripeWebhook(request, env, cfg) {
     // answer "STRIPE_WEBHOOK_SECRET not set" to anyone who POSTed here.
     console.error("stripe webhook rejected", e);
     if (!env.STRIPE_WEBHOOK_SECRET) await notifyOwner(env, cfg, "Stripe webhook rejected: STRIPE_WEBHOOK_SECRET is not set");
+    else await notifyOwner(env, cfg,
+      "Stripe webhook signature rejected — the STRIPE_WEBHOOK_SECRET on this Worker does not match the "
+      + "signing secret of the endpoint Stripe is calling. Copy it from that endpoint's page and run: "
+      + "npx wrangler secret put STRIPE_WEBHOOK_SECRET");
     return json({ error: "invalid signature" }, 400);
   }
+
+  // Stripe's newer "event destinations" can be created with a THIN payload,
+  // which carries only an event id — no data.object — so nothing here could
+  // ever build a subscriber from one. Acknowledge it so Stripe stops retrying,
+  // but say loudly what's wrong: the alternative is a destination that looks
+  // healthy in the dashboard while provisioning silently never happens.
+  const etype = event.type || "";
+  if (etype.startsWith("v2.") || event.object === "v2.core.event" || !event.data?.object) {
+    const msg = `Stripe endpoint is misconfigured: received "${etype}". This Worker needs the classic `
+      + `snapshot payload with v1 events — checkout.session.completed, customer.subscription.updated, `
+      + `customer.subscription.deleted, invoice.payment_failed, invoice.paid, invoice.payment_succeeded. `
+      + `A "thin" v2 destination carries no object data, so no subscriber can ever be created from it.`;
+    console.warn(msg);
+    if (!etype.endsWith(".ping")) await notifyOwner(env, cfg, msg);
+    return json({ received: true, ignored: etype, hint: "use a snapshot payload with v1 events" });
+  }
+
   let res;
   try { res = await billing.handleEvent(env, cfg, event); }
   catch (e) { console.error("handleEvent", e); await notifyOwner(env, cfg, `webhook handler error: ${e}`); return json({ received: true, handler_error: String(e).slice(0, 200) }); }
