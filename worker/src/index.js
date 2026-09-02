@@ -289,8 +289,16 @@ async function subscribeSubmit(request, env, cfg) {
     });
     return redirect(sess.url);
   } catch (e) {
-    return html(simple(cfg, "Checkout error", "Couldn't start checkout", String(e),
-      `<p><a href='/subscribe?tier=${tier}'>Try again</a></p>`));
+    // Never surface the Stripe error verbatim — it quotes the API key back
+    // ("Invalid API Key provided: sk_test_…"). Log it, page the owner, and
+    // show the visitor something they can act on.
+    console.error("checkout", e);
+    await notifyOwner(env, cfg, `checkout failed for ${email} (${tier}/${cadence}): ${e}`);
+    return html(simple(cfg, "Checkout error", "Couldn't start checkout",
+      "Something went wrong on our side setting up the payment — you have not been charged. "
+      + "Please try again in a moment.",
+      `<p><a href='/subscribe?tier=${tier}'>Try again</a> · `
+      + `<a href='mailto:${esc(cfg.support_email)}'>tell us</a></p>`));
   }
 }
 
@@ -310,8 +318,12 @@ async function briefBuy(request, env, cfg) {
     });
     return redirect(sess.url);
   } catch (e) {
-    return html(simple(cfg, "Checkout error", "Couldn't start checkout", String(e),
-      "<p><a href='/brief'>Try again</a></p>"));
+    console.error("brief checkout", e);
+    await notifyOwner(env, cfg, `brief checkout failed for ${email}: ${e}`);
+    return html(simple(cfg, "Checkout error", "Couldn't start checkout",
+      "Something went wrong on our side setting up the payment — you have not been charged. "
+      + "Please try again in a moment.",
+      `<p><a href='/brief'>Try again</a> · <a href='mailto:${esc(cfg.support_email)}'>tell us</a></p>`));
   }
 }
 

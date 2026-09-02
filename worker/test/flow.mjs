@@ -154,6 +154,19 @@ ok("purchases list is all one-off items", purchases.length > 0 && purchases.ever
   ok("malformed feed token is 404", (await fetch(`${BASE}/feed/abc.xml`)).status === 404);
 }
 
+// 6c. A failing checkout must not quote Stripe's error back at the visitor —
+//     it contains the API key ("Invalid API Key provided: sk_test_…").
+{
+  const r = await fetch(`${BASE}/subscribe`, {
+    method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: "tier=individual&cadence=weekly&email=leakcheck@test.co&platform=rss&agree=on",
+  });
+  const body = await r.text();
+  ok("checkout failure is handled, not a 500", r.status === 200 && /Couldn&#39;t start checkout|Couldn't start checkout/.test(body));
+  ok("checkout error page leaks no key or raw Stripe error",
+    !/sk_test|sk_live|Invalid API Key|HTTP 401/.test(body));
+}
+
 // 7. DSAR export + erase
 const exp = await adminGet(`subscribers/${sid}/export`);
 ok("DSAR export has sections", exp.subscriber && exp.consents && exp.deliveries);
