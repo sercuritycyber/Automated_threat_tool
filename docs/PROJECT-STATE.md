@@ -39,6 +39,15 @@ Two things that share a codebase:
 | Python | 3.14 system; pipeline uses `~/Threatintel/.venv` |
 | claude CLI | `~/.local/bin/claude` (2.1.259), OAuth-authed (`~/.claude.json`) |
 
+### 2026-09-03: laptop cutover complete
+
+The laptop's `cti-harvester.timer` + `cti-panel.service` are **stopped and
+disabled**. The laptop repo at `~/Threatintel` stays as a cold backup (do not
+delete). `state/history.jsonl` + `state/seen.jsonl` (the "already posted"
+memory) were copied to the VM before cutover, so the VM analyst won't re-post
+PaperCut / Langflow / JFrog / SonicWall / Switchvox / BGP-hijack. **This VM is
+now the only pipeline.**
+
 ### Deployed NOW — native systemd (working, verified)
 
 - `~/.config/systemd/user/cti-harvester.{service,timer}` — every 4h
