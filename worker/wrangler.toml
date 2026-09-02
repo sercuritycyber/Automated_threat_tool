@@ -4,7 +4,7 @@ compatibility_date = "2025-01-15"
 compatibility_flags = ["nodejs_compat"]
 workers_dev = false
 [[assets]]
-assets = /web
+assets = web
 # Production route — the DNS record `cti` must exist (proxied) in the zone.
 [[routes]]
 pattern = "cti.securitycyber.uk/*"
