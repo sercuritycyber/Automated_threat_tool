@@ -132,49 +132,43 @@ Everything below is in the panel (Settings / Feeds), or edit the files directly:
 ## Paid alert service (optional)
 
 The same `posts[]` the analyst produces can be sold as a subscription — a
-separate, UK-compliant service that runs alongside the brand's own channels.
-It's **off by default** (`subscriptions.enabled: false`).
+separate, UK-compliant service. **Production runs as a Cloudflare Worker**
+(`worker/`, route `cti.securitycyber.uk`), deployed the same way
+securitycyber.uk is: push to GitHub → Cloudflare builds.
 
 ```
-public site (web/public_app.py, behind Caddy)        owner console (web/app.py)
-  /            landing + pricing                        /subscribers    list, search, DSAR export/erase
-  /subscribe   -> Stripe hosted Checkout               /subscribers/{id} full detail + consent log
-  /confirm     double opt-in, logs consent+IP         /subscriptions  config + go-live readiness
-  /manage      channels, vendor filter, billing portal
-  /unsubscribe one-click pause
-  /webhooks/stripe  ·  /webhooks/telegram
+worker/  (Cloudflare Worker + D1 + Resend + Stripe)     owner console (web/app.py)
+  /            SecurityCyber-branded landing + pricing     /subscribers      list · DSAR export/erase
+  /subscribe   tier + weekly/monthly + platform + handle   /subscribers/{id} detail + consent log
+               -> Stripe hosted Checkout                   /subscriptions    readiness (from the Worker)
+  /confirm     double opt-in · logs consent+IP · test-pings the chosen channel
+  /manage      channels · vendor filter · billing portal · download/delete my data
+  /unsubscribe one-click pause     /webhooks/stripe · /webhooks/telegram
+  cron         daily digest (08:15 UTC) + weekly retention (Sun 03:30 UTC)
 
-bin/deliver.py   fan-out: instant (after each harvest) + daily digest, per
-                 subscriber tier / vendor filter / channel, deduped
-bin/retention.py weekly purge (cancelled + unconfirmed) — cti-retention.timer
-bin/backup_db.py daily DB backup (local sqlite) — cti-backup.timer
+bin/push_to_worker.py   pipeline stage 4 — POSTs each run's posts to the
+                        Worker's /internal/ingest (it owns fan-out + digest)
 ```
 
-- **Data store:** Turso (libSQL, EU region) when `TURSO_DATABASE_URL` +
-  `TURSO_AUTH_TOKEN` are set; local SQLite otherwise. `lib/db.py` picks
-  automatically — same schema either way.
+- **Storage:** Cloudflare **D1** (`cti-subs`) — all subscriber PII.
+- **Email:** **Resend** (same provider as securitycyber.uk).
 - **Payments:** Stripe hosted Checkout + Customer Portal — no card data touches
-  this code. **Weekly or monthly** billing per tier (set the price ids you want;
-  the sign-up only offers the cadences you've configured). Test mode until
-  `subscriptions.live: true` with `sk_live_` keys.
-- **Channels:** email, **Discord**, Slack, Telegram, generic webhook, ntfy.
-  The subscriber picks their platform and pastes the handle/webhook during
-  sign-up; the choice rides through Stripe as a signed intent and the channel
-  is test-pinged on confirmation.
-- **Branding:** the public site uses the SecurityCyber look (securitycyber.uk) —
-  dark theme, blue defensive accent, Syne / DM Sans.
-- **Compliance:** `docs/legal/` holds the privacy policy, terms, cookie
-  statement and an **owner compliance runbook** (ICO registration, DSAR
-  process, breach notification, retention, PECR). The pages render at
-  `/privacy` `/terms` `/cookies` with your details filled in from config.
+  the code. **Weekly or monthly** per tier (the sign-up only offers the
+  cadences you've configured a Stripe price for). Test mode until `CONFIG.live`.
+- **Channels:** email, **Discord**, Slack, Telegram, generic webhook, ntfy —
+  picked with the handle/webhook at sign-up, carried through Stripe as a signed
+  intent, test-pinged on confirmation.
+- **Branding:** the SecurityCyber look — dark theme, blue accent, Syne / DM Sans.
+- **Compliance:** `docs/legal/` — privacy policy, terms, cookie statement,
+  owner compliance runbook (ICO, DSAR, breach, retention, PECR). Served at
+  `/privacy` `/terms` `/cookies` (also mirrored in `worker/src/legal.js`).
+- The Python `web/public_app.py` + `bin/deliver.py` + Turso path stay as a
+  **local-dev reference** (`python3 -m uvicorn web.public_app:app`); not deployed.
 
-**Setup:** `docs/legal/compliance-runbook.md` is the checklist. In short:
-register with the ICO → fill `subscriptions.*` in Settings → add Stripe/email
-keys in Secrets → `systemd/install-public.sh` → point Caddy at a domain →
-`python3 bin/selftest.py` until it says *ready* → run a test checkout →
-set `live: true`.
-
-Productisation background: `docs/RND.md`.
+**Setup:** `worker/README.md` (Cloudflare side) + `docs/legal/compliance-runbook.md`
+(ICO, Stripe, Resend). Then put `CTI_WORKER_URL` / `CTI_INGEST_SECRET` /
+`CTI_ADMIN_TOKEN` in `config/env`. `python3 bin/selftest.py` reports readiness.
+Background: `docs/RND.md`.
 
 ## Operations
 

@@ -20,3 +20,9 @@ state/subscribers.db-*
 state/subscribers.db.*
 config/subscribers.json
 state/backups/
+
+# cloudflare worker
+worker/node_modules/
+worker/.wrangler/
+worker/.dev.vars
+worker/package-lock.json

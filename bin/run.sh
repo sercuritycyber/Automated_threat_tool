@@ -90,7 +90,13 @@ esac
 # stage 4: push instant alerts to paying subscribers (no-op unless
 # subscriptions.enabled). Never fatal — the brand's post already went out.
 echo "[run] stage 4/4 : subscriber alerts"
-python3 "$ROOT/bin/deliver.py" --instant --from "$ROOT/state/decision.json" || echo "[run] deliver returned $? (non-fatal)"
+# Production: hand the posts to the CTI Alerts Worker (it owns fan-out + digest).
+# No-op unless CTI_WORKER_URL is set. Never fatal.
+python3 "$ROOT/bin/push_to_worker.py" "$ROOT/state/decision.json" || echo "[run] push_to_worker returned $? (non-fatal)"
+# Legacy local delivery — only if the Worker isn't configured and subscriptions are enabled locally.
+if [[ -z "${CTI_WORKER_URL:-}" ]]; then
+  python3 "$ROOT/bin/deliver.py" --instant --from "$ROOT/state/decision.json" || echo "[run] deliver returned $? (non-fatal)"
+fi
 
 # success ping (optional)
 if python3 -c 'import json,sys; d=json.load(open("state/last_run.json")); sys.exit(0 if d.get("decision")=="post" and not d.get("dry_run") else 1)' 2>/dev/null; then

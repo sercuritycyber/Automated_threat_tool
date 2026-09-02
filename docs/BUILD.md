@@ -11,6 +11,13 @@ Legend:  `[ ]` todo  `[~]` in progress  `[x]` done + tested  `[!]` blocked (see 
 
 ---
 
+## SUPERSEDED (partly)
+> **Production of the paid service is now the Cloudflare Worker** — see
+> `docs/BUILD-WORKER.md` and `worker/`. This Python stack (`web/public_app.py`,
+> `bin/deliver.py`, `lib/db.py` Turso, `cti-public.service`) is kept as a
+> local-dev reference. `web/app.py` `/subscribers` auto-switches to the Worker's
+> `/admin` API when `CTI_WORKER_URL` is set in config/env.
+
 ## RESUME HERE
 > **ALL 7 PHASES DONE** + a follow-up round (2026-09-02 pm):
 >   - Discord added as a delivery channel (webhook URL)

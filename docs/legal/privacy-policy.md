@@ -51,9 +51,9 @@ data needed for its function.
 | Provider | Function | Location / safeguard |
 |---|---|---|
 | Stripe Payments Europe, Ltd. | Payment processing, subscription billing, the billing portal | Ireland / USA — Stripe's Data Processing Agreement and Standard Contractual Clauses / UK Addendum |
-| Turso (ChiselStrike, Inc.) | Hosted database that stores your account record | AWS `eu-west-1` (Ireland), EU |
-| Our email sending provider (SMTP / Amazon SES / equivalent) | Sending you alert and account emails | Configured by us; EU or SCC-covered |
-| Slack Technologies / Telegram FZ-LLC | Only if you choose those channels — they receive the alert content you asked us to send there | Per their own terms; you control this by adding/removing the channel |
+| Cloudflare, Inc. | Hosting the service and its database (Workers + D1) | Global edge network; Cloudflare DPA + SCCs. UK data centres available in-region |
+| Resend (Plane, Inc.) | Sending you alert and account emails | USA — Data Processing Agreement + Standard Contractual Clauses |
+| Discord Inc. / Slack Technologies / Telegram FZ-LLC | Only if you choose those channels — they receive the alert content you asked us to send there | Per their own terms; you control this by adding/removing the channel |
 | The hosting for {{site}} | Running the website | Operated by us on our own infrastructure |
 
 ## International transfers

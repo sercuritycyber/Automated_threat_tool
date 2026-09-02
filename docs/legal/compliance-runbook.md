@@ -17,16 +17,20 @@ and how the code helps.
 3. **Publish the policies.** They're at `/privacy`, `/terms`, `/cookies` and are
    generated from `docs/legal/*.md` with your details filled in. Read them and
    adjust anything that doesn't match how you actually operate.
-4. **Pick an email provider with good deliverability.** A personal SMTP box will
-   land in spam. Amazon SES, Resend or Postmark; put the SMTP creds in
-   `config/env` (`EMAIL_SMTP_*`, `EMAIL_FROM`).
-5. **Create the Stripe products** (one price per tier), copy each price id into
-   `subscriptions.tiers.<name>.price_id`, and the keys into `config/env`
-   (`STRIPE_SECRET_KEY`, `STRIPE_PUBLISHABLE_KEY`). Add the webhook endpoint
-   (`{{site}}/webhooks/stripe`) in the Stripe dashboard and copy its signing
-   secret to `STRIPE_WEBHOOK_SECRET`.
-6. Leave `subscriptions.live: false` and use `sk_test_` keys until you have run a
-   full test checkout end to end.
+4. **Email:** the Worker sends via **Resend** (`RESEND_API_KEY` secret). Verify
+   the `securitycyber.uk` domain in Resend and use
+   `securitycyber_cti@securitycyber.uk` as the from/reply address.
+5. **Create the Stripe products** — a monthly and/or weekly Price per tier —
+   and paste the price ids into `worker/wrangler.toml` `CONFIG` under
+   `tiers.<name>.monthly_price_id` / `weekly_price_id`. Set `STRIPE_SECRET_KEY`
+   + `STRIPE_WEBHOOK_SECRET` as Worker secrets. Add the webhook endpoint
+   `https://cti.securitycyber.uk/webhooks/stripe` in the Stripe dashboard.
+6. Keep `CONFIG.live: false` and `sk_test_` keys until a full test checkout
+   works end to end; then set `live: true` and the `sk_live_` key.
+
+**Deployment now runs as the Cloudflare Worker in `worker/`** — see
+`worker/README.md`. The old Python `web/public_app.py` stays as a local-dev
+reference only.
 
 ## Records of processing (ROPA)
 
@@ -38,11 +42,12 @@ regularly.
 
 ## Data subject requests (DSARs)
 
-- Someone asks for their data → use **Subscribers → (their row) → Export JSON**
-  in the owner panel, or `bin/deliver.py` is not it — it's in the admin UI.
-- Someone asks to be deleted → **Delete** in the same place. This erases the
-  account and, if they have a Stripe subscription, cancels it. An anonymous
-  audit line is kept (no personal data in it).
+- Someone asks for their data → **Subscribers → (their row) → Export (DSAR)**
+  in the owner panel. Subscribers can also self-serve from their preference
+  centre ("download my data").
+- Someone asks to be deleted → **Erase (DSAR)** in the same place (or the
+  subscriber's own "delete my account" button). This erases the account and, if
+  they have a Stripe subscription, cancels it. An anonymous audit line is kept.
 - Respond within **one calendar month**. Free unless excessive.
 
 ## Personal data breach
@@ -64,11 +69,13 @@ reportable.
 
 ## Retention
 
-`bin/retention.py` runs weekly (`cti-retention.timer`) and deletes:
-- cancelled accounts after `subscriptions.retention_days_cancelled` days
-- unconfirmed sign-ups after `subscriptions.retention_days_unconfirmed` days
+The Worker's **weekly Cron Trigger** (Sun 03:30 UTC) deletes:
+- cancelled accounts after `CONFIG.retention_days_cancelled` days
+- unconfirmed sign-ups after `CONFIG.retention_days_unconfirmed` days
+- stale signup intents after 48h
 
-Check the timer is enabled: `systemctl --user list-timers cti-retention.timer`.
+Check it ran: the owner panel `/subscribers` page shows "last retention".
+(Legacy local Python: `bin/retention.py` + `cti-retention.timer`.)
 
 ## Keeping this current
 

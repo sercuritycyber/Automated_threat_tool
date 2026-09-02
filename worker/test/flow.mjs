@@ -1,0 +1,107 @@
+// End-to-end against a running `wrangler dev` (port 8788, using test/.dev.vars).
+//   node worker/test/flow.mjs
+const BASE = process.env.BASE || "http://localhost:8788";
+const WH_SECRET = "whsec_devtest";
+const TOKEN_SECRET = "dev-token-secret-0000000000000000";
+const INGEST = "dev-ingest-secret-1111";
+const ADMIN = "dev-admin-token-2222";
+
+let failed = 0;
+const ok = (n, c) => { console.log(`  [${c ? "ok  " : "FAIL"}] ${n}`); if (!c) failed++; };
+
+function b64u(bytes) { return Buffer.from(bytes).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""); }
+async function hmac(secret, msg) {
+  const k = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  return crypto.subtle.sign("HMAC", k, new TextEncoder().encode(msg));
+}
+async function stripeSig(payload) {
+  const ts = Math.floor(Date.now() / 1000);
+  const mac = await hmac(WH_SECRET, `${ts}.${payload}`);
+  return `t=${ts},v1=` + [...new Uint8Array(mac)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+async function signToken(payload, ttl = 3600) {
+  const body = { ...payload, exp: Math.floor(Date.now() / 1000) + ttl };
+  const p = b64u(new TextEncoder().encode(JSON.stringify(body)));
+  const mac = await hmac(TOKEN_SECRET, p);
+  return `${p}.${b64u(new Uint8Array(mac))}`;
+}
+const adminGet = (p) => fetch(`${BASE}/admin/${p}`, { headers: { Authorization: `Bearer ${ADMIN}` } }).then((r) => r.json());
+const adminPost = (p, body) => fetch(`${BASE}/admin/${p}`, { method: "POST", headers: { Authorization: `Bearer ${ADMIN}`, "Content-Type": "application/json" }, body: JSON.stringify(body || {}) }).then((r) => r.json());
+
+// 1. admin auth gate
+ok("admin needs token", (await fetch(`${BASE}/admin/stats`)).status === 401);
+const stats0 = await adminGet("stats");
+ok("admin/stats works with token", typeof stats0.total_active === "number");
+ok("problems() lists Stripe (fake key)", stats0.problems.some((x) => /sk_live_|STRIPE|RESEND/.test(x)));
+
+// 2. checkout.session.completed webhook -> subscriber
+const email = `flow${Date.now()}@example.com`;
+const ev = JSON.stringify({
+  id: "evt_" + Date.now(), type: "checkout.session.completed",
+  data: { object: { id: "cs_1", customer: "cus_1", subscription: "sub_1",
+    customer_details: { email }, metadata: { tier: "team", cadence: "weekly" } } },
+});
+let r = await fetch(`${BASE}/webhooks/stripe`, { method: "POST", headers: { "stripe-signature": await stripeSig(ev) }, body: ev });
+const wj = await r.json();
+ok("webhook accepted + send_confirm", r.status === 200 && wj.action === "send_confirm");
+r = await fetch(`${BASE}/webhooks/stripe`, { method: "POST", headers: { "stripe-signature": "bad" }, body: ev });
+ok("bad signature -> 400", r.status === 400);
+
+const list = (await adminGet(`subscribers?q=${email.split("@")[0]}`)).subscribers;
+ok("subscriber created unconfirmed, weekly, team", list[0] && list[0].status === "unconfirmed" && list[0].cadence === "weekly" && list[0].tier === "team");
+const sid = list[0].id;
+
+// idempotency
+r = await fetch(`${BASE}/webhooks/stripe`, { method: "POST", headers: { "stripe-signature": await stripeSig(ev) }, body: ev });
+ok("duplicate event ignored", (await r.json()).action === "duplicate");
+
+// 3. confirm
+const ctok = await signToken({ sub: sid, act: "confirm" });
+r = await fetch(`${BASE}/confirm?t=${ctok}`, { redirect: "manual" });
+ok("confirm redirects to /manage", r.status === 303 && (r.headers.get("location") || "").includes("/manage?t="));
+const after = (await adminGet(`subscribers/${sid}`)).subscriber;
+ok("confirmed -> active", after.status === "active");
+const detail = await adminGet(`subscribers/${sid}`);
+ok("consent logged w/ terms version + ip", detail.consents.some((c) => c.kind === "signup" && c.granted && c.terms_version));
+
+// 4. manage: add a verified channel via admin, set prefs
+await adminPost(`subscribers/${sid}/channel`, { kind: "ntfy", target: "https://ntfy.sh/flowtest", verified: true });
+await adminPost(`subscribers/${sid}/edit`, { vendors: ["Fortinet"], min_score: "80", instant: true, digest: true });
+const d2 = await adminGet(`subscribers/${sid}`);
+ok("channel + prefs saved", d2.subscriber.channels.some((c) => c.kind === "ntfy") && d2.subscriber.prefs.vendors[0] === "Fortinet" && d2.subscriber.prefs.min_score_override === 80);
+
+// 5. pipeline -> worker ingest (instant fan-out)
+ok("ingest needs bearer", (await fetch(`${BASE}/internal/ingest`, { method: "POST", body: "{}" })).status === 401);
+const posts = { posts: [
+  { title: "Fortinet FortiOS RCE exploited", url: "https://ex.com/forti", source: "X", score: 96, cve_ids: ["CVE-2026-1"], post_text: "Patch FortiOS now. https://ex.com/forti", short_text: "Patch FortiOS CVE-2026-1 https://ex.com/forti" },
+  { title: "Cisco minor advisory", url: "https://ex.com/cisco", source: "X", score: 70, cve_ids: ["CVE-2026-2"], post_text: "Cisco advisory. https://ex.com/cisco", short_text: "x" },
+] };
+r = await fetch(`${BASE}/internal/ingest`, { method: "POST", headers: { Authorization: `Bearer ${INGEST}`, "Content-Type": "application/json" }, body: JSON.stringify(posts) });
+ok("ingest accepted 2 posts", (await r.json()).received === 2);
+
+// give the background waitUntil a moment
+await new Promise((s) => setTimeout(s, 1500));
+const d3 = await adminGet(`subscribers/${sid}`);
+const gotForti = d3.deliveries.some((x) => x.post_key.includes("forti"));
+const gotCisco = d3.deliveries.some((x) => x.post_key.includes("cisco"));
+ok("delivered the 96 (>= vendor threshold 80, Fortinet match)", gotForti);
+ok("did NOT deliver the 70 (below override 80)", !gotCisco);
+
+// re-ingest same -> deduped
+r = await fetch(`${BASE}/internal/ingest`, { method: "POST", headers: { Authorization: `Bearer ${INGEST}`, "Content-Type": "application/json" }, body: JSON.stringify(posts) });
+await new Promise((s) => setTimeout(s, 1200));
+const d4 = await adminGet(`subscribers/${sid}`);
+ok("re-ingest deduped (same delivery count)", d4.deliveries.length === d3.deliveries.length);
+
+// 6. cron digest (manual trigger)
+r = await fetch(`${BASE}/cdn-cgi/handler/scheduled?cron=${encodeURIComponent("15 8 * * *")}`, { method: "POST" });
+ok("scheduled digest handler runs", r.status === 200 || r.status === 204);
+
+// 7. DSAR export + erase
+const exp = await adminGet(`subscribers/${sid}/export`);
+ok("DSAR export has sections", exp.subscriber && exp.consents && exp.deliveries);
+await adminPost(`subscribers/${sid}/erase`, {});
+ok("erase removes subscriber", (await adminGet(`subscribers/${sid}`)).error === "not found");
+
+console.log(failed ? `\n❌ ${failed} failed` : "\n✅ worker flow test passed");
+process.exit(failed ? 1 : 0);

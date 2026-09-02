@@ -1,0 +1,12 @@
+# Copy to  worker/.dev.vars  for `wrangler dev` (git-ignored).
+# In production these are set with:  npx wrangler secret put <NAME>
+
+STRIPE_SECRET_KEY=sk_test_xxx
+STRIPE_WEBHOOK_SECRET=whsec_xxx
+RESEND_API_KEY=re_xxx
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_BOT_USERNAME=
+TELEGRAM_WEBHOOK_SECRET=
+SUBS_TOKEN_SECRET=dev-only-secret-change-me-0000000000
+INGEST_SECRET=dev-ingest-secret-change-me
+ADMIN_TOKEN=dev-admin-token-change-me

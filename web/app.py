@@ -559,8 +559,18 @@ def dashboard(request: Request):
     cand_n = counts.get("candidates", 0) or 0
 
     subs_card = ""
-    if _SUBS_OK:
-        try:
+    wbase = _worker()[0]
+    try:
+        if wbase:
+            wst = worker_api("GET", "/admin/stats")
+            pd = (wst.get("by_status") or {}).get("past_due", 0)
+            subs_card = (
+                f'<div class=card><div class=row style="justify-content:space-between">'
+                f'<div><b>Paid alert service (Worker)</b> · {wst.get("total_active", 0)} active · '
+                f'£{(wst.get("mrr_pence", 0) or 0) / 100:,.0f}/mo est · {wst.get("sent_24h", 0)} sent in 24h'
+                + (f' · <span class="pill bad">{pd} past due</span>' if pd else '') + '</div>'
+                f'<a class="btn ghost" href="/subscribers">Subscribers →</a></div></div>')
+        elif _SUBS_OK:
             scfg = subsconfig.load()
             sst = SUBS.stats()
             if scfg.get("enabled") or sst["by_status"]:
@@ -572,8 +582,8 @@ def dashboard(request: Request):
                     f'£{subs_mrr_pence() / 100:,.0f}/mo est · {sst["sent_24h"]} sent in 24h'
                     + (f' · <span class="pill bad">{pd} past due</span>' if pd else '') + '</div>'
                     f'<a class="btn ghost" href="/subscribers">Subscribers →</a></div></div>')
-        except Exception:  # noqa
-            subs_card = ""
+    except Exception:  # noqa
+        subs_card = ""
     live_toggle = ('<button class="btn good">▶ Go live</button>' if dry
                    else '<button class="btn ghost">⏸ Pause (dry-run)</button>')
 
@@ -1538,12 +1548,146 @@ def log_get(name: str):
 
 
 # ----------------------------------------------------------------------------- subscribers (paid service)
+def _worker():
+    """(base_url, admin_token) when the CTI Alerts Worker is configured, else (None, None)."""
+    env = load_env()
+    base = (env.get("CTI_WORKER_URL") or "").rstrip("/")
+    tok = env.get("CTI_ADMIN_TOKEN") or ""
+    return (base or None, tok or None)
+
+
+def worker_api(method: str, path: str, body=None):
+    base, tok = _worker()
+    r = requests.request(method, f"{base}{path}",
+                         headers={"Authorization": f"Bearer {tok}"} if tok else {},
+                         json=body, timeout=20)
+    r.raise_for_status()
+    ct = r.headers.get("content-type", "")
+    return r.json() if ct.startswith("application/json") else r.text
+
+
 def _subs_guard() -> HTMLResponse | None:
+    if _worker()[0]:
+        return None
     if not _SUBS_OK:
         return page("Subscribers",
                     "<div class=card>The subscription stack isn't importable — check "
                     "<span class=mono>lib/subscribers.py</span> and its deps.</div>", "/subscribers")
     return None
+
+
+def _worker_subscribers_view(request: Request) -> HTMLResponse | None:
+    """Render /subscribers from the Worker admin API. Returns None to fall through to local."""
+    base, _ = _worker()
+    if not base:
+        return None
+    qs = request.query_params
+    try:
+        st = worker_api("GET", "/admin/stats")
+        params = []
+        if qs.get("status"):
+            params.append("status=" + quote(qs["status"]))
+        if qs.get("q"):
+            params.append("q=" + quote(qs["q"]))
+        subs = worker_api("GET", "/admin/subscribers" + ("?" + "&".join(params) if params else ""))["subscribers"]
+    except Exception as ex:  # noqa
+        return page("Subscribers",
+                    f'<div class="flash" style="border-color:var(--bad)">Can\'t reach the CTI Alerts Worker at '
+                    f'<span class=mono>{e(base)}</span> — {e(str(ex)[:200])}</div>'
+                    f'<p class=dim>Check <span class=mono>CTI_WORKER_URL</span> / '
+                    f'<span class=mono>CTI_ADMIN_TOKEN</span> on the Secrets page.</p>', "/subscribers")
+
+    def _r(s):
+        sc = {"active": "good", "past_due": "bad", "cancelled": "dim", "paused": "warn",
+              "unconfirmed": "warn", "pending_payment": "dim"}.get(s["status"], "dim")
+        return (f"<tr><td><a href='/subscribers/{s['id']}'>#{s['id']}</a></td>"
+                f"<td>{e(s['email'])}</td><td>{e(s['tier'])} <span class=dim>{e(s.get('cadence',''))}</span></td>"
+                f"<td><span class='pill {sc}'>{e(s['status'])}</span></td>"
+                f"<td class=dim>{e(rel_time(s['created_at']))}</td></tr>")
+
+    filt = "".join(
+        f'<a class="btn ghost" style="padding:4px 10px;font-size:12px" href="/subscribers?status={k}">{k} ({v})</a> '
+        for k, v in sorted((st.get("by_status") or {}).items()))
+    probs = st.get("problems") or []
+    ready = ('' if not probs else
+             '<div class="flash" style="border-color:var(--warn)"><b>Before go-live:</b><ul>'
+             + "".join(f"<li>{e(x)}</li>" for x in probs) + "</ul></div>")
+    body = f"""
+<div class="flash" style="border-color:var(--good)">Connected to the CTI Alerts Worker ·
+<span class=mono>{e(base)}</span> · config lives in <span class=mono>worker/wrangler.toml</span></div>
+{ready}
+<div class=tiles>
+  <div class=tile><div class=n>{st.get('total_active', 0)}</div><div class=l>active subscribers</div></div>
+  <div class=tile><div class=n>£{st.get('mrr_pence', 0) / 100:,.0f}</div><div class=l>est. MRR</div></div>
+  <div class=tile><div class=n>{st.get('sent_24h', 0)}</div><div class=l>alerts sent · 24h</div></div>
+  <div class="tile {'bad' if (st.get('by_status') or {}).get('past_due') else ''}"><div class=n>{(st.get('by_status') or {}).get('past_due', 0)}</div><div class=l>past due</div></div>
+</div>
+<div class=card>
+  <form class=row method=get action=/subscribers>
+    <input type=text name=q value="{e(qs.get('q',''))}" placeholder="search email" style="max-width:280px">
+    <button class=btn>Search</button><a class="btn ghost" href="/subscribers">clear</a>
+    <a class="btn ghost" href="/subscribers/add">+ add / comp</a>
+  </form>
+  <div style="margin-top:8px">{filt or '<span class=dim>no subscribers yet</span>'}</div>
+  <p class=dim style="margin-top:8px">last digest {e(rel_time(st.get('last_digest','') or ''))} ·
+  last retention {e(rel_time(st.get('last_retention','') or ''))}</p>
+</div>
+<div class=card style="padding:0"><table>
+<tr><th>id</th><th>email</th><th>tier</th><th>status</th><th>joined</th></tr>
+{''.join(_r(s) for s in subs) or '<tr><td colspan=5 class=dim>none</td></tr>'}
+</table></div>
+"""
+    return page("Subscribers", body, "/subscribers", flash_from(request))
+
+
+def _worker_subscriber_detail(sid: int, request: Request) -> HTMLResponse | None:
+    base, _ = _worker()
+    if not base:
+        return None
+    try:
+        d = worker_api("GET", f"/admin/subscribers/{sid}")
+    except Exception as ex:  # noqa
+        return page("Subscriber", f"<div class=card>Worker error: {e(str(ex)[:200])}</div>", "/subscribers")
+    if d.get("error"):
+        return page("Subscriber", "<div class=card>Not found (may have been erased).</div>", "/subscribers")
+    s = d["subscriber"]
+    ch = "".join(f"<tr><td>{e(c['kind'])}</td><td class=dim>{e((c['target'] or '')[:50])}</td>"
+                 f"<td>{'✓' if c['verified'] else '<span class=dim>unverified</span>'}</td></tr>"
+                 for c in s.get("channels", []))
+    cons = "".join(f"<tr><td class=dim>{e(rel_time(c['ts']))}</td><td>{e(c['kind'])}</td>"
+                   f"<td>{'granted' if c['granted'] else 'withdrawn'}</td><td class=dim>{e(c['ip'] or '')}</td>"
+                   f"<td class=dim>{e(c['terms_version'] or '')}</td></tr>" for c in d.get("consents", []))
+    devs = "".join(f"<tr><td class=dim>{e(rel_time(x['sent_at']))}</td><td>{e(x['channel_kind'])}</td>"
+                   f"<td>{e(x['mode'])}</td><td>{'ok' if x['ok'] else e(x['error'])}</td>"
+                   f"<td class=dim>{e((x['post_key'] or '')[:44])}</td></tr>" for x in d.get("deliveries", []))
+    m = flash_from(request)
+    body = f"""
+<div class=card><div class=row style="justify-content:space-between">
+<div><b>{e(s['email'])}</b> · <span class="pill dim">{e(s['status'])}</span> · {e(s['tier'])} ({e(s.get('cadence',''))})
+· <span class=dim>joined {e(rel_time(s['created_at']))}</span></div>
+<div class=dim>{e(s.get('source',''))}{' · ' + e(s['stripe_customer_id']) if s.get('stripe_customer_id') else ''}</div></div>
+{('<p class=dim>' + e(s['notes']) + '</p>') if s.get('notes') else ''}</div>
+
+<form method=post action=/subscribers/{sid}/edit><div class=card><div class=grid>
+<div><label>Status</label><select name=status>{''.join(f"<option {'selected' if x == s['status'] else ''}>{x}</option>" for x in ('active','paused','past_due','cancelled','unconfirmed'))}</select></div>
+<div><label>Score override</label><input type=text name=min_score value="{e(s.get('prefs',{}).get('min_score_override') or '')}"></div>
+</div>
+<label>Vendors / keywords</label><input type=text name=vendors value="{e(', '.join(s.get('prefs',{}).get('vendors',[])))}">
+<label class=row style="gap:8px;font-weight:400"><input type=checkbox name=instant {'checked' if s.get('prefs',{}).get('instant') else ''}> instant</label>
+<label class=row style="gap:8px;font-weight:400"><input type=checkbox name=digest {'checked' if s.get('prefs',{}).get('digest') else ''}> digest</label>
+<div style="margin-top:10px"><button class=btn>Save</button></div></div></form>
+
+<h2>Channels</h2><div class=card style="padding:0"><table><tr><th>kind</th><th>target</th><th>ok</th></tr>{ch or '<tr><td colspan=3 class=dim>none</td></tr>'}</table></div>
+
+<div class=row style="margin:14px 0">
+<form method=post action=/subscribers/{sid}/test><button class="btn ghost">Send test alert</button></form>
+<a class="btn ghost" href="/subscribers/{sid}/export.json">Export (DSAR)</a>
+<form method=post action=/subscribers/{sid}/erase onsubmit="return confirm('Erase this subscriber and all their data? Cancels Stripe if linked. Irreversible.')"><button class="btn bad">Erase (DSAR)</button></form>
+</div>
+<h2>Consent log</h2><div class=card style="padding:0"><table><tr><th>when</th><th>kind</th><th></th><th>ip</th><th>terms</th></tr>{cons or '<tr><td colspan=5 class=dim>none</td></tr>'}</table></div>
+<h2>Deliveries</h2><div class=card style="padding:0"><table><tr><th>when</th><th>channel</th><th>mode</th><th>result</th><th>post</th></tr>{devs or '<tr><td colspan=5 class=dim>none</td></tr>'}</table></div>
+"""
+    return page(f"Subscriber #{sid}", body, "/subscribers", m)
 
 
 def subs_mrr_pence() -> int:
@@ -1558,6 +1702,9 @@ def subs_mrr_pence() -> int:
 
 @app.get("/subscribers", response_class=HTMLResponse)
 def subscribers_list(request: Request):
+    wv = _worker_subscribers_view(request)
+    if wv is not None:
+        return wv
     g = _subs_guard()
     if g:
         return g
@@ -1629,11 +1776,18 @@ No payment is taken. They still confirm by email before alerts start (unless you
 @app.post("/subscribers/add")
 def subscribers_add(email: str = Form(""), tier: str = Form("individual"),
                     note: str = Form(""), skip_confirm: str = Form("")):
-    if _subs_guard():
-        return RedirectResponse("/subscribers", 303)
     email = email.strip().lower()
     if "@" not in email:
         return RedirectResponse("/subscribers/add?m=" + quote("Invalid email"), 303)
+    if _worker()[0]:
+        try:
+            worker_api("POST", "/admin/add", {"email": email, "tier": tier, "note": note,
+                                              "skip_confirm": bool(skip_confirm)})
+        except Exception as ex:  # noqa
+            return RedirectResponse("/subscribers/add?m=" + quote(f"Worker error: {ex}"), 303)
+        return RedirectResponse("/subscribers?m=" + quote("Added"), 303)
+    if _subs_guard():
+        return RedirectResponse("/subscribers", 303)
     sid = SUBS.create_pending(email, tier, source="comp")
     SUBS.db().execute("UPDATE subscribers SET notes = ? WHERE id = ?", [note or "manual add", sid])
     if skip_confirm:
@@ -1685,6 +1839,9 @@ def subscribers_export_csv():
 
 @app.get("/subscribers/{sid}", response_class=HTMLResponse)
 def subscriber_detail(sid: int, request: Request):
+    wv = _worker_subscriber_detail(sid, request)
+    if wv is not None:
+        return wv
     g = _subs_guard()
     if g:
         return g
@@ -1762,6 +1919,15 @@ def subscriber_detail(sid: int, request: Request):
 @app.post("/subscribers/{sid}/edit")
 def subscriber_edit(sid: int, tier: str = Form(""), status: str = Form(""), vendors: str = Form(""),
                     min_score: str = Form(""), instant: str = Form(""), digest: str = Form("")):
+    if _worker()[0]:
+        try:
+            worker_api("POST", f"/admin/subscribers/{sid}/edit", {
+                "tier": tier or None, "status": status or None,
+                "vendors": [v.strip() for v in re.split(r"[,\n]", vendors) if v.strip()][:60],
+                "min_score": min_score.strip(), "instant": bool(instant), "digest": bool(digest)})
+        except Exception as ex:  # noqa
+            return RedirectResponse(f"/subscribers/{sid}?m=" + quote(f"Worker error: {ex}"), 303)
+        return RedirectResponse(f"/subscribers/{sid}?m=" + quote("Saved"), 303)
     if _subs_guard():
         return RedirectResponse("/subscribers", 303)
     if tier in subsconfig.load()["tiers"]:
@@ -1793,6 +1959,12 @@ def subscriber_channel_remove(sid: int, cid: int = Form(0)):
 
 @app.post("/subscribers/{sid}/test")
 def subscriber_test(sid: int):
+    if _worker()[0]:
+        try:
+            worker_api("POST", f"/admin/subscribers/{sid}/test", {})
+        except Exception as ex:  # noqa
+            return RedirectResponse(f"/subscribers/{sid}?m=" + quote(f"Worker error: {ex}"), 303)
+        return RedirectResponse(f"/subscribers/{sid}?m=" + quote("Test alert sent"), 303)
     if not _subs_guard():
         subprocess.Popen([sys.executable, str(ROOT / "bin" / "deliver.py"), "--test", str(sid)],
                          cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -1802,6 +1974,13 @@ def subscriber_test(sid: int):
 
 @app.get("/subscribers/{sid}/export.json", response_class=PlainTextResponse)
 def subscriber_export(sid: int):
+    if _worker()[0]:
+        try:
+            data = worker_api("GET", f"/admin/subscribers/{sid}/export")
+        except Exception as ex:  # noqa
+            return PlainTextResponse(f"worker error: {ex}", status_code=502)
+        return PlainTextResponse(json.dumps(data, indent=2, default=str), media_type="application/json",
+                                 headers={"Content-Disposition": f"attachment; filename=subscriber-{sid}.json"})
     if _subs_guard():
         return PlainTextResponse("unavailable", status_code=503)
     data = SUBS.export_subscriber(sid)
@@ -1812,6 +1991,12 @@ def subscriber_export(sid: int):
 
 @app.post("/subscribers/{sid}/erase", response_class=HTMLResponse)
 def subscriber_erase(sid: int):
+    if _worker()[0]:
+        try:
+            worker_api("POST", f"/admin/subscribers/{sid}/erase", {})
+        except Exception as ex:  # noqa
+            return RedirectResponse("/subscribers?m=" + quote(f"Worker error: {ex}"), 303)
+        return RedirectResponse("/subscribers?m=" + quote(f"Subscriber #{sid} erased"), 303)
     if _subs_guard():
         return RedirectResponse("/subscribers", 303)
     s = SUBS.get(sid, hydrate=False)
@@ -1827,6 +2012,31 @@ def subscriber_erase(sid: int):
 
 @app.get("/subscriptions", response_class=HTMLResponse)
 def subscriptions_settings(request: Request):
+    base, _ = _worker()
+    if base:
+        try:
+            st = worker_api("GET", "/admin/stats")
+            probs = st.get("problems") or []
+        except Exception as ex:  # noqa
+            st, probs = {}, [f"can't reach the Worker: {ex}"]
+        ready = ('<div class="flash good">Ready to accept subscribers.</div>' if not probs else
+                 '<div class="card" style="border-color:var(--warn)"><b>Before go-live:</b><ul>'
+                 + "".join(f"<li>{e(x)}</li>" for x in probs) + "</ul></div>")
+        body = f"""{ready}
+<div class=card><b>This deployment runs on the CTI Alerts Cloudflare Worker.</b>
+<p class=dim>Config is not edited here — it lives in <span class=mono>worker/wrangler.toml</span>
+(the <span class=mono>[vars]</span> block + the <span class=mono>CONFIG</span> JSON) and in Worker
+secrets. Change it in git and redeploy:</p>
+<pre>cd worker
+npx wrangler deploy                 # or: git push  (Cloudflare auto-builds)
+npx wrangler secret put STRIPE_SECRET_KEY
+npx wrangler d1 execute cti-subs --remote --file schema.sql   # first time only</pre>
+<p class=dim>Full checklist: <span class=mono>worker/README.md</span> and
+<span class=mono>docs/legal/compliance-runbook.md</span>.</p>
+<p>Worker: <span class=mono>{e(base)}</span> · active subs {e(st.get('total_active', 0))}
+· est. MRR £{(st.get('mrr_pence', 0) or 0) / 100:,.0f}</p></div>
+"""
+        return page("Subscription settings", body, "/subscribers", flash_from(request))
     g = _subs_guard()
     if g:
         return g

@@ -59,16 +59,43 @@ def main() -> int:
     conf = publishers.configured(env)
     (ok if conf else warn)(f"social targets configured: {', '.join(conf) or 'none'}")
 
-    hd("Subscription database")
+    worker_url = env.get("CTI_WORKER_URL", "").rstrip("/")
+    if worker_url:
+        hd("CTI Alerts Worker")
+        import requests
+        try:
+            r = requests.get(f"{worker_url}/healthz", timeout=10)
+            (ok if r.ok else bad)(f"{worker_url}/healthz -> {r.status_code}")
+        except Exception as ex:  # noqa
+            bad(f"can't reach {worker_url}: {ex}")
+        (ok if env.get("CTI_INGEST_SECRET") else bad)("CTI_INGEST_SECRET set (pipeline -> worker)")
+        (ok if env.get("CTI_ADMIN_TOKEN") else bad)("CTI_ADMIN_TOKEN set (owner panel -> worker)")
+        try:
+            r = requests.get(f"{worker_url}/admin/stats", timeout=10,
+                             headers={"Authorization": f"Bearer {env.get('CTI_ADMIN_TOKEN', '')}"})
+            if r.ok:
+                j = r.json()
+                ok(f"admin API OK — {j.get('total_active', 0)} active, "
+                   f"£{(j.get('mrr_pence', 0) or 0) / 100:.0f}/mo est")
+                for p in j.get("problems", []):
+                    bad("worker: " + p)
+            else:
+                bad(f"admin API -> {r.status_code} (check CTI_ADMIN_TOKEN)")
+        except Exception as ex:  # noqa
+            warn(f"admin API check skipped: {ex}")
+        print("\n  Deployment: the Cloudflare Worker (worker/). Local subscription")
+        print("  stack below is a dev-only fallback.")
+
+    hd("Subscription database (local — dev fallback)")
     try:
         d = dbmod.get_db()
         S.ensure_schema()
         st = S.stats()
         ok(f"backend = {d.backend}, schema v{d.schema_version()}, "
            f"{st['total_active']} active subscriber(s)")
-        if d.backend == "sqlite" and (cfg.get("enabled")):
-            warn("using LOCAL sqlite for PII while enabled — set TURSO_DATABASE_URL + "
-                 "TURSO_AUTH_TOKEN for the production (EU) store")
+        if d.backend == "sqlite" and cfg.get("enabled") and not worker_url:
+            warn("using LOCAL sqlite for PII while enabled — deploy the Worker, or set "
+                 "TURSO_DATABASE_URL + TURSO_AUTH_TOKEN")
     except Exception as ex:  # noqa
         bad(f"database not reachable: {ex}")
         hard_fail = True
