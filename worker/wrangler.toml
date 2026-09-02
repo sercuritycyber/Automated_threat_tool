@@ -3,7 +3,8 @@ main = "src/index.js"
 compatibility_date = "2025-01-15"
 compatibility_flags = ["nodejs_compat"]
 workers_dev = false
-
+[[assets]]
+assets = /web
 # Production route — the DNS record `cti` must exist (proxied) in the zone.
 [[routes]]
 pattern = "cti.securitycyber.uk/*"
@@ -19,6 +20,23 @@ database_id = "2d514521-9be2-4c8e-8bf0-73c68bcaeafd"
 [triggers]
 # 08:15 UTC daily digest · 03:30 UTC Sunday retention + intent purge
 crons = ["15 8 * * *", "30 3 * * 0"]
+
+[observability]
+enabled = false
+head_sampling_rate = 1
+redact_query_string = false
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+persist = true
+invocation_logs = true
+
+[observability.traces]
+enabled = false
+persist = true
+head_sampling_rate = 1
+
 
 [vars]
 BRAND = "SecurityCyber"
@@ -64,6 +82,9 @@ CONFIG = """
     }
   }
 }
+
+
+
 """
 
 # Secrets — set with:  npx wrangler secret put <NAME>
