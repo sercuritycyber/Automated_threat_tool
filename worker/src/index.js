@@ -55,9 +55,14 @@ async function route(request, env, ctx, url, path, cfg) {
 
   if (path === "/logo.svg")
     return new Response(LOGO_SVG, { headers: { "Content-Type": "image/svg+xml", "Cache-Control": "public, max-age=86400" } });
-  if (path === "/healthz") { try { await db.stats(D); return text("ok"); } catch (e) { return text("db error: " + e, 500); } }
+  if (path === "/healthz") {
+    try { await db.stats(D); return text("ok"); }
+    catch (e) { console.error("healthz", e); return text("degraded", 503); }
+  }
   if (path === "/robots.txt")
-    return text("User-agent: *\nAllow: /\nDisallow: /manage\nDisallow: /confirm\nDisallow: /webhooks\nDisallow: /channel\nDisallow: /admin\n");
+    return text("User-agent: *\nAllow: /$\nAllow: /subscribe\nAllow: /brief\nAllow: /privacy\nAllow: /terms\nAllow: /cookies\n"
+      + "Disallow: /manage\nDisallow: /confirm\nDisallow: /unsubscribe\nDisallow: /welcome\nDisallow: /brief/thanks\n"
+      + "Disallow: /channel\nDisallow: /webhooks\nDisallow: /internal\nDisallow: /admin\nDisallow: /account\n");
 
   // ---- legal ----
   if (["/privacy", "/terms", "/cookies"].includes(path) && m === "GET") {
@@ -431,7 +436,8 @@ async function telegramLink(request, env, cfg, url) {
   return html(page(cfg, "Connect Telegram",
     `<h1>Connect Telegram</h1><p class=lede>Open the bot and press <b>Start</b> — you'll be linked automatically.</p>
 <p><a class=btn href='${esc(u)}' rel=noopener>Open @${esc(bot)}</a></p>
-<p class=muted>Link valid for 1 hour. Then return to <a href='/manage?t=${esc(tok)}'>your preferences</a>.</p>`));
+<p class=muted>Link valid for 1 hour. Then return to <a href='/manage?t=${esc(tok)}'>your preferences</a>.</p>`,
+    "", "", true));
 }
 
 async function telegramWebhook(request, env, cfg) {

@@ -98,14 +98,15 @@ border-radius:var(--radius-lg);padding:32px;text-align:center;margin:44px 0}
 .who b{color:var(--white);font-family:var(--display);display:block;margin-bottom:3px}
 `;
 
-export function page(cfg, title, body, flash = "", flashKind = "") {
+export function page(cfg, title, body, flash = "", flashKind = "", noindex = false) {
   const fl = flash ? `<div class="flash ${flashKind}">${esc(flash)}</div>` : "";
   const ico = cfg.ico_reg ? ` · ICO registration ${esc(cfg.ico_reg)}` : "";
   const legal = cfg.company_legal_name || "SecurityCyber";
   const contact = cfg.contact_email || "securitycyber_cti@securitycyber.uk";
+  const robots = noindex ? "noindex,nofollow" : "index,follow";
   return `<!doctype html><html lang=en><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1">
-<meta name=robots content="index,follow"><meta name=color-scheme content="dark">
+<meta name=robots content="${robots}"><meta name=color-scheme content="dark">
 <title>${esc(title)} · SecurityCyber CTI</title><link rel=icon href="/logo.svg">
 <style>${CSS}</style></head><body><div class=wrap>
 <nav><a class=brand href="/">${LOGO_SVG}<b>Security<span>Cyber</span></b> <span class=tag style="font:400 12px var(--mono);color:var(--dim)">/ CTI</span></a>
@@ -414,11 +415,12 @@ ${portal}
 <form method=post action="/manage/delete" style="margin-top:14px"
  onsubmit="return confirm('Delete your account and all your data? If you have a paid subscription this also cancels it. This cannot be undone.')">
 <input type=hidden name=t value="${esc(tok)}"><button class="btn bad">Delete my account &amp; data</button></form></div>`;
-  return page(cfg, "Preferences", body, flash, flashKind);
+  return page(cfg, "Preferences", body, flash, flashKind, true);   // noindex — token-gated
 }
 
 export function simple(cfg, title, heading, lede, extra = "") {
-  return page(cfg, title, `<h1>${esc(heading)}</h1><p class=lede>${esc(lede)}</p>${extra}`);
+  // transactional / link-gated pages — keep them out of search indexes
+  return page(cfg, title, `<h1>${esc(heading)}</h1><p class=lede>${esc(lede)}</p>${extra}`, "", "", true);
 }
 
 export function briefPage(cfg, flash = "", flashKind = "") {
