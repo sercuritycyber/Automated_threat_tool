@@ -49,10 +49,44 @@ async function req(env, method, path, data) {
   return j;
 }
 
+// Returns the recurring Stripe price id for a tier+cadence. Uses the id from
+// CONFIG.tiers.<tier>.<cadence>_price_id if set; otherwise creates one product
+// per tier and one recurring price per cadence on first use, caching both in
+// D1 kv. So the site works end-to-end with only STRIPE_SECRET_KEY set — no
+// need to pre-create products or paste price ids into wrangler.toml.
+export async function ensureTierPrice(env, cfg, tier, cadence) {
+  const configured = priceId(cfg, tier, cadence);
+  if (configured) return configured;
+  const t = cfg.tiers[tier];
+  if (!t) throw new StripeError(`unknown tier '${tier}'`);
+  const pence = Number(cadence === "weekly" ? t.weekly_pence : t.monthly_pence) || 0;
+  if (!pence) throw new StripeError(`tier '${tier}' has no ${cadence}_pence in CONFIG`);
+  const priceKey = `tier_price:${tier}:${cadence}`;
+  const cached = await db.kvGet(env.DB, priceKey);
+  if (cached) return cached;
+  const prodKey = `tier_product:${tier}`;
+  let productId = await db.kvGet(env.DB, prodKey);
+  if (!productId) {
+    const label = tier.charAt(0).toUpperCase() + tier.slice(1);
+    const product = await req(env, "POST", "/products", { name: `${cfg.brand} CTI Alerts — ${label}` });
+    productId = product.id;
+    if (!productId) throw new StripeError("product created but has no id");
+    await db.kvSet(env.DB, prodKey, productId);
+  }
+  const price = await req(env, "POST", "/prices", {
+    product: productId,
+    currency: "gbp",
+    unit_amount: pence,
+    recurring: { interval: cadence === "weekly" ? "week" : "month" },
+  });
+  if (!price.id) throw new StripeError("price created but has no id");
+  await db.kvSet(env.DB, priceKey, price.id);
+  return price.id;
+}
+
 export async function createCheckoutSession(env, cfg, { tier, cadence, email, successUrl, cancelUrl, clientRef }) {
   cadence = ["monthly", "weekly"].includes(cadence) ? cadence : "monthly";
-  const pid = priceId(cfg, tier, cadence);
-  if (!pid) throw new StripeError(`tier '${tier}' has no ${cadence} price configured`);
+  const pid = await ensureTierPrice(env, cfg, tier, cadence);
   const payload = {
     mode: "subscription",
     line_items: [{ price: pid, quantity: 1 }],

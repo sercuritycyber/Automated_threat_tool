@@ -142,7 +142,7 @@ export function landing(cfg, flash = "", flashKind = "") {
   for (const name of ["individual", "team"]) {
     const t = cfg.tiers[name]; if (!t) continue;
     const chans = (t.channels || []).map(chanLabel).join(" · ");
-    const hasM = !!t.monthly_price_id, hasW = !!t.weekly_price_id;
+    const hasM = Number(t.monthly_pence) > 0, hasW = Number(t.weekly_pence) > 0;
     let price;
     if (hasM && hasW) price = `${esc(t.monthly_display)} <span class=p2>or ${esc(t.weekly_display)}</span>`;
     else if (hasW) price = esc(t.weekly_display);
@@ -326,18 +326,24 @@ and the next exploited vulnerability that touches your stack will find you — n
   return page(cfg, "Threat intelligence alerts for defenders", body, flash, flashKind);
 }
 
-export function subscribeForm(cfg, tier, flash = "", flashKind = "") {
+export function subscribeForm(cfg, tier, flash = "", flashKind = "", avail = null) {
   const t = cfg.tiers[tier];
   const allowed = (t.channels || []).filter((x) => CHAN_META[x]);
-  const hasM = !!t.monthly_price_id, hasW = !!t.weekly_price_id;
+  // A cadence is offered when it has a price in pence. The Stripe price id is
+  // optional — billing.ensureTierPrice() creates one on the first checkout.
+  const hasM = Number(t.monthly_pence) > 0, hasW = Number(t.weekly_pence) > 0;
   let cadOpts = "";
-  for (const [cad, avail, disp] of [["monthly", hasM, t.monthly_display], ["weekly", hasW, t.weekly_display]]) {
-    if (!avail) continue;
+  for (const [cad, on, disp] of [["monthly", hasM, t.monthly_display], ["weekly", hasW, t.weekly_display]]) {
+    if (!on) continue;
     const chk = (cad === "monthly" && hasM) || (cad === "weekly" && !hasM) ? " checked" : "";
     cadOpts += `<label><input type=radio name=cadence value="${cad}"${chk}><span>${esc(disp)}</span></label>`;
   }
-  const platOpts = allowed.map((p) =>
-    `<option value="${p}" data-hint="${esc(CHAN_META[p][1])}" data-ph="${esc(CHAN_META[p][2])}">${esc(CHAN_META[p][0])}</option>`).join("");
+  const platOpts = allowed.map((p) => {
+    const a = avail ? (avail[p] || { ok: true }) : { ok: true };
+    const label = a.ok ? CHAN_META[p][0] : `${CHAN_META[p][0]} — unavailable`;
+    return `<option value="${p}"${a.ok ? "" : " disabled"} data-hint="${esc(a.ok ? CHAN_META[p][1] : a.why)}" `
+      + `data-ph="${esc(CHAN_META[p][2])}">${esc(label)}</option>`;
+  }).join("");
   const contact = cfg.contact_email || "securitycyber_cti@securitycyber.uk";
   const body = `
 <h1>Subscribe — ${tier[0].toUpperCase() + tier.slice(1)}</h1>

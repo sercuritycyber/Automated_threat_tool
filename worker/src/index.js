@@ -2,7 +2,7 @@
 import { config, problems, advisories, priceToTier, monthlyPence } from "./config.js";
 import * as db from "./db.js";
 import * as billing from "./billing.js";
-import { send, verifyTarget } from "./channels.js";
+import { send, verifyTarget, channelAvailability } from "./channels.js";
 import { sign, verify, newId, BadToken, timingSafeEqual } from "./tokens.js";
 import { page, landing, subscribeForm, managePage, simple, briefPage, LOGO_SVG, chanLabel } from "./pages.js";
 import { legalHtml } from "./legal.js";
@@ -86,10 +86,15 @@ async function route(request, env, ctx, url, path, cfg) {
     const tier = url.searchParams.get("tier") || "individual";
     if (!cfg.tiers[tier]) return redirect("/?m=" + q("That plan isn't available."));
     const t = cfg.tiers[tier];
-    if (!t.monthly_price_id && !t.weekly_price_id)
+    // Checkout is live as soon as Stripe has a key and the tier has a price in
+    // pence — the Stripe price id itself is created on demand by
+    // billing.ensureTierPrice(), so blank ids must NOT hide the form.
+    const priced = Number(t.monthly_pence) > 0 || Number(t.weekly_pence) > 0;
+    if (!priced || !env.STRIPE_SECRET_KEY)
       return html(simple(cfg, "Almost there", "Checkout isn't switched on yet",
         "Billing for this plan is being finalised — check back shortly."));
-    return html(subscribeForm(cfg, tier, url.searchParams.get("m") || "", url.searchParams.get("k") || ""));
+    return html(subscribeForm(cfg, tier, url.searchParams.get("m") || "", url.searchParams.get("k") || "",
+      channelAvailability(env, cfg)));
   }
   if (path === "/subscribe" && m === "POST") return subscribeSubmit(request, env, cfg);
 
@@ -186,6 +191,10 @@ async function subscribeSubmit(request, env, cfg) {
   let cadence = ["monthly", "weekly"].includes(f.cadence) ? f.cadence : "monthly";
   const tcfg = cfg.tiers[tier];
   let platform = (tcfg.channels || []).includes(f.platform) ? f.platform : "email";
+  // Don't take money for a delivery route that can't run yet.
+  const avail = channelAvailability(env, cfg);
+  if (!(avail[platform] || { ok: true }).ok)
+    return redirect(`/subscribe?tier=${tier}&m=` + q(`${chanLabel(platform)} is ${avail[platform].why}. Pick another delivery method.`) + "&k=bad");
   let target = "";
   if (platform === "email") target = email;
   else if (platform !== "telegram") {
@@ -622,6 +631,32 @@ async function adminApi(request, env, cfg, url, path) {
       if (s) await deliverInstant(env, cfg, s, [{ post_key: "test:" + nowIso(), title: "Test alert", score: 100, cve_ids: [], post_text: "Operator test alert." }], "test");
       return json({ ok: true });
     }
+  }
+  // ---- read-only D1 browser for the owner dashboard ----
+  // GET /admin/db            -> table names + row counts
+  // GET /admin/db/<table>    -> ?limit=&offset= rows, newest first where possible
+  if (seg[1] === "db" && request.method === "GET" && !seg[2]) {
+    const { results } = await D.prepare(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' ORDER BY name").all();
+    const tables = [];
+    for (const r of results || []) {
+      const c = await D.prepare(`SELECT COUNT(*) n FROM "${r.name}"`).first().catch(() => ({ n: null }));
+      tables.push({ name: r.name, rows: c?.n ?? null });
+    }
+    return json({ tables });
+  }
+  if (seg[1] === "db" && seg[2] && request.method === "GET") {
+    const { results } = await D.prepare(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%'").all();
+    const names = (results || []).map((r) => r.name);
+    if (!names.includes(seg[2])) return json({ error: "unknown table" }, 404);   // no injection: whitelisted
+    const limit = Math.min(Number(url.searchParams.get("limit")) || 100, 500);
+    const offset = Math.max(Number(url.searchParams.get("offset")) || 0, 0);
+    const cols = (await D.prepare(`PRAGMA table_info("${seg[2]}")`).all()).results || [];
+    const order = cols.some((c) => c.name === "id") ? 'ORDER BY "id" DESC' : "";
+    const rows = (await D.prepare(`SELECT * FROM "${seg[2]}" ${order} LIMIT ? OFFSET ?`).bind(limit, offset).all()).results || [];
+    const total = (await D.prepare(`SELECT COUNT(*) n FROM "${seg[2]}"`).first())?.n ?? null;
+    return json({ table: seg[2], columns: cols.map((c) => c.name), rows, total, limit, offset });
   }
   if (seg[1] === "add" && request.method === "POST") {
     const b = await request.json().catch(() => ({}));

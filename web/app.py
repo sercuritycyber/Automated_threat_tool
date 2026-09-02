@@ -306,6 +306,7 @@ NAV = [
     ("/drafts", "Drafts"),
     ("/subscribers", "Subscribers"),
     ("/purchases", "Purchases"),
+    ("/d1", "D1 tables"),
     ("/settings", "Settings"),
     ("/feeds", "Feeds"),
     ("/secrets", "Secrets"),
@@ -2049,6 +2050,55 @@ def purchases_list(request: Request):
 </table></div>
 """
     return page("Purchases", body, "/purchases", flash_from(request))
+
+
+@app.get("/d1", response_class=HTMLResponse)
+def d1_browser(request: Request, table: str = "", offset: int = 0):
+    """Read-only window onto the Worker's D1 database (via /admin/db)."""
+    if not _worker()[0]:
+        return page("D1 tables",
+                    "<div class=card>Set <span class=mono>CTI_WORKER_URL</span> and "
+                    "<span class=mono>CTI_ADMIN_TOKEN</span> on the <a href=/secrets>Secrets</a> "
+                    "page to browse the Worker's D1 database.</div>", "/d1")
+    try:
+        tables = worker_api("GET", "/admin/db")["tables"]
+    except Exception as ex:  # noqa
+        return page("D1 tables", '<div class="flash" style="border-color:var(--bad)">'
+                    f'Worker error: {e(str(ex)[:300])}</div>', "/d1")
+
+    tabs = "".join(
+        f'<a href="/d1?table={quote(t["name"])}" class="btn ghost" '
+        f'style="padding:4px 10px;font-size:12px;{"border-color:var(--accent)" if t["name"] == table else ""}">'
+        f'{e(t["name"])} <span class=dim>{t["rows"] if t["rows"] is not None else "?"}</span></a> '
+        for t in tables)
+    body = f'<div class=card><div class=l style="margin-bottom:10px">tables</div>{tabs}</div>'
+
+    if table:
+        try:
+            d = worker_api("GET", f"/admin/db/{quote(table)}?limit=100&offset={int(offset)}")
+        except Exception as ex:  # noqa
+            return page("D1 tables", body + '<div class="flash" style="border-color:var(--bad)">'
+                        f'{e(str(ex)[:300])}</div>', "/d1")
+        cols = d["columns"]
+
+        def _cell(v):
+            s = "" if v is None else str(v)
+            return f'<td class=dim>—</td>' if v is None else f"<td>{e(s[:120])}</td>"
+
+        head = "".join(f"<th>{e(c)}</th>" for c in cols)
+        rows = "".join("<tr>" + "".join(_cell(r.get(c)) for c in cols) + "</tr>" for r in d["rows"])
+        nxt, prv = int(offset) + d["limit"], max(int(offset) - d["limit"], 0)
+        pager = (f'<div class=row style="padding:10px">'
+                 + (f'<a class="btn ghost" href="/d1?table={quote(table)}&offset={prv}">← prev</a>' if offset else "")
+                 + (f'<a class="btn ghost" href="/d1?table={quote(table)}&offset={nxt}">next →</a>'
+                    if nxt < (d["total"] or 0) else "")
+                 + f'<span class=dim style="margin-left:auto">{d["total"]} rows total</span></div>')
+        body += (f'<div class=card style="padding:0;overflow-x:auto"><table>'
+                 f"<tr>{head}</tr>{rows or f'<tr><td colspan={len(cols)} class=dim>empty</td></tr>'}"
+                 f"</table>{pager}</div>")
+    else:
+        body += '<div class=card class=dim>Pick a table above.</div>'
+    return page("D1 tables", body, "/d1", flash_from(request))
 
 
 @app.post("/purchases/{session_id}/fulfilled")

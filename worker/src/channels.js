@@ -15,6 +15,28 @@ function teaser(text, limit, short) {
   return ((hook.length > room ? hook.slice(0, Math.max(0, room - 1)).trimEnd() + "…" : hook) + tail).slice(0, limit);
 }
 
+// ---- availability -------------------------------------------------------
+// Which delivery kinds can actually work right now. email needs Resend and
+// telegram needs the bot; the rest only need a URL/topic the subscriber
+// supplies, so they're always on unless CONFIG.channels_disabled says no.
+// Drives the greyed-out "unavailable" options on the signup form and the
+// server-side reject, so a half-configured box degrades instead of erroring.
+export function channelAvailability(env, cfg) {
+  const off = new Set(cfg.channels_disabled || []);
+  const mk = (ok, why = "") => ({ ok, why });
+  const out = {
+    email: env.RESEND_API_KEY ? mk(true) : mk(false, "email delivery isn't switched on yet"),
+    telegram: (env.TELEGRAM_BOT_TOKEN && env.TELEGRAM_BOT_USERNAME)
+      ? mk(true) : mk(false, "the Telegram bot isn't connected yet"),
+    discord: mk(true),
+    slack: mk(true),
+    webhook: mk(true),
+    ntfy: mk(true),
+  };
+  for (const k of Object.keys(out)) if (off.has(k)) out[k] = mk(false, "temporarily unavailable");
+  return out;
+}
+
 // ---- Resend (email) ----------------------------------------------------
 async function sendEmail(env, cfg, to, subject, body, jsonPayload, listUnsub) {
   if (!env.RESEND_API_KEY) return res("email", false, "", "RESEND_API_KEY not set");

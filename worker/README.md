@@ -3,12 +3,14 @@
 The public subscription service for the SecurityCyber CTI alert feed. Same
 deploy model as securitycyber.uk: code in GitHub → push → Cloudflare builds.
 
-- **Worker name:** `automated-threat-tool` (matches the repo; set in `wrangler.toml`)
-- **Repo:** `github.com/sercuritycyber/Automated_threat_tool`
-- **Workers Builds root directory:** `worker` — this repo's top level is the
-  Python pipeline; the Worker lives in `worker/`. In the Cloudflare dashboard
-  (Workers → the Worker → Settings → Builds) set **Root directory = `worker`**,
-  deploy command `npx wrangler deploy`. Without that it will try to build the repo root.
+- **Worker name:** `cti-alerts` (set in `wrangler.toml`)
+- **Deploy:** `npx wrangler deploy` **from this `worker/` directory**. That is the
+  only supported path right now. The GitHub repo is *cold storage* — Workers
+  Builds failing there is expected and ignored, because the repo root is the
+  Python pipeline, not the Worker.
+- **Custom domain:** don't hand-add a DNS record. Cloudflare dashboard →
+  Workers & Pages → `cti-alerts` → Settings → **Domains & Routes → Add → Custom
+  Domain** → `cti.securitycyber.uk`. That creates and proxies the DNS record for you.
 - **Route:** `cti.securitycyber.uk/*`
 - **Storage:** D1 (`cti-subs`) — all subscriber PII
 - **Email:** Resend
@@ -64,10 +66,10 @@ npx wrangler secret put TELEGRAM_WEBHOOK_SECRET
 # 4. DNS: add an A/AAAA (or CNAME) record `cti` in the securitycyber.uk zone,
 #    proxied (orange cloud).
 
-# 5. deploy   (run from this worker/ directory)
+# 5. deploy   (ALWAYS run from this worker/ directory)
 npx wrangler deploy
-#    or: Cloudflare dashboard → Workers → automated-threat-tool → Settings →
-#    Builds → connect this repo, Root directory = worker, so `git push` deploys.
+#    GitHub is cold storage — its Workers Builds are expected to fail and are
+#    ignored. Deployment is manual until Charlie decides otherwise.
 
 # 6. Stripe webhook endpoint:
 #    https://cti.securitycyber.uk/webhooks/stripe   → copy signing secret to STRIPE_WEBHOOK_SECRET

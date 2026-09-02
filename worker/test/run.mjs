@@ -2,7 +2,8 @@
 //   node worker/test/run.mjs
 import { sign, verify, newId, BadToken, timingSafeEqual } from "../src/tokens.js";
 import { config, priceToTier, priceId, monthlyPence, problems } from "../src/config.js";
-import { verifyTarget, teaser } from "../src/channels.js";
+import { verifyTarget, teaser, channelAvailability } from "../src/channels.js";
+import { landing, subscribeForm } from "../src/pages.js";
 import * as billing from "../src/billing.js";
 import { mdToHtml, esc } from "../src/util.js";
 import { legalHtml } from "../src/legal.js";
@@ -41,6 +42,29 @@ ok("problems() DOES block go-live on missing ICO",
     { RESEND_API_KEY: "re_x", STRIPE_SECRET_KEY: "sk_live_x", STRIPE_WEBHOOK_SECRET: "whsec_x" })
     .some((x) => /ICO/.test(x)));
 
+// ---- storefront renders WITHOUT Stripe price ids (they auto-create) ----
+// Regression: the pricing + cadence options used to be gated on *_price_id,
+// so with blank ids the subscribe form rendered zero purchase options.
+const cNoPrice = config({ ...cenv, CONFIG: JSON.stringify({ tiers: {} }) });
+const landHtml = landing(cNoPrice);
+ok("landing shows monthly AND weekly price", landHtml.includes("£8 / month") && landHtml.includes("£2 / week"));
+ok("landing shows the team tier + one-off brief", landHtml.includes("£18 / month") && landHtml.includes("£49"));
+const subHtml = subscribeForm(cNoPrice, "individual", "", "", channelAvailability({ RESEND_API_KEY: "re_x" }, cNoPrice));
+ok("subscribe form offers both cadences", /value="monthly"/.test(subHtml) && /value="weekly"/.test(subHtml));
+ok("subscribe form has a submit path", subHtml.includes('action="/subscribe"'));
+
+// ---- channel availability (graceful degradation) ----
+const availNone = channelAvailability({}, cNoPrice);
+ok("email unavailable without Resend", !availNone.email.ok && /email/i.test(availNone.email.why));
+ok("telegram unavailable without a bot", !availNone.telegram.ok);
+ok("discord always available (subscriber supplies the webhook)", availNone.discord.ok);
+const availOn = channelAvailability({ RESEND_API_KEY: "re_x", TELEGRAM_BOT_TOKEN: "t", TELEGRAM_BOT_USERNAME: "b" }, cNoPrice);
+ok("email + telegram available once configured", availOn.email.ok && availOn.telegram.ok);
+ok("CONFIG.channels_disabled forces a kind off",
+  !channelAvailability({ RESEND_API_KEY: "re_x" }, config({ ...cenv, CONFIG: JSON.stringify({ channels_disabled: ["slack"] }) })).slack.ok);
+ok("unavailable channels render disabled on the form",
+  subscribeForm(cNoPrice, "individual", "", "", availNone).includes("unavailable"));
+
 // ---- channels ----
 ok("verifyTarget discord ok", verifyTarget("discord", "https://discord.com/api/webhooks/123/abc")[0]);
 ok("verifyTarget discord bad", !verifyTarget("discord", "https://evil.com/x")[0]);
@@ -55,6 +79,10 @@ ok("teaser prefers short_text", teaser(long, 280, "short version https://ex.co")
 // ---- billing ----
 const enc = billing._formEncode({ a: { b: "c" }, items: [{ price: "p", quantity: 1 }], ok: true });
 ok("stripe form encoding", enc.includes("a%5Bb%5D=c") && enc.includes("items%5B0%5D%5Bprice%5D=p") && enc.includes("ok=true"));
+ok("stripe recurring form encoding", billing._formEncode({ recurring: { interval: "week" } }) === "recurring%5Binterval%5D=week");
+// ensureTierPrice short-circuits to the configured id (no network)
+ok("ensureTierPrice uses configured price id",
+  (await billing.ensureTierPrice({}, c, "individual", "weekly")) === "price_iw");
 // verifyWebhook: sign a payload the way Stripe does
 async function stripeSig(payload, secret) {
   const ts = Math.floor(Date.now() / 1000);

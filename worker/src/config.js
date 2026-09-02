@@ -3,6 +3,9 @@
 
 const DEFAULTS = {
   live: false,
+  // Delivery kinds to hide from signup regardless of secrets, e.g. ["slack"].
+  // Anything listed here shows as "unavailable" and is rejected server-side.
+  channels_disabled: [],
   rate_limit_per_min: 20,
   retention_days_cancelled: 180,
   retention_days_unconfirmed: 7,
@@ -96,9 +99,8 @@ export function problems(c, env) {
   if (!c.from_email) out.push("FROM_EMAIL var is not set");
   if (!c.contact_email) out.push("CONTACT_EMAIL var is not set (privacy policy)");
   if (!c.company_legal_name) out.push("COMPANY_LEGAL_NAME var is not set (terms)");
-  for (const [name, t] of Object.entries(c.tiers)) {
-    if (!t.monthly_price_id && !t.weekly_price_id) out.push(`tier '${name}' has no Stripe price id`);
-  }
+  // Tier price ids are optional — billing.ensureTierPrice() creates them on
+  // first checkout when they're blank. Only the Stripe key + webhook matter.
   if (!env.RESEND_API_KEY) out.push("RESEND_API_KEY secret is not set");
   if (c.live) {
     // going live = taking real money for a service that holds a customer list
@@ -117,6 +119,8 @@ export function advisories(c) {
   if (!c.live && !c.ico_reg)
     out.push("ICO registration not set yet — required before CONFIG.live: true. Deploy + test now, register at ico.org.uk, then paste ICO_REG.");
   if (!c.live) out.push("Stripe is in TEST mode (CONFIG.live: false) — no real charges. Run a full test checkout before going live.");
+  const noPrice = Object.entries(c.tiers).filter(([, t]) => !t.monthly_price_id && !t.weekly_price_id).map(([n]) => n);
+  if (noPrice.length) out.push(`tiers [${noPrice.join(", ")}] have no Stripe price id — a product + price will be auto-created on the first checkout. Set the ids in CONFIG to reuse existing Stripe products instead.`);
   return out;
 }
 
