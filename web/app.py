@@ -37,14 +37,19 @@ LOGS = ROOT / "logs"
 for d in (STATE, DRAFTS, LOGS):
     d.mkdir(exist_ok=True)
 
-SECRET_KEYS = [
-    ("LINKEDIN_ACCESS_TOKEN", "LinkedIn access token", "scope: w_member_social + openid profile"),
-    ("LINKEDIN_AUTHOR_URN", "Author URN", "optional — urn:li:person:… or urn:li:organization:…"),
-    ("LINKEDIN_CLIENT_ID", "OAuth client ID", "optional — enables auto token refresh"),
-    ("LINKEDIN_CLIENT_SECRET", "OAuth client secret", "optional"),
-    ("LINKEDIN_REFRESH_TOKEN", "OAuth refresh token", "optional"),
-    ("NTFY_URL", "Notification URL", "optional — ntfy.sh-style topic for alerts"),
-]
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "bin"))
+import publishers  # noqa: E402
+
+# Secrets page fields: every provider's keys, then the shared extras.
+SECRET_KEYS: list[tuple[str, str, str]] = []
+for _prov, _keys in publishers.PROVIDER_KEYS.items():
+    SECRET_KEYS += _keys
+SECRET_KEYS += [("NTFY_URL", "Notification URL", "optional — ntfy.sh-style topic for alerts")]
+
+# fields shown as plain text (not masked) so they can be checked / fixed
+PLAINTEXT_KEYS = {"LINKEDIN_AUTHOR_URN", "MASTODON_BASE_URL", "BLUESKY_HANDLE", "BLUESKY_PDS_URL",
+                  "EMAIL_SMTP_HOST", "EMAIL_SMTP_PORT", "EMAIL_SMTP_USER", "EMAIL_FROM", "EMAIL_TO"}
+ALL_TARGETS = list(publishers.PROVIDERS)
 
 app = FastAPI(title="Blue Team CTI")
 
@@ -289,6 +294,7 @@ animation:pulse 2.4s infinite}
 NAV = [
     ("/", "Dashboard"),
     ("/review", "Review queue"),
+    ("/compose", "Compose"),
     ("/candidates", "Candidates"),
     ("/drafts", "Drafts"),
     ("/settings", "Settings"),
@@ -317,6 +323,73 @@ def flash_from(req: Request) -> str:
     return req.query_params.get("m", "")
 
 
+# ----------------------------------------------------------------------------- publishing helpers
+def _creds() -> dict:
+    d = dict(os.environ)
+    d.update(load_env())
+    return d
+
+
+def configured_targets() -> list[str]:
+    return publishers.configured(_creds())
+
+
+def settings_targets() -> list[str]:
+    s = load_yaml(CFG / "settings.yaml")
+    return list(s.get("publish", {}).get("targets") or ["linkedin"])
+
+
+def target_checkboxes(name: str, selected: list[str], only_ready: bool = False) -> str:
+    ready = set(configured_targets())
+    out = []
+    for t in ALL_TARGETS:
+        lab = publishers.PROVIDER_LABELS.get(t, t)
+        dis = " disabled" if (only_ready and t not in ready) else ""
+        note = "" if t in ready else " <span class=dim>(no creds)</span>"
+        chk = " checked" if t in selected else ""
+        out.append(f'<label style="display:inline-flex;gap:5px;align-items:center;margin:0 14px 0 0;font-size:13px">'
+                   f'<input type=checkbox name={name} value="{t}"{chk}{dis}> {e(lab)}{note}</label>')
+    return "".join(out)
+
+
+def queue_load() -> dict:
+    """pending.json in the new shape {held_at, queue:[...], considered:[...]}.
+    Migrates the old single-post shape on read."""
+    p = read_json(STATE / "pending.json")
+    if not p:
+        return {}
+    if isinstance(p.get("queue"), list):
+        return p
+    dec = p.get("decision") or {}
+    posts = dec.get("posts") or ([dec["selected"]] if isinstance(dec.get("selected"), dict) else [])
+    return {"held_at": p.get("held_at", ""), "manual": p.get("manual", False),
+            "queue": [dict(x, min_score=dec.get("min_score", 65),
+                           held_because=("manual" if p.get("manual") else "review")) for x in posts],
+            "considered": dec.get("considered", [])}
+
+
+def queue_save(q: dict) -> None:
+    (STATE / "pending.json").write_text(json.dumps(q, indent=2))
+
+
+def queue_append(items: list[dict], manual: bool = False, considered=None) -> int:
+    q = queue_load() or {"held_at": datetime.now(timezone.utc).isoformat(), "queue": [], "considered": []}
+    have = {x.get("url") for x in q["queue"] if x.get("url")}
+    added = 0
+    for it in items:
+        if it.get("url") and it["url"] in have:
+            continue
+        q["queue"].append(it)
+        added += 1
+    if manual:
+        q["manual"] = True
+    if considered:
+        q["considered"] = considered
+    q["held_at"] = datetime.now(timezone.utc).isoformat()
+    queue_save(q)
+    return added
+
+
 # ----------------------------------------------------------------------------- dashboard
 @app.get("/", response_class=HTMLResponse)
 def dashboard(request: Request):
@@ -328,14 +401,14 @@ def dashboard(request: Request):
     env = load_env()
 
     posted = posted_urls()
-    pending = read_json(STATE / "pending.json")
-    if pending and (pending.get("decision", {}).get("selected", {}).get("url") in posted):
-        (STATE / "pending.json").unlink(missing_ok=True)   # stale — already posted
-        pending = None
+    q = _prune_queue(queue_load()) if queue_load() else {}
+    queue_n = len(q.get("queue", [])) if q else 0
 
     dry = str(env.get("CTI_DRY_RUN", pub.get("dry_run", True))).lower() in ("1", "true", "yes", "on")
     mode = pub.get("mode", "auto")
-    tok_ok = bool(env.get("LINKEDIN_ACCESS_TOKEN"))
+    ready = configured_targets()
+    tgts = [t for t in (pub.get("targets") or ["linkedin"]) if t in ready]
+    tok_ok = bool(ready)
 
     max_day = int(pub.get("max_per_day", 5))
     sev = int(pub.get("severity_override_score", 90))
@@ -357,24 +430,27 @@ def dashboard(request: Request):
         f"<td><a href='{e(h.get('url'))}' target=_blank>{e((h.get('title') or '')[:70])}</a>"
         f"<br><span class=dim>{e(h.get('source',''))}"
         f"{(' · ' + e(', '.join(h.get('cve_ids', [])))) if h.get('cve_ids') else ''}</span></td>"
-        f"<td>{('<a target=_blank href=' + e(h.get('post_url')) + '>on LinkedIn ↗</a>') if h.get('post_url') else '<span class=dim>—</span>'}</td></tr>"
+        f"<td>{('<a target=_blank href=' + e(h.get('post_url')) + '>view ↗</a>') if h.get('post_url') else '<span class=dim>—</span>'}"
+        f"{(' <span class=dim>' + e(', '.join(h.get('targets', []))) + '</span>') if h.get('targets') else ''}</td></tr>"
         for h in hist
     ) or "<tr><td colspan=4 class=dim>nothing has been posted for real yet</td></tr>"
 
+    tnames = ", ".join(publishers.PROVIDER_LABELS.get(t, t) for t in tgts) or "—"
+
     # ---- hero state ----
-    if not tok_ok:
-        st_txt, st_col = "NEEDS A LINKEDIN TOKEN", "var(--bad)"
-        st_sub = "Add one in Secrets — the pipeline runs and drafts, but can't post without it."
+    if not ready:
+        st_txt, st_col = "NO NETWORK CONFIGURED", "var(--bad)"
+        st_sub = "Add credentials for LinkedIn, Mastodon, Bluesky, X or email in Secrets. The pipeline still runs and drafts."
     elif dry:
         st_txt, st_col = "DRY-RUN — drafting only", "var(--warn)"
         st_sub = "Stories are drafted and archived but never sent. Hit “Go live” when you're ready."
     elif mode == "review":
         st_txt, st_col = "ARMED — holding for approval", "var(--accent)"
-        st_sub = "Every story that clears the bar waits in the review queue for one click."
+        st_sub = f"Every story that clears the bar waits in the review queue. Posts go to: {tnames}."
     else:
         st_txt, st_col = "LIVE — posting automatically", "var(--good)"
-        st_sub = (f"Auto-posts stories scoring ≥ {min_score}, up to {max_day}/day. "
-                  f"A story ≥ {sev} posts even past the daily cap.")
+        st_sub = (f"Auto-posts stories scoring ≥ {min_score} to {tnames}, up to {max_day}/day. "
+                  f"A story ≥ {sev}, or a big day, posts past the cap.")
 
     nxt = next_run_iso()
     target_ms = 0
@@ -436,21 +512,24 @@ def dashboard(request: Request):
 
     # ---- "what happened last" card ----
     lr_d, when = last.get("decision", "—"), rel_time(last.get("run_at", ""))
+    n_posted, n_held, n_fail = last.get("posted", 0), last.get("held", 0), last.get("failed", 0)
     if last.get("published"):
         pu = last.get("post_url", "")
-        card = (f'<span class="pill good">POSTED</span> to LinkedIn {e(when)} — {e(last.get("title",""))}'
-                + (f' &nbsp;<a class=btn href="{e(pu)}" target=_blank>View post ↗</a>' if pu else ''))
+        extra = (f" · {n_held} held" if n_held else "") + (f" · {n_fail} failed" if n_fail else "")
+        card = (f'<span class="pill good">POSTED</span> {e(n_posted or 1)} item(s) {e(when)} '
+                f'to {e(", ".join(last.get("targets", [])) or "the network")}{e(extra)} — {e(last.get("title",""))}'
+                + (f' &nbsp;<a class=btn href="{e(pu)}" target=_blank>View ↗</a>' if pu else ''))
         cbord = "var(--good)"
-    elif lr_d == "post" and last.get("dry_run"):
-        card = (f'<span class="pill warn">DRY-RUN</span> {e(when)} — a post cleared the bar but '
-                f'<b>nothing was sent</b>. Turn off dry-run in <a href=/settings>Settings</a> to post for real.')
+    elif last.get("dry_run"):
+        card = (f'<span class="pill warn">DRY-RUN</span> {e(when)} — {e(last.get("simulated", 1))} post(s) '
+                f'cleared the bar but <b>nothing was sent</b>. Turn off dry-run in <a href=/settings>Settings</a>.')
         cbord = "var(--warn)"
     elif last.get("error"):
         card = f'<span class="pill bad">FAILED</span> {e(when)} — <span class=mono>{e(last.get("error"))}</span>'
         cbord = "var(--bad)"
     elif lr_d == "pending_review":
-        card = (f'<span class="pill warn">HELD</span> {e(when)} — {e(last.get("title",""))} '
-                f'is waiting for you. <a class=btn good href=/review>Review &amp; approve →</a>')
+        card = (f'<span class="pill warn">HELD</span> {e(when)} — {e(last.get("note") or last.get("title",""))} '
+                f'<a class=btn good href=/review>Review →</a>')
         cbord = "var(--warn)"
     elif lr_d == "skip":
         card = f'<span class="pill dim">skipped</span> {e(when)} — <span class=dim>{e(last.get("reason",""))}</span>'
@@ -460,12 +539,12 @@ def dashboard(request: Request):
         cbord = "var(--line)"
 
     pending_banner = ""
-    if pending:
-        sel = pending.get("decision", {}).get("selected", {})
+    if queue_n:
+        head = q["queue"][0]
         pending_banner = (
             f'<div class="card" style="border-color:var(--warn)">'
-            f'<b>A post is waiting for your approval</b> — score {e(sel.get("score"))}: '
-            f'{e((sel.get("title") or "")[:90])} '
+            f'<b>{queue_n} post(s) waiting for your approval</b> — '
+            f'“{e((head.get("title") or "")[:80])}”{(" +" + str(queue_n - 1) + " more") if queue_n > 1 else ""} '
             f'<a class="btn good" style="margin-left:8px" href="/review">Review &amp; approve →</a></div>'
         )
 
@@ -501,9 +580,9 @@ def dashboard(request: Request):
   <div class="tile {cap_cls}"><div class=n>{used_day}<span class=dim style="font-size:14px">/{max_day}</span></div><div class=l>posts today</div></div>
   <div class=tile><div class=n>{week}</div><div class=l>last 7 days</div></div>
   <div class=tile><div class=n>{avg7}</div><div class=l>avg score · 7d</div></div>
-  <div class=tile><div class=n>{cand_n}</div><div class=l>in the queue</div></div>
-  <div class="tile {'bad' if not tok_ok else 'good'}"><div class=n style="font-size:15px;padding-top:4px">{'token set' if tok_ok else 'no token'}</div><div class=l>linkedin</div></div>
-  <div class=tile><div class=n style="font-size:15px;padding-top:4px">{e(last_post_when)}</div><div class=l>last post</div></div>
+  <div class="tile {'warn' if queue_n else ''}"><div class=n>{queue_n}</div><div class=l>review queue</div></div>
+  <div class=tile><div class=n>{cand_n}</div><div class=l>candidates</div></div>
+  <div class="tile {'bad' if not ready else 'good'}"><div class=n style="font-size:15px;padding-top:4px">{e(', '.join(publishers.PROVIDER_LABELS.get(t,t) for t in tgts)) or 'none'}</div><div class=l>posting to</div></div>
 </div>
 
 <div class=card>
@@ -512,7 +591,7 @@ def dashboard(request: Request):
     <div class=row>
       <form method=post action=/run><button class=btn>▶ Run now</button></form>
       <form method=post action=/fire-top onsubmit="return confirm('Draft the top-ranked candidate now and send it to the review queue?')"><button class="btn ghost">⚡ Fire top candidate</button></form>
-      <form method=post action=/toggle-armed onsubmit="return confirm('{'Switch to LIVE — the next cleared story posts to LinkedIn for real?' if dry else 'Pause posting (dry-run) — drafts only, nothing sent?'}')">{live_toggle}</form>
+      <form method=post action=/toggle-armed onsubmit="return confirm('{'Switch to LIVE — cleared stories post for real?' if dry else 'Pause posting (dry-run) — drafts only, nothing sent?'}')">{live_toggle}</form>
     </div>
   </div>
 </div>
@@ -589,163 +668,204 @@ def fire_top():
     if not pool:
         return RedirectResponse("/?m=" + quote("No fresh candidates to fire — run the pipeline first"), 303)
     top = max(pool, key=lambda x: x.get("pre_score", 0))
-    replaced = (STATE / "pending.json").exists()
-    dec, err = _claude_draft_one(top)
+    it, err = _claude_draft_one(top)
     if err:
         return RedirectResponse("/?m=" + quote("Fire failed — " + err), 303)
-    (STATE / "pending.json").write_text(json.dumps(
-        {"held_at": datetime.now(timezone.utc).isoformat(), "decision": dec, "manual": True}, indent=2))
-    note = f"Drafted “{(top.get('title') or '')[:50]}” — review and approve to post."
-    if replaced:
-        note += " (Replaced the post that was awaiting approval.)"
-    return RedirectResponse("/review?m=" + quote(note), 303)
+    queue_append([it], manual=True)
+    return RedirectResponse("/review?m=" + quote(
+        f"Drafted “{(top.get('title') or '')[:50]}” — review and approve below."), 303)
 
 
 # ----------------------------------------------------------------------------- review queue
+def _prune_queue(q: dict) -> dict:
+    """drop items already posted; delete pending.json if empty."""
+    posted = posted_urls()
+    q["queue"] = [x for x in q.get("queue", []) if x.get("url") not in posted]
+    if not q["queue"]:
+        (STATE / "pending.json").unlink(missing_ok=True)
+    else:
+        queue_save(q)
+    return q
+
+
 @app.get("/review", response_class=HTMLResponse)
 def review(request: Request):
-    posted = posted_urls()
-    pending = read_json(STATE / "pending.json")
-    if pending and pending.get("decision", {}).get("selected", {}).get("url") in posted:
-        (STATE / "pending.json").unlink(missing_ok=True)
-        pending = None
-    if not pending:
-        dec = read_json(STATE / "decision.json") or {}
-        sel0 = dec.get("selected") or {}
-        if dec.get("decision") == "post" and sel0 and sel0.get("url") not in posted:
-            pending = {"held_at": dec.get("run_at", ""), "decision": dec, "_from_decision": True}
-    if not pending:
-        return page("Review queue",
-                    "<div class=card>Nothing waiting. A post lands here when "
-                    "<span class=mono>publish.mode = review</span> and the analyst clears the bar — "
-                    "or it's already been posted (see the Dashboard).</div>",
-                    "/review", flash_from(request))
-
-    d = pending["decision"]
-    sel = d.get("selected", {})
+    q = _prune_queue(queue_load()) if queue_load() else {}
     settings = load_yaml(CFG / "settings.yaml")
     dry = str(load_env().get("CTI_DRY_RUN", settings.get("publish", {}).get("dry_run", True))).lower() \
         in ("1", "true", "yes", "on")
+    deftargets = settings_targets()
 
-    # surface what happened on the previous approve attempt for THIS post
+    items = q.get("queue", []) if q else []
+    if not items:
+        return page("Review queue",
+                    "<div class=card>Nothing waiting. Posts land here when "
+                    "<span class=mono>publish.mode = review</span>, when the daily cap holds an extra, "
+                    "when a draft fails the quality check, or when you fire one from Candidates. "
+                    "You can also write one on the <a href=/compose>Compose</a> page.</div>",
+                    "/review", flash_from(request))
+
     lr = read_json(STATE / "last_run.json") or {}
     prev = ""
-    if lr.get("decision") == "post" and lr.get("dry_run") and lr.get("title") == sel.get("title"):
-        prev = ('<div class="flash" style="border-color:var(--warn)">Your last approve was a '
-                '<b>DRY-RUN</b> — nothing was posted. This post is still here. '
-                'Turn off dry-run below and approve again to post for real.</div>')
-    elif lr.get("error") and lr.get("title") == sel.get("title"):
-        prev = (f'<div class="flash" style="border-color:var(--bad)">Last attempt <b>failed</b>: '
+    if lr.get("error"):
+        prev = (f'<div class="flash" style="border-color:var(--bad)">Last publish attempt reported: '
                 f'<span class=mono>{e(lr.get("error"))}</span></div>')
+    elif lr.get("dry_run"):
+        prev = ('<div class="flash" style="border-color:var(--warn)">Last run was a <b>DRY-RUN</b> — '
+                'nothing was sent. Turn off dry-run in <a href=/settings>Settings</a> to post for real.</div>')
+    warn = ('<div class="flash" style="border-color:var(--bad);background:rgba(248,81,73,.1)">'
+            'Global <b>dry-run is ON</b> — approving still sends nothing. Turn it off in '
+            '<a href=/settings>Settings</a> first.</div>') if dry else ""
 
-    brk = "".join(f"<li>{e(b)}</li>" for b in sel.get("score_breakdown", []))
+    reason_label = {"review": "review mode", "cap": "over the daily cap", "quality": "failed quality check",
+                    "manual": "you fired this", "runaway": "runaway guard", "compose": "you wrote this"}
+    blocks = []
+    for i, it in enumerate(items):
+        ptext = it.get("post_text", "") or ""
+        ql = lint_post_text(ptext, it.get("cve_ids") or [])
+        st = ql.get("stats", {})
+        qbits = "".join(f'<li><span class="pill bad">fix</span> {e(x)}</li>' for x in ql["errors"])
+        qbits += "".join(f'<li><span class="pill warn">nit</span> {e(x)}</li>' for x in ql["warnings"])
+        qhtml = ('<span class="pill good">quality ✓</span>' if not qbits
+                 else f'<ul style="margin:6px 0 0;padding-left:18px">{qbits}</ul>')
+        why = reason_label.get(it.get("held_because", "review"), it.get("held_because", ""))
+        tsel = it.get("targets") or deftargets
+        fold = 215
+        cut = ptext.rfind(" ", 0, fold) if len(ptext) > fold else len(ptext)
+        blocks.append(f"""
+<div class=card>
+  <div class=row style="justify-content:space-between">
+    <div><span class="pill {'good' if (it.get('score') or 0) >= 90 else 'dim'}">score {e(it.get('score','—'))}</span>
+    <span class="pill dim">held: {e(why)}</span>
+    <span class="pill dim">{e(it.get('confidence','') or '')}</span></div>
+    <span class=dim>#{i + 1} of {len(items)}</span>
+  </div>
+  <p style="margin:8px 0 4px"><b>{e(it.get('title',''))}</b>
+  {(' &nbsp;<a href="' + e(it.get('url')) + '" target=_blank>source ↗</a>') if it.get('url') else ''}
+  <span class=dim>{e(', '.join(it.get('cve_ids', []) or []))}</span></p>
+  <div style="font-size:12.5px;margin-bottom:6px">{qhtml}
+  <span class=dim>· {st.get('chars','?')} chars · hook {st.get('hook_chars','?')} · {st.get('hashtags','?')} tags</span></div>
+  <div class=card style="background:var(--bg);white-space:pre-wrap;max-width:560px;font-size:13px;margin:0 0 10px">{e(ptext[:cut])}<span class=dim> …more</span>{e(ptext[cut:])}</div>
+  <form method=post action=/review/act>
+    <input type=hidden name=idx value="{i}">
+    <textarea name=post_text rows=14>{e(ptext)}</textarea>
+    <label style="margin-top:8px">Short version <small>— for X / Bluesky (≤ 260 chars)</small></label>
+    <input type=text name=short_text value="{e(it.get('short_text',''))}">
+    <div style="margin:8px 0"><b class=dim style="font-size:12px">POST TO:</b><br>{target_checkboxes('targets', tsel, only_ready=True)}</div>
+    <div class=row>
+      <button class="btn good" name=do value=approve onclick="return confirm('Post this now to the ticked networks?')">✓ Approve &amp; post</button>
+      <button class="btn ghost" name=do value=save formnovalidate>Save edits</button>
+      <button class="btn ghost" name=do value=rewrite formnovalidate onclick="return confirm('Ask the editor to tighten this? ~30s.')">↻ Rewrite</button>
+      <button class="btn bad" name=do value=reject formnovalidate onclick="return confirm('Discard this one?')">✗ Reject</button>
+    </div>
+  </form>
+</div>""")
+
     considered = "".join(
         f"<tr><td>{e(c.get('score'))}</td><td><a href='{e(c.get('url'))}' target=_blank>"
         f"{e((c.get('title') or '')[:70])}</a></td><td class=dim>{e(c.get('note'))}</td></tr>"
-        for c in d.get("considered", [])
+        for c in q.get("considered", [])
     )
-    warn = ('<div class="flash" style="border-color:var(--bad);background:rgba(248,81,73,.1)">'
-            'Global <b>dry-run is ON</b> — approving will simulate only, nothing is sent. '
-            'Turn it off in <a href=/settings>Settings</a> to post for real.</div>') if dry else ""
+    allbtn = (f'<form method=post action=/review/approve-all onsubmit="return confirm(\'Post all '
+              f'{len(items)} queued items now to their ticked networks?\')">'
+              f'<button class="btn good">✓ Approve &amp; post all {len(items)}</button></form>'
+              if len(items) > 1 else "")
 
-    # ---- post-quality check ----
-    ptext = sel.get("post_text", "") or ""
-    ql = lint_post_text(ptext, sel.get("cve_ids") or [])
-    st = ql.get("stats", {})
-    if not ql["errors"] and not ql["warnings"]:
-        qcard = ('<div class="flash" style="border-color:var(--good)">'
-                 '✓ Post-quality checks pass.</div>')
-    else:
-        items = "".join(f'<li><span class="pill bad">fix</span> {e(x)}</li>' for x in ql["errors"])
-        items += "".join(f'<li><span class="pill warn">nit</span> {e(x)}</li>' for x in ql["warnings"])
-        qcard = (f'<div class="card" style="border-color:{"var(--bad)" if ql["errors"] else "var(--warn)"}">'
-                 f'<b>Post-quality check</b> '
-                 f'<span class=dim>· {st.get("chars","?")} chars · hook {st.get("hook_chars","?")} '
-                 f'· {st.get("bullets","?")} bullets · {st.get("hashtags","?")} tags</span>'
-                 f'<ul style="margin:8px 0 0;padding-left:18px">{items}</ul>'
-                 + ('<p class=dim style="margin:8px 0 0">Auto-mode would hold this post instead of '
-                    'publishing. Fix the <b>fix</b> items, or edit and approve manually.</p>'
-                    if ql["errors"] else '')
-                 + '</div>')
-
-    # ---- LinkedIn "…more" fold preview ----
-    fold = 215
-    cut = ptext.rfind(" ", 0, fold) if len(ptext) > fold else len(ptext)
-    head_txt, tail_txt = ptext[:cut], ptext[cut:]
-    preview = (
-        '<div class=card><b class=dim>LinkedIn preview</b>'
-        '<div style="white-space:pre-wrap;border:1px solid var(--line);border-radius:8px;'
-        'padding:12px;margin-top:8px;max-width:540px;font-size:13.5px">'
-        f'{e(head_txt)}'
-        + (f'<span class=dim> …more</span>\n<span class=dim>{"─" * 30}</span>{e(tail_txt)}'
-           if tail_txt.strip() else '')
-        + '</div></div>'
-    )
-
-    body = f"""
-{prev}{warn}
-<div class=card>
-  <div class=row style="justify-content:space-between">
-    <div><span class="pill good">score {e(sel.get('score'))}</span>
-    <span class="pill dim">threshold {e(d.get('min_score'))}</span>
-    <span class="pill dim">confidence {e(sel.get('confidence'))}</span>
-    {'<span class="pill warn">manual fire — bypasses cap &amp; schedule</span>' if pending.get('manual') or d.get('manual') else ''}</div>
-    <span class=dim>held {e(rel_time(pending.get('held_at','')))}</span>
-  </div>
-  <p><b>{e(sel.get('title'))}</b><br>
-  <a href="{e(sel.get('url'))}" target=_blank>{e(sel.get('source'))} ↗</a>
-  · {e(', '.join(sel.get('cve_ids', []) or []))}</p>
-  <details><summary class=dim>score breakdown</summary><ul>{brk}</ul></details>
+    body = f"""{prev}{warn}
+<div class=row style="justify-content:space-between;margin-bottom:12px">
+  <div>{len(items)} post(s) waiting · held {e(rel_time(q.get('held_at','')))}</div>
+  <div class=row>{allbtn}
+  <form method=post action=/review/reject-all onsubmit="return confirm('Discard ALL queued posts?')">
+  <button class="btn ghost">Clear queue</button></form></div>
 </div>
-
-{qcard}
-{preview}
-
-<form method=post action=/review/approve>
-<label>Post text <small>— edit freely; “Save edits” re-runs the quality check</small></label>
-<textarea name=post_text rows=18>{e(ptext)}</textarea>
-<div class=row style="margin-top:12px">
-  <button class="btn good" onclick="return confirm('Post this to LinkedIn now?')">✓ Approve &amp; post</button>
-  <button class="btn ghost" formaction=/review/save formnovalidate>Save edits &amp; re-check</button>
-  <button class="btn ghost" formaction=/review/rewrite formnovalidate
-    onclick="return confirm('Ask the analyst to rewrite this tighter? Takes ~30s.')">↻ Rewrite tighter</button>
-  <button class="btn bad" formaction=/review/reject formnovalidate
-    onclick="return confirm('Discard this post?')">✗ Reject</button>
-</div>
-</form>
-
-<h2>Also considered</h2>
-<div class=card style="padding:0"><table>
-<tr><th>score</th><th>headline</th><th>why it lost</th></tr>{considered or '<tr><td colspan=3 class=dim>—</td></tr>'}
-</table></div>
+{''.join(blocks)}
+{('<h2>Also considered this run</h2><div class=card style="padding:0"><table><tr><th>score</th><th>headline</th><th>why it lost</th></tr>' + considered + '</table></div>') if considered else ''}
 """
     return page("Review queue", body, "/review", flash_from(request))
 
 
-def _write_pending_text(text: str) -> None:
-    p = STATE / "pending.json"
-    pending = read_json(p)
-    if not pending:
-        dec = read_json(STATE / "decision.json") or {}
-        pending = {"held_at": datetime.now(timezone.utc).isoformat(), "decision": dec}
-    pending["decision"].setdefault("selected", {})["post_text"] = text
-    p.write_text(json.dumps(pending, indent=2))
+def _run_publish_approved(posts: list[dict]) -> tuple[str, bool]:
+    """write approved.json and shell the publisher; returns (message, published)."""
+    (STATE / "approved.json").write_text(json.dumps({"posts": posts}, indent=2))
+    proc = subprocess.run([sys.executable, str(ROOT / "bin" / "publish_linkedin.py"),
+                           "--approve", str(STATE / "approved.json")],
+                          cwd=ROOT, capture_output=True, text=True, env=_env_with_config())
+    (STATE / "approved.json").unlink(missing_ok=True)
+    lr = read_json(STATE / "last_run.json") or {}
+    if lr.get("published"):
+        n = lr.get("posted", 1)
+        tg = ", ".join(lr.get("targets", [])) or "the network"
+        return f"✓ Posted {n} item(s) to {tg}", True
+    if lr.get("dry_run"):
+        return "Dry-run only — nothing sent. Turn off dry-run in Settings, then approve again.", False
+    if lr.get("error"):
+        return f"Failed: {lr['error'][:200]}", False
+    tail = (proc.stdout + proc.stderr).strip().splitlines()
+    return (tail[-1][:200] if tail else f"publisher exited {proc.returncode}"), False
 
 
-@app.post("/review/save")
-def review_save(post_text: str = Form("")):
-    _write_pending_text(post_text.strip())
-    return RedirectResponse("/review?m=Edits+saved", 303)
+@app.post("/review/act")
+def review_act(idx: int = Form(0), do: str = Form("save"),
+               post_text: str = Form(""), short_text: str = Form(""),
+               targets: list[str] = Form(default=[])):
+    q = queue_load()
+    if not q or idx >= len(q.get("queue", [])):
+        return RedirectResponse("/review?m=Item+not+found", 303)
+    it = q["queue"][idx]
+    it["post_text"] = post_text.strip()
+    it["short_text"] = short_text.strip()
+    if targets:
+        it["targets"] = targets
+
+    if do == "reject":
+        q["queue"].pop(idx)
+        if q["queue"]:
+            queue_save(q)
+        else:
+            (STATE / "pending.json").unlink(missing_ok=True)
+        return RedirectResponse("/review?m=Rejected", 303)
+
+    if do == "save":
+        queue_save(q)
+        return RedirectResponse("/review?m=Saved", 303)
+
+    if do == "rewrite":
+        queue_save(q)
+        new = _rewrite_text(it["post_text"])
+        if new:
+            it["post_text"] = new
+            queue_save(q)
+            return RedirectResponse("/review?m=Rewritten+—+check+it", 303)
+        return RedirectResponse("/review?m=Rewrite+failed+—+kept+the+original", 303)
+
+    # approve
+    queue_save(q)
+    msg, published = _run_publish_approved([dict(it, targets=it.get("targets") or targets or None)])
+    if published:
+        _prune_queue(queue_load() or {})
+    return RedirectResponse(("/" if published else "/review") + "?m=" + quote(msg), 303)
 
 
-@app.post("/review/reject")
-def review_reject():
+@app.post("/review/approve-all")
+def review_approve_all():
+    q = queue_load()
+    items = q.get("queue", []) if q else []
+    if not items:
+        return RedirectResponse("/review?m=Nothing+to+post", 303)
+    msg, published = _run_publish_approved([dict(it, targets=it.get("targets") or None) for it in items])
+    if published:
+        _prune_queue(queue_load() or {})
+    return RedirectResponse(("/" if published else "/review") + "?m=" + quote(msg), 303)
+
+
+@app.post("/review/reject-all")
+def review_reject_all():
     (STATE / "pending.json").unlink(missing_ok=True)
-    return RedirectResponse("/review?m=Post+rejected+and+discarded", 303)
+    return RedirectResponse("/review?m=Queue+cleared", 303)
 
 
 REWRITE_PROMPT = """You are the social editor for Blue Team Podcast (securitycyber.uk).
-Rewrite the LinkedIn post below to a professional standard. Keep every fact,
+Rewrite the security post below to a professional standard. Keep every fact,
 CVE id, version number and the source link exactly as given — do not add facts.
 
 Rules:
@@ -764,25 +884,19 @@ Output ONLY the rewritten post text, nothing else.
 """
 
 
-@app.post("/review/rewrite")
-def review_rewrite(post_text: str = Form("")):
-    cur = post_text.strip() or (read_json(STATE / "pending.json") or {}) \
-        .get("decision", {}).get("selected", {}).get("post_text", "")
+def _rewrite_text(cur: str) -> str:
+    """Ask claude -p to tighten a post. Returns "" on any failure."""
+    cur = (cur or "").strip()
     if not cur:
-        return RedirectResponse("/review?m=Nothing+to+rewrite", 303)
-    _write_pending_text(cur)  # keep any edits the user already made
+        return ""
     try:
-        proc = subprocess.run(
-            ["claude", "-p", REWRITE_PROMPT % cur, "--allowedTools", ""],
-            cwd=ROOT, capture_output=True, text=True, timeout=120, env=_env_with_config(),
-        )
+        proc = subprocess.run(["claude", "-p", REWRITE_PROMPT % cur, "--allowedTools", ""],
+                               cwd=ROOT, capture_output=True, text=True, timeout=120,
+                               env=_env_with_config())
         new = proc.stdout.strip()
-    except (subprocess.TimeoutExpired, FileNotFoundError) as ex:
-        return RedirectResponse(f"/review?m={quote('Rewrite failed: ' + str(ex)[:120])}", 303)
-    if len(new) < 200 or "http" not in new:
-        return RedirectResponse("/review?m=Rewrite+came+back+empty+—+kept+the+original", 303)
-    _write_pending_text(new)
-    return RedirectResponse("/review?m=Rewritten+—+review+the+new+draft+below", 303)
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return ""
+    return new if len(new) >= 200 and "http" in new else ""
 
 
 DRAFT_ONE_PROMPT = """You are the CTI analyst and social editor for Blue Team Podcast (securitycyber.uk).
@@ -829,14 +943,17 @@ STEPS
    Banned openers: "In today's threat landscape", "Threat actors are increasingly",
    "Now more than ever", rhetorical questions, "Thoughts?", any ask to like/share/comment.
 
+   Also write a `short_text`: one or two sentences, <= 260 characters, ending
+   with the source URL — this goes to X / Bluesky.
+
 OUTPUT
 Print ONLY this JSON on one line - no code fence, no commentary:
-{"decision":"post","reason":"<one sentence>","selected":{"title":"...","url":"...","source":"...","published":"...","cve_ids":["..."],"score":<int>,"score_breakdown":["+40 ...","..."],"confidence":"high|medium|low","post_text":"<full post, real \\n newlines>"}}
+{"title":"...","url":"...","source":"...","published":"...","cve_ids":["..."],"score":<int>,"score_breakdown":["+40 ...","..."],"confidence":"high|medium|low","post_text":"<full post, real \\n newlines>","short_text":"<= 260 chars, ends with the URL"}
 """
 
 
 def _claude_draft_one(cand: dict) -> tuple[dict | None, str]:
-    """Hand one operator-picked candidate to `claude -p` and get back a decision dict."""
+    """Hand one operator-picked candidate to `claude -p`; returns (post_item, "")."""
     prompt = DRAFT_ONE_PROMPT % {
         "title": cand.get("title", ""),
         "url": cand.get("url", ""),
@@ -857,28 +974,23 @@ def _claude_draft_one(cand: dict) -> tuple[dict | None, str]:
     if not m:
         return None, f"analyst returned no JSON (exit {proc.returncode})"
     try:
-        dec = json.loads(m.group(0))
+        it = json.loads(m.group(0))
     except json.JSONDecodeError as ex:
         return None, f"analyst JSON was malformed: {str(ex)[:120]}"
-    sel = dec.get("selected") or {}
-    if not (sel.get("post_text") or "").strip():
+    it = it.get("selected", it) if isinstance(it.get("selected"), dict) else it
+    if not (it.get("post_text") or "").strip():
         return None, "analyst produced no post_text"
-    sel.setdefault("title", cand.get("title", ""))
-    sel.setdefault("url", cand.get("url", ""))
-    sel.setdefault("source", cand.get("source", ""))
-    sel.setdefault("published", cand.get("published", ""))
-    sel.setdefault("cve_ids", cand.get("cve_ids", []) or [])
-    sel.setdefault("confidence", "medium")
-    sel.setdefault("score", 0)
-    sel.setdefault("score_breakdown", [])
-    dec["selected"] = sel
-    dec["decision"] = "post"
-    dec.setdefault("reason", "operator hand-picked this story")
-    dec["run_at"] = datetime.now(timezone.utc).isoformat()
-    dec["min_score"] = int(load_yaml(CFG / "settings.yaml").get("scoring", {}).get("min_score", 65))
-    dec.setdefault("considered", [])
-    dec["manual"] = True
-    return dec, ""
+    it.setdefault("title", cand.get("title", ""))
+    it.setdefault("url", cand.get("url", ""))
+    it.setdefault("source", cand.get("source", ""))
+    it.setdefault("published", cand.get("published", ""))
+    it.setdefault("cve_ids", cand.get("cve_ids", []) or [])
+    it.setdefault("confidence", "medium")
+    it.setdefault("score", 0)
+    it.setdefault("score_breakdown", [])
+    it["held_because"] = "manual"
+    it["min_score"] = int(load_yaml(CFG / "settings.yaml").get("scoring", {}).get("min_score", 65))
+    return it, ""
 
 
 @app.post("/candidates/fire")
@@ -890,43 +1002,65 @@ def candidates_fire(url: str = Form("")):
         return RedirectResponse("/candidates?m=" + quote("Couldn't find that candidate — re-run ingest first"), 303)
     if url in posted_urls():
         return RedirectResponse("/candidates?m=" + quote("That story has already been posted"), 303)
-    replaced = (STATE / "pending.json").exists()
-    dec, err = _claude_draft_one(cand)
+    it, err = _claude_draft_one(cand)
     if err:
         return RedirectResponse("/candidates?m=" + quote("Manual fire failed — " + err), 303)
-    (STATE / "pending.json").write_text(json.dumps(
-        {"held_at": datetime.now(timezone.utc).isoformat(), "decision": dec, "manual": True}, indent=2))
-    note = "Drafted from your pick — review it and click Approve & post. Manual posts ignore the daily cap."
-    if replaced:
-        note += " (This replaced the post that was awaiting approval.)"
-    return RedirectResponse("/review?m=" + quote(note), 303)
-
-
-@app.post("/review/approve")
-def review_approve(post_text: str = Form("")):
-    _write_pending_text(post_text.strip())
-    proc = subprocess.run(
-        [sys.executable, str(ROOT / "bin" / "publish_linkedin.py"), "--approve"],
-        cwd=ROOT, capture_output=True, text=True, env=_env_with_config(),
-    )
-    lr = read_json(STATE / "last_run.json") or {}
-    if lr.get("published"):
-        msg = "✓ Posted to LinkedIn"
-    elif lr.get("dry_run"):
-        msg = "Dry-run only — nothing was posted. Turn off dry-run in Settings, then approve again."
-    elif lr.get("error"):
-        msg = f"Failed: {lr['error'][:160]}"
-    else:
-        tail = (proc.stdout + proc.stderr).strip().splitlines()
-        msg = (tail[-1][:180] if tail else f"publisher exited {proc.returncode}")
-    dest = "/" if lr.get("published") else "/review"
-    return RedirectResponse(f"{dest}?m={quote(msg)}", 303)
+    queue_append([it], manual=True)
+    return RedirectResponse("/review?m=" + quote(
+        "Drafted from your pick — edit / pick targets / approve below. Manual posts ignore the daily cap."), 303)
 
 
 def _env_with_config() -> dict:
     env = dict(os.environ)
     env.update(load_env())
     return env
+
+
+# ----------------------------------------------------------------------------- compose
+@app.get("/compose", response_class=HTMLResponse)
+def compose_get(request: Request):
+    dry = str(load_env().get("CTI_DRY_RUN", load_yaml(CFG / "settings.yaml")
+                             .get("publish", {}).get("dry_run", True))).lower() in ("1", "true", "yes", "on")
+    ready = configured_targets()
+    warn = ('<div class="flash" style="border-color:var(--warn)">Dry-run is ON — '
+            '“Post now” will simulate only. Turn it off in <a href=/settings>Settings</a>.</div>') if dry else ""
+    nocreds = "" if ready else ('<div class="flash" style="border-color:var(--bad)">No network has '
+                                'credentials yet — add them in <a href=/secrets>Secrets</a>.</div>')
+    body = f"""{warn}{nocreds}
+<div class=card>Write anything and send it now, or drop it in the review queue. This bypasses the
+analyst, the schedule, the score threshold and the daily cap — it's your channel.</div>
+<form method=post action=/compose>
+<label>Post text</label>
+<textarea name=post_text rows=16 placeholder="If you run an internet-facing …, patch to … today: …&#10;&#10;• Vulnerability: CVE-…&#10;• Affected: …&#10;• Do now: …&#10;&#10;https://…&#10;&#10;#BlueTeam #CyberSecurity"></textarea>
+<label>Short version <small>— optional, for X / Bluesky (≤ 260 chars). Left blank, the long post is auto-trimmed.</small></label>
+<input type=text name=short_text>
+<label>Title <small>— for your history log only</small></label>
+<input type=text name=title placeholder="manual post">
+<div style="margin:12px 0"><b class=dim style="font-size:12px">POST TO:</b><br>
+{target_checkboxes('targets', settings_targets(), only_ready=True)}</div>
+<div class=row>
+  <button class="btn good" name=do value=now onclick="return confirm('Send this now to the ticked networks?')">Post now</button>
+  <button class="btn ghost" name=do value=hold formnovalidate>Hold for review</button>
+</div>
+</form>"""
+    return page("Compose", body, "/compose", flash_from(request))
+
+
+@app.post("/compose")
+def compose_post(post_text: str = Form(""), short_text: str = Form(""), title: str = Form(""),
+                 do: str = Form("hold"), targets: list[str] = Form(default=[])):
+    text = post_text.strip()
+    if len(text) < 20:
+        return RedirectResponse("/compose?m=" + quote("Post text is too short"), 303)
+    item = {"title": title.strip() or "manual post", "url": "", "source": "compose",
+            "cve_ids": re.findall(r"CVE-\d{4}-\d{4,7}", text), "score": 100, "confidence": "operator",
+            "post_text": text, "short_text": short_text.strip(), "held_because": "compose",
+            "targets": targets or None}
+    if do == "hold":
+        queue_append([item], manual=True)
+        return RedirectResponse("/review?m=" + quote("Added to the review queue"), 303)
+    msg, published = _run_publish_approved([item])
+    return RedirectResponse(("/" if published else "/compose") + "?m=" + quote(msg), 303)
 
 
 # ----------------------------------------------------------------------------- candidates
@@ -947,7 +1081,7 @@ def candidates(request: Request):
         else:
             act = (
                 f'<form method=post action=/candidates/fire '
-                f'onsubmit="return confirm(\'Draft a LinkedIn post for this story now and send it to the '
+                f'onsubmit="return confirm(\'Draft a post for this story now and send it to the '
                 f'review queue? A manual fire ignores the daily cap and the schedule.\')">'
                 f'<input type=hidden name=url value="{e(u)}">'
                 f'<button class="btn ghost" style="padding:4px 10px;font-size:12px">Draft &amp; review →</button>'
@@ -1030,11 +1164,22 @@ def settings_get(request: Request):
 </select>
 <label style="margin-top:12px"><input type=checkbox name=dry_run {ck(pub.get('dry_run',True))}>
 &nbsp;Dry-run (master safety switch — nothing is ever posted while this is on)</label>
+<label style="margin-top:12px">Post to <small>— every enabled network with credentials gets each post</small></label>
+<div>{target_checkboxes('targets', list(pub.get('targets') or ['linkedin']))}</div>
 <label>Max post characters</label><input type=number name=maxchars value="{e(pub.get('max_post_chars',2900))}">
-<label>LinkedIn API version</label><input type=text name=apiver value="{e(pub.get('linkedin_api_version','202506'))}">
-<label>Visibility</label><select name=visibility>
+<label>Runaway guard <small>— never auto-post more than this many in one run</small></label>
+<input type=number name=runaway value="{e(pub.get('runaway_guard',20))}">
+</div>
+
+<h2>Per-network</h2><div class=card>
+<label>LinkedIn API version</label><input type=text name=apiver value="{e(pub.get('linkedin_api_version','202509'))}">
+<label>LinkedIn visibility</label><select name=visibility>
 <option {'selected' if pub.get('visibility')=='PUBLIC' else ''}>PUBLIC</option>
 <option {'selected' if pub.get('visibility')=='CONNECTIONS' else ''}>CONNECTIONS</option></select>
+<label>Mastodon visibility</label><select name=mastovis>
+{''.join(f'<option {"selected" if pub.get("mastodon_visibility","public")==v else ""}>{v}</option>' for v in ('public','unlisted','private'))}
+</select>
+<label>Email subject prefix</label><input type=text name=emailprefix value="{e(pub.get('email_subject_prefix','[Blue Team CTI]'))}">
 </div>
 
 <h2>Schedule</h2><div class=card>
@@ -1067,14 +1212,19 @@ async def settings_post(request: Request):
         max_candidates=int(f.get("maxc", 40)),
         feed_timeout_seconds=int(s.get("ingest", {}).get("feed_timeout_seconds", 20)))
     s.setdefault("scoring", {})["min_score"] = int(f.get("minscore", 65))
+    tgts = [t for t in f.getlist("targets") if t in publishers.PROVIDERS] or ["linkedin"]
     s.setdefault("publish", {}).update(
         mode=f.get("mode", "review"),
         dry_run=bool(f.get("dry_run")),
+        targets=tgts,
         max_per_day=int(f.get("maxday", 5)),
         severity_override_score=int(f.get("sevoverride", 90)),
+        runaway_guard=int(f.get("runaway", 20)),
         max_post_chars=int(f.get("maxchars", 2900)),
         linkedin_api_version=f.get("apiver", "202509"),
-        visibility=f.get("visibility", "PUBLIC"))
+        visibility=f.get("visibility", "PUBLIC"),
+        mastodon_visibility=f.get("mastovis", "public"),
+        email_subject_prefix=f.get("emailprefix", "[Blue Team CTI]"))
     s.setdefault("notify", {}).update(
         ntfy_url=f.get("ntfy", ""), on_success=bool(f.get("on_success")))
     save_yaml(CFG / "settings.yaml", s)
@@ -1176,32 +1326,48 @@ def feeds_test(url: str = ""):
 
 
 # ----------------------------------------------------------------------------- secrets
+def _secret_field(k: str, label: str, hint: str, env: dict) -> str:
+    cur = env.get(k, "")
+    plain = k in PLAINTEXT_KEYS
+    typ = "text" if plain else "password"
+    val = f'value="{e(cur)}"' if plain else ""
+    ph = "" if plain else f'placeholder="{e(mask(cur) or "not set")}"'
+    hh = f' <small>— {e(hint)}</small>' if hint else ""
+    return (f'<label style="margin-top:10px">{e(label)}{hh}</label>'
+            f'<input type={typ} name={k} {val} {ph} autocomplete=off>'
+            f'<label style="margin:2px 0 0;font-size:12px"><input type=checkbox name=clear_{k}> clear</label>')
+
+
 @app.get("/secrets", response_class=HTMLResponse)
 def secrets_get(request: Request):
     env = load_env()
-    fields = ""
-    for k, label, hint in SECRET_KEYS:
-        cur = env.get(k, "")
-        shown = e(cur) if k == "LINKEDIN_AUTHOR_URN" else (mask(cur) or "not set")
-        typ = "text" if k == "LINKEDIN_AUTHOR_URN" else "password"
-        val = f'value="{e(cur)}"' if k == "LINKEDIN_AUTHOR_URN" else ""
-        ph = "" if k == "LINKEDIN_AUTHOR_URN" else f'placeholder="{shown}"'
-        fields += f"""<label>{e(label)} <small>— {e(hint)}</small></label>
-<input type={typ} name={k} {val} {ph} autocomplete=off>
-<label style="margin:2px 0 0;font-size:12px"><input type=checkbox name=clear_{k}> clear this value</label>"""
+    ready = set(configured_targets())
+    sections = ""
+    for prov, keys in publishers.PROVIDER_KEYS.items():
+        badge = ('<span class="pill good">configured</span>' if prov in ready
+                 else '<span class="pill dim">not set up</span>')
+        rows = "".join(_secret_field(k, lb, ht, env) for k, lb, ht in keys)
+        sections += (f'<h2>{e(publishers.PROVIDER_LABELS.get(prov, prov))} {badge}</h2>'
+                     f'<div class=card>{rows}'
+                     f'<div style="margin-top:10px"><button class="btn ghost" formaction=/secrets/test '
+                     f'name=only value={prov} formnovalidate>Test {e(publishers.PROVIDER_LABELS.get(prov, prov))}</button></div>'
+                     f'</div>')
+    extra = "".join(_secret_field(k, lb, ht, env) for k, lb, ht in
+                    [("NTFY_URL", "Notification URL", "ntfy.sh-style topic for pipeline alerts")])
     dry = env.get("CTI_DRY_RUN", "")
     body = f"""<div class=card class=dim>Stored in <span class=mono>config/env</span>
-(chmod 600, git-ignored). Secret fields are write-only — leave blank to keep the current value,
-or tick <b>clear</b> to remove it. The Author URN is shown in full so you can check / fix it.</div>
-<form method=post action=/secrets>{fields}
-<label style="margin-top:14px">CTI_DRY_RUN override <small>— blank = use settings.yaml</small></label>
+(chmod 600, git-ignored). Password fields are write-only — leave blank to keep the current value,
+tick <b>clear</b> to remove it. Plain fields (URLs, handles, recipients) are shown so you can check them.</div>
+<form method=post action=/secrets>
+{sections}
+<h2>Other</h2><div class=card>{extra}
+<label style="margin-top:12px">CTI_DRY_RUN override <small>— blank = use settings.yaml</small></label>
 <select name=CTI_DRY_RUN>
 <option value="" {'selected' if dry=='' else ''}>(use settings.yaml)</option>
 <option value=true {'selected' if dry=='true' else ''}>true — never post</option>
 <option value=false {'selected' if dry=='false' else ''}>false — allow posting</option>
-</select>
-<div class=row style="margin-top:14px"><button class=btn>Save secrets</button>
-<button class="btn ghost" formaction=/secrets/test formnovalidate>Test LinkedIn token</button></div>
+</select></div>
+<button class=btn>Save all secrets</button>
 </form>"""
     return page("Secrets", body, "/secrets", flash_from(request))
 
@@ -1218,39 +1384,108 @@ async def secrets_post(request: Request):
         if v:
             updates[k] = v
     cd = f.get("CTI_DRY_RUN", "")
-    updates["CTI_DRY_RUN"] = cd if cd in ("true", "false") else None  # "" -> remove override
+    updates["CTI_DRY_RUN"] = cd if cd in ("true", "false") else None
     if updates:
         save_env(updates)
     return RedirectResponse("/secrets?m=Saved", 303)
 
 
-@app.post("/secrets/test", response_class=HTMLResponse)
-def secrets_test():
-    env = load_env()
+def _test_linkedin(env: dict) -> str:
     tok = env.get("LINKEDIN_ACCESS_TOKEN")
     if not tok:
-        return page("LinkedIn test", "<div class=card>No token set.</div>", "/secrets")
+        return "No LINKEDIN_ACCESS_TOKEN set."
     try:
         r = requests.get("https://api.linkedin.com/v2/userinfo",
                          headers={"Authorization": f"Bearer {tok}"}, timeout=15)
-        if r.ok:
-            j = r.json()
-            real = f"urn:li:person:{j.get('sub','?')}"
-            msg = (f"OK — authenticated as <b>{e(j.get('name','?'))}</b><br>"
-                   f"This token posts as: <span class=mono>{e(real)}</span>")
-            pinned = env.get("LINKEDIN_AUTHOR_URN", "").strip()
-            if pinned and pinned != real and not pinned.startswith("urn:li:organization:"):
-                msg += (f'<br><br><span class="pill bad">mismatch</span> Your pinned '
-                        f'<span class=mono>LINKEDIN_AUTHOR_URN</span> is <span class=mono>{e(pinned)}</span>, '
-                        f'which is not this token. Clear it on the Secrets page (leave blank to auto-detect) '
-                        f'or set it to <span class=mono>{e(real)}</span> — otherwise real posts will be rejected.')
-            elif not pinned:
-                msg += "<br><span class=dim>No pinned URN — the publisher auto-detects this one. Good.</span>"
-        else:
-            msg = f"HTTP {r.status_code}: <span class=mono>{e(r.text[:300])}</span>"
     except Exception as ex:  # noqa
-        msg = f"error: {e(str(ex))}"
-    return page("LinkedIn test", f"<div class=card>{msg}</div><p><a href=/secrets>← back</a></p>", "/secrets")
+        return f"error: {e(str(ex))}"
+    if not r.ok:
+        return f"HTTP {r.status_code}: <span class=mono>{e(r.text[:300])}</span>"
+    j = r.json()
+    real = f"urn:li:person:{j.get('sub','?')}"
+    msg = f"OK — <b>{e(j.get('name','?'))}</b>, posts as <span class=mono>{e(real)}</span>"
+    pinned = env.get("LINKEDIN_AUTHOR_URN", "").strip()
+    if pinned and pinned != real and not pinned.startswith("urn:li:organization:"):
+        msg += (f'<br><span class="pill bad">mismatch</span> pinned URN <span class=mono>{e(pinned)}</span> '
+                f'is not this token — clear it or set it to <span class=mono>{e(real)}</span>.')
+    return msg
+
+
+def _test_mastodon(env: dict) -> str:
+    base = (env.get("MASTODON_BASE_URL") or "").rstrip("/")
+    tok = env.get("MASTODON_ACCESS_TOKEN")
+    if not (base and tok):
+        return "need MASTODON_BASE_URL + MASTODON_ACCESS_TOKEN"
+    try:
+        r = requests.get(f"{base}/api/v1/accounts/verify_credentials",
+                         headers={"Authorization": f"Bearer {tok}"}, timeout=15)
+    except Exception as ex:  # noqa
+        return f"error: {e(str(ex))}"
+    if not r.ok:
+        return f"HTTP {r.status_code}: <span class=mono>{e(r.text[:200])}</span>"
+    return f"OK — <b>@{e(r.json().get('username','?'))}</b> on {e(base)}"
+
+
+def _test_bluesky(env: dict) -> str:
+    h, pw = (env.get("BLUESKY_HANDLE") or "").lstrip("@"), env.get("BLUESKY_APP_PASSWORD")
+    pds = (env.get("BLUESKY_PDS_URL") or "https://bsky.social").rstrip("/")
+    if not (h and pw):
+        return "need BLUESKY_HANDLE + BLUESKY_APP_PASSWORD"
+    try:
+        r = requests.post(f"{pds}/xrpc/com.atproto.server.createSession",
+                          json={"identifier": h, "password": pw}, timeout=15)
+    except Exception as ex:  # noqa
+        return f"error: {e(str(ex))}"
+    if not r.ok:
+        return f"HTTP {r.status_code}: <span class=mono>{e(r.text[:200])}</span>"
+    return f"OK — session for <b>{e(r.json().get('handle', h))}</b>"
+
+
+def _test_x(env: dict) -> str:
+    need = ["X_API_KEY", "X_API_SECRET", "X_ACCESS_TOKEN", "X_ACCESS_SECRET"]
+    if not all(env.get(k) for k in need):
+        return "missing: " + ", ".join(k for k in need if not env.get(k))
+    return ("all four keys are set. X has no cheap read check on the free tier — "
+            "the first real post confirms it works.")
+
+
+def _test_email(env: dict) -> str:
+    import smtplib
+    import ssl
+    host = env.get("EMAIL_SMTP_HOST")
+    to = env.get("EMAIL_TO")
+    if not (host and to):
+        return "need EMAIL_SMTP_HOST + EMAIL_TO"
+    port = int(env.get("EMAIL_SMTP_PORT") or 587)
+    try:
+        if port == 465:
+            s = smtplib.SMTP_SSL(host, port, timeout=15, context=ssl.create_default_context())
+        else:
+            s = smtplib.SMTP(host, port, timeout=15)
+            s.ehlo()
+            try:
+                s.starttls(context=ssl.create_default_context())
+            except smtplib.SMTPNotSupportedError:
+                pass
+        if env.get("EMAIL_SMTP_USER") and env.get("EMAIL_SMTP_PASSWORD"):
+            s.login(env["EMAIL_SMTP_USER"], env["EMAIL_SMTP_PASSWORD"])
+        s.quit()
+    except Exception as ex:  # noqa
+        return f"connect/login failed: {e(str(ex)[:200])}"
+    return f"OK — connected to {e(host)}:{port}, recipients: <span class=mono>{e(to)}</span>"
+
+
+_TESTS = {"linkedin": _test_linkedin, "mastodon": _test_mastodon, "bluesky": _test_bluesky,
+          "x": _test_x, "email": _test_email}
+
+
+@app.post("/secrets/test", response_class=HTMLResponse)
+def secrets_test(only: str = Form("linkedin")):
+    env = load_env()
+    fn = _TESTS.get(only, _test_linkedin)
+    msg = fn(env)
+    return page(f"{publishers.PROVIDER_LABELS.get(only, only)} test",
+                f"<div class=card>{msg}</div><p><a href=/secrets>← back to Secrets</a></p>", "/secrets")
 
 
 # ----------------------------------------------------------------------------- logs

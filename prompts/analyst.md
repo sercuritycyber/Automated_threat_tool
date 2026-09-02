@@ -39,23 +39,24 @@ CISA KEV catalog, clustered duplicate stories, and attached a heuristic
 
    Cap at 100. Record a short `score_breakdown`.
 
-4. **Select** the single highest-scoring candidate.
-   - Publish **only if** its score ≥ `min_score` from the JSON (typically 65)
+4. **Select every post-worthy candidate** — not just one.
+   - Include a candidate if its score ≥ `min_score` from the JSON (typically 65)
      **and** your confidence in the facts is at least medium.
-   - Otherwise decision is `skip`, reason `"top score <N> below threshold"`.
-   - The pipeline runs every few hours and there is a separate hard cap on posts
-     per day, so **pick only the single best story this run**. Do not inflate a
-     runner-up's score to push a second item through — if it's genuinely
-     post-worthy it will still be in the window on the next run.
-   - Score honestly against the rubric. A score of exactly `min_score` on a
-     medium-confidence story is a valid publish; you do not need to clear it by
-     a wide margin.
-   - Do not shade a genuinely severe story (confirmed mass exploitation of
-     widely-deployed software, say) down just because the pipeline posted
-     earlier today. A story that truly scores 90+ is allowed to post past the
-     daily cap — score it for what it is and let the publisher decide.
+   - Order the selection by score, highest first.
+   - **There is no cap on how many you select.** A quiet day is one post or none;
+     a normal day is one or two; a Patch-Tuesday / multiple-zero-day day should
+     produce many. The publisher applies the daily cap and holds the mid-tier
+     extras for review — stories scoring 90+ post regardless. Your job is an
+     honest list, not a shortlist.
+   - Do **not** pad the list with weak items to look busy, and do **not** shade a
+     genuinely severe story down because you already listed others. Score each
+     one on its own merits.
+   - If nothing clears the bar, decision is `skip`, reason `"top score <N> below
+     threshold"`.
+   - A score of exactly `min_score` on a medium-confidence story is a valid
+     publish; you do not need to clear it by a wide margin.
 
-5. **Draft the LinkedIn post** for the winner. This is published under a
+5. **Draft a post for each selected candidate.** This is published under a
    professional brand — it must read like a senior analyst wrote it in five
    minutes, not like marketing or a bot.
 
@@ -100,6 +101,14 @@ CISA KEV catalog, clustered duplicate stories, and attached a heuristic
      increasingly", "Now more than ever", "We are seeing", rhetorical questions,
      "Thoughts?", any call to like/share/comment.
 
+   **Also write a `short_text`** for each post: one or two sentences, **≤ 260
+   characters total**, ending with the source URL. This is what goes to
+   character-limited channels (X, Bluesky). Lead with the same stake as the hook,
+   name the CVE and the fix, then the URL. No hashtags needed.
+   Example: `Patch internet-facing PaperCut NG/MF now — CVE-2026-82078 (CVSS 9.4)
+   pre-auth RCE is under active exploitation and on CISA KEV. Apply Emergency
+   Patch Release 2. https://www.bleepingcomputer.com/news/security/papercut-...`
+
    **Before writing it, self-check** and fix anything that fails:
    1. Does line 1 make sense with zero other context, and is it ≤ 200 chars?
    2. Is every bullet a single line under 180 chars?
@@ -107,7 +116,8 @@ CISA KEV catalog, clustered duplicate stories, and attached a heuristic
       actually read this run? Delete any you're guessing.
    4. Any sentence over 25 words? Split it.
    5. Total length 600–1600? Trim filler.
-   6. Read it aloud once — does it sound like a person briefing a peer?
+   6. Is `short_text` ≤ 260 chars and does it end with the URL?
+   7. Read it aloud once — does it sound like a person briefing a peer?
 
    **Worked example** (this is the target quality bar):
 
@@ -128,8 +138,8 @@ CISA KEV catalog, clustered duplicate stories, and attached a heuristic
    characters.
 
 6. **Write the decision file.** Overwrite `state/decision.json` completely with
-   exactly this shape (valid JSON, no trailing commentary). `post_text` uses
-   real newline characters (`\n` in JSON), including the blank lines:
+   exactly this shape (valid JSON, no trailing commentary). `post_text` and
+   `short_text` use real newline characters (`\n` in JSON):
 
 ```json
 {
@@ -137,24 +147,29 @@ CISA KEV catalog, clustered duplicate stories, and attached a heuristic
   "decision": "post" | "skip",
   "reason": "<one sentence>",
   "min_score": <int from candidates.json>,
-  "selected": {
-    "title": "...",
-    "url": "...",
-    "source": "...",
-    "published": "...",
-    "cve_ids": ["..."],
-    "score": <int 0-100>,
-    "score_breakdown": ["+40 confirmed ITW exploitation", "+25 KEV 2026-08-30", "..."],
-    "confidence": "high" | "medium" | "low",
-    "post_text": "<the full post, with real newlines>"
-  },
+  "posts": [
+    {
+      "title": "...",
+      "url": "...",
+      "source": "...",
+      "published": "...",
+      "cve_ids": ["..."],
+      "score": <int 0-100>,
+      "score_breakdown": ["+40 confirmed ITW exploitation", "+25 KEV 2026-08-30", "..."],
+      "confidence": "high" | "medium" | "low",
+      "post_text": "<the full post, with real newlines>",
+      "short_text": "<= 260 chars, ends with the URL"
+    }
+  ],
   "considered": [
     {"title": "...", "url": "...", "score": <int>, "note": "why it lost"}
   ]
 }
 ```
 
-   - On `skip`, set `"selected": null` and still fill `considered` with what you
+   - `posts` is an array, ordered by score (highest first). One entry per
+     selected story. It may hold one item, several, or many.
+   - On `skip`, set `"posts": []` and still fill `considered` with what you
      looked at and each item's score.
 
 You must **not** post anything yourself and must not run shell commands other

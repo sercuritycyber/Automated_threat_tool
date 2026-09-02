@@ -1,24 +1,28 @@
-# Blue Team Podcast — Automated CTI → LinkedIn
+# Blue Team Podcast — Automated CTI → Social
 
-Unattended cyber-threat-intelligence pipeline. Every 6 hours it pulls the major
+Unattended cyber-threat-intelligence pipeline. Every few hours it pulls the major
 security feeds, cross-references the CISA KEV catalog, uses **Claude Code**
-(`claude -p`, no separate LLM API key) to verify and score the top stories, and
-— if something clears the impact bar — drafts and publishes a defender-focused
-LinkedIn post.
+(`claude -p`, no separate LLM API key) to verify and score the stories worth
+telling defenders about, then drafts and publishes them to your channels —
+**LinkedIn, Mastodon, Bluesky, X, or email**, any combination.
+
+Multi-post: a quiet day is one post or none; a Patch-Tuesday meltdown goes out in
+full — stories scoring ≥ 90 ignore the daily cap. Or write your own on the
+**Compose** page and send it anywhere.
 
 No Hermes. No OpenAI/Anthropic API billing. Just the `claude` CLI you already
 have, driven by a systemd timer — with a local web control panel on top.
 
 ```
  systemd timer ──▶ bin/run.sh                          web/app.py  ──▶  http://127.0.0.1:8799
-                     │                                  (dashboard · review queue · settings
+                     │                                  (dashboard · review · compose · settings
    1. ingest  ───────┤  bin/ingest.py                    · feeds · secrets · logs · run-now)
                      │        └─▶ state/candidates.json          ▲
    2. analyst ───────┤  claude -p prompts/analyst.md              │ reads/writes the same files
-                     │        └─▶ state/decision.json             │
-   3. publish ───────┘  bin/publish_linkedin.py ──────────────────┘
-        mode=auto   → posts straight away
-        mode=review → holds in state/pending.json for you to approve in the panel
+                     │        └─▶ state/decision.json  (posts[])  │
+   3. publish ───────┘  bin/publish_linkedin.py ──▶ bin/publishers.py
+        mode=auto   → posts straight away, up to publish.max_per_day (severe bypasses it)
+        mode=review → holds every draft in state/pending.json for you to approve
 ```
 
 ## The web control panel
@@ -30,12 +34,13 @@ python3 web/app.py        # → http://127.0.0.1:8799   (localhost only, no exte
 | Page | What it does |
 |---|---|
 | **Dashboard** | operations view: system-state banner (LIVE / DRY-RUN / ARMED) with a live countdown to the next scheduled run, stat tiles (posts today vs cap, 7-day count, avg score, queue depth), today's run slots, a 14-day activity chart, recent posts, a run-history timeline, and quick actions — **Run now**, **Fire top candidate**, **Go live / Pause**, **Clear test data**. Soft-refreshes every 60s |
-| **Review queue** | the held post — edit the text inline, **Approve & post**, **Save edits**, or **Reject**; shows the score breakdown and everything else that was considered |
-| **Candidates** | the current `state/candidates.json` as a table (pre-score, source, CVEs, KEV hits); **Draft & review** on any row hands that one story to `claude -p` now and drops the draft in the review queue — bypasses the schedule and the daily cap |
+| **Review queue** | every held post as its own card — edit the text and the short (X/Bluesky) version, pick which networks it goes to, then **Approve & post**, **Save**, **Rewrite**, or **Reject** per item, or **Approve all** |
+| **Compose** | write a post yourself, pick networks, **Post now** or **Hold for review**. Bypasses the analyst, schedule, threshold and daily cap — it's your channel |
+| **Candidates** | the current `state/candidates.json` as a table; **Draft & review** on any row hands that story to `claude -p` now and queues the draft — bypasses the schedule and the daily cap |
 | **Drafts** | every generated post, archived |
-| **Settings** | brand/voice, lookback, `min_score`, publish mode, **dry-run switch**, schedule (`OnCalendar`), notifications — writes `config/settings.yaml` |
+| **Settings** | brand/voice, lookback, `min_score`, publish mode, **dry-run switch**, **which networks to post to**, daily cap + severity override + runaway guard, per-network options, schedule, notifications — writes `config/settings.yaml` |
 | **Feeds** | add / remove / enable / disable / re-weight sources, **Test all feeds** — writes `config/feeds.yaml` |
-| **Secrets** | LinkedIn token + OAuth details, write-only, masked — writes `config/env` (chmod 600); **Test LinkedIn token** button |
+| **Secrets** | credentials for each network (LinkedIn, Mastodon, Bluesky, X, email), write-only + masked — writes `config/env` (chmod 600); per-network **Test** button |
 | **Logs** | every run log, newest tailed inline |
 
 ## Why this is better than a single `claude -p "scrape everything"` prompt
@@ -90,6 +95,21 @@ To post to a **company page** instead of your profile, set
 `LINKEDIN_AUTHOR_URN=urn:li:organization:<id>` and use a token with
 `w_organization_social`.
 
+## Other networks
+
+Add credentials on the **Secrets** page, then tick the network in
+**Settings → Post to**. `bin/publishers.py` has one function per network.
+
+| Network | Needs | Notes |
+|---|---|---|
+| **Mastodon** | instance URL + access token (Preferences → Development) | full post; `mastodon_visibility` setting |
+| **Bluesky** | handle + app password (Settings → App passwords) | 300-char limit — posts the `short_text` / an auto-trimmed teaser |
+| **X / Twitter** | API key/secret + access token/secret, app set to *Read and write* | OAuth 1.0a; 280-char teaser; needs a paid tier for write |
+| **Email** | SMTP host/port/user/password, `EMAIL_FROM`, `EMAIL_TO` (comma list) | subject = the hook line + `email_subject_prefix`; use SES/Resend/SendGrid for volume |
+
+Every enabled network with credentials gets each post. A network with no
+credentials is skipped, not an error.
+
 ## Tuning
 
 Everything below is in the panel (Settings / Feeds), or edit the files directly:
@@ -99,9 +119,11 @@ Everything below is in the panel (Settings / Feeds), or edit the files directly:
 | add/remove/disable sources | Feeds | `config/feeds.yaml` |
 | change cadence | Settings → Schedule | `systemd/cti-harvester.timer` → `OnCalendar=` |
 | raise/lower the publish bar | Settings → Min score | `config/settings.yaml` → `scoring.min_score` (65 default; 80 = KEV-only) |
-| cap posts per day | Settings → Max posts per day | `config/settings.yaml` → `publish.max_per_day` (default 5; extras held for review) |
-| let a severe story ignore the cap | Settings → Severity override score | `config/settings.yaml` → `publish.severity_override_score` (default 90) |
-| push a specific story out now | Candidates → **Draft & review** on its row | — (skips the schedule and the daily cap; still needs one approval) |
+| choose which networks to post to | Settings → Post to | `config/settings.yaml` → `publish.targets` (list: linkedin, mastodon, bluesky, x, email) |
+| cap posts per day | Settings → Max posts per day | `config/settings.yaml` → `publish.max_per_day` (default 5; mid-tier extras held for review) |
+| let a severe story ignore the cap | Settings → Severity override score | `config/settings.yaml` → `publish.severity_override_score` (default 90; a story ≥ this always posts) |
+| stop a runaway analyst run | Settings → Runaway guard | `config/settings.yaml` → `publish.runaway_guard` (default 20 auto-posts/run; the rest are held) |
+| push a specific story out now | Candidates → **Draft & review**, or **Compose** | — (skips the schedule, threshold and daily cap; still needs one approval) |
 | widen the story window | Settings → Lookback | `config/settings.yaml` → `ingest.lookback_hours` |
 | auto-post vs approve-first | Settings → Mode | `config/settings.yaml` → `publish.mode` |
 | change the voice / scoring rubric | — | `prompts/analyst.md` |
@@ -133,9 +155,11 @@ config/settings.yaml     all runtime knobs (non-secret)
 config/env               secrets (git-ignored, chmod 600)
 lib/feedparse.py         stdlib RSS 2.0 / Atom parser
 bin/ingest.py            stage 1 — deterministic feeds + KEV + dedup
-prompts/analyst.md       stage 2 — the algorithm handed to `claude -p`
-bin/publish_linkedin.py  stage 3 — archive + review-hold / post + record
+prompts/analyst.md       stage 2 — the algorithm handed to `claude -p` (writes posts[])
+bin/publish_linkedin.py  stage 3 — classify posts[], cap/hold logic, archive, record
+bin/publishers.py        one post() per network: linkedin / mastodon / bluesky / x / email
 bin/notify.py            ntfy helper
+docs/RND.md              productisation / paid-tier notes (not built)
 bin/runlog.py            appends a run summary to state/runs.jsonl (dashboard timeline)
 bin/postlog.py           rolling-24h post counter (daily cap)
 bin/lint_post.py         post-quality linter + gate
