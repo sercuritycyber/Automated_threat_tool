@@ -1,0 +1,32 @@
+# Threatintel pipeline as a container image (podman / docker).
+#
+# The pipeline shells out to the `claude` CLI, whose auth lives in ~/.claude on
+# the host, so that directory and config/ + state/ + logs/ are BIND-MOUNTED at
+# run time (see deploy/threatintel.container). Nothing secret is baked in.
+#
+# Build:  podman build -t threatintel:latest -f deploy/Containerfile .
+FROM python:3.13-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      bash ca-certificates curl git tini \
+    && rm -rf /var/lib/apt/lists/*
+
+# claude CLI (native install; self-updates are disabled in the unit via env)
+RUN curl -fsSL https://claude.ai/install.sh | bash -s -- --no-modify-path \
+    && ln -sf /root/.local/bin/claude /usr/local/bin/claude || true
+
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY bin/ ./bin/
+COPY lib/ ./lib/
+COPY prompts/ ./prompts/
+COPY config/feeds.yaml ./config/feeds.yaml
+
+# config/env, config/settings.yaml, state/, logs/ and the claude auth dir are
+# provided by bind mounts at run time — never copied in.
+ENV PYTHONUNBUFFERED=1 DISABLE_AUTOUPDATER=1 CLAUDE_DISABLE_AUTOUPDATE=1
+
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["bash", "bin/run.sh"]

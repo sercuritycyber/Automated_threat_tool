@@ -1,0 +1,38 @@
+# Podman Quadlet unit — the Threatintel pipeline as a scheduled container.
+#
+# Install (rootless, per-user):
+#   mkdir -p ~/.config/containers/systemd
+#   cp deploy/threatintel.container deploy/threatintel.timer ~/.config/containers/systemd/
+#   podman build -t threatintel:latest -f deploy/Containerfile ~/Threatintel
+#   systemctl --user daemon-reload
+#   systemctl --user start threatintel.timer
+#
+# The oneshot container is fired by threatintel.timer. It bind-mounts the live
+# config, state, logs and the host's claude auth so nothing secret is in the
+# image and state survives rebuilds.
+
+[Unit]
+Description=SecurityCyber CTI pipeline (one harvest)
+After=network-online.target
+
+[Container]
+Image=threatintel:latest
+AutoUpdate=local
+# live config + working state on the host
+Volume=%h/Threatintel/config:/app/config:z
+Volume=%h/Threatintel/state:/app/state:z
+Volume=%h/Threatintel/logs:/app/logs:z
+Volume=%h/Threatintel/drafts:/app/drafts:z
+# claude CLI auth (read-write: it refreshes tokens)
+Volume=%h/.claude:/root/.claude:z
+Volume=%h/.claude.json:/root/.claude.json:z
+Environment=CTI_TRIGGER=timer
+Environment=PYTHONUNBUFFERED=1
+# don't let the CLI try to self-update inside a throwaway container
+Environment=DISABLE_AUTOUPDATER=1
+
+[Service]
+Type=oneshot
+TimeoutStartSec=1800
+
+# no [Install] — started by the .timer, not on boot
