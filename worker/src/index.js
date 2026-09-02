@@ -363,7 +363,13 @@ async function stripeWebhook(request, env, cfg) {
   const sig = request.headers.get("stripe-signature") || "";
   let event;
   try { event = await billing.verifyWebhook(payload, sig, env.STRIPE_WEBHOOK_SECRET); }
-  catch (e) { return json({ error: String(e) }, 400); }
+  catch (e) {
+    // Unauthenticated endpoint: log the reason, don't publish it. It used to
+    // answer "STRIPE_WEBHOOK_SECRET not set" to anyone who POSTed here.
+    console.error("stripe webhook rejected", e);
+    if (!env.STRIPE_WEBHOOK_SECRET) await notifyOwner(env, cfg, "Stripe webhook rejected: STRIPE_WEBHOOK_SECRET is not set");
+    return json({ error: "invalid signature" }, 400);
+  }
   let res;
   try { res = await billing.handleEvent(env, cfg, event); }
   catch (e) { console.error("handleEvent", e); await notifyOwner(env, cfg, `webhook handler error: ${e}`); return json({ received: true, handler_error: String(e).slice(0, 200) }); }
