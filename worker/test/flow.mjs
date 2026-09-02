@@ -125,6 +125,35 @@ if (pr) {
 }
 ok("purchases list is all one-off items", purchases.length > 0 && purchases.every((p) => p.item === "brief"));
 
+// 6b. Private RSS feed — the URL is the credential, and it must stop carrying
+//     alerts the moment the subscription does. That's a revenue control, so
+//     assert both directions.
+{
+  const feedTok = "flowfeedtoken" + Date.now();
+  await adminPost(`subscribers/${sid}/channel`, { kind: "rss", target: feedTok, verified: true });
+  const fetchFeed = () => fetch(`${BASE}/feed/${feedTok}.xml`).then(async (r) =>
+    ({ status: r.status, ct: r.headers.get("content-type") || "", body: await r.text() }));
+
+  await adminPost(`subscribers/${sid}/edit`, { status: "active", min_score: 0 });
+  let f = await fetchFeed();
+  ok("feed serves RSS to an active subscriber",
+    f.status === 200 && /application\/rss\+xml/.test(f.ct) && f.body.includes("<rss") && f.body.includes("<item>"));
+  const activeItems = (f.body.match(/<item>/g) || []).length;
+  ok("feed carries the ingested alerts", activeItems > 0);
+
+  await adminPost(`subscribers/${sid}/edit`, { status: "cancelled" });
+  f = await fetchFeed();
+  ok("cancelled subscriber gets NO alerts in the feed",
+    f.status === 200 && !/Fortinet/.test(f.body) && /no longer active/i.test(f.body));
+
+  await adminPost(`subscribers/${sid}/edit`, { status: "active" });
+  f = await fetchFeed();
+  ok("reactivating restores the same feed URL", (f.body.match(/<item>/g) || []).length === activeItems);
+
+  ok("unknown feed token is 404", (await fetch(`${BASE}/feed/notarealtoken0000000000.xml`)).status === 404);
+  ok("malformed feed token is 404", (await fetch(`${BASE}/feed/abc.xml`)).status === 404);
+}
+
 // 7. DSAR export + erase
 const exp = await adminGet(`subscribers/${sid}/export`);
 ok("DSAR export has sections", exp.subscriber && exp.consents && exp.deliveries);

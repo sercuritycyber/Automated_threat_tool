@@ -25,7 +25,7 @@ const DEFAULTS = {
       monthly_pence: 800, weekly_pence: 200,
       blurb: "Instant alerts for anything scoring 90+, plus a daily digest.",
       instant_min_score: 90, attach_json: false,
-      channels: ["email", "discord", "telegram", "ntfy"], max_channels: 2,
+      channels: ["email", "rss", "discord", "telegram", "ntfy"], max_channels: 3,
     },
     team: {
       monthly_price_id: "", weekly_price_id: "",
@@ -33,12 +33,12 @@ const DEFAULTS = {
       monthly_pence: 1800, weekly_pence: 500,
       blurb: "Everything scoring 75+ instantly, a daily digest, machine-readable JSON, Slack and Discord.",
       instant_min_score: 75, attach_json: true,
-      channels: ["email", "discord", "slack", "telegram", "webhook", "ntfy"], max_channels: 6,
+      channels: ["email", "rss", "discord", "slack", "telegram", "webhook", "ntfy"], max_channels: 7,
     },
   },
 };
 
-const CHANNEL_KINDS = ["email", "discord", "slack", "telegram", "webhook", "ntfy"];
+const CHANNEL_KINDS = ["email", "rss", "discord", "slack", "telegram", "webhook", "ntfy"];
 const STATUSES = ["pending_payment", "unconfirmed", "active", "paused", "past_due", "cancelled"];
 const CADENCES = ["monthly", "weekly"];
 

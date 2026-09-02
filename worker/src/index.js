@@ -4,7 +4,7 @@ import * as db from "./db.js";
 import * as billing from "./billing.js";
 import { send, verifyTarget, channelAvailability } from "./channels.js";
 import { sign, verify, newId, BadToken, timingSafeEqual } from "./tokens.js";
-import { page, landing, subscribeForm, managePage, simple, briefPage, LOGO_SVG, chanLabel } from "./pages.js";
+import { page, landing, subscribeForm, managePage, simple, briefPage, feedXml, LOGO_SVG, chanLabel } from "./pages.js";
 import { legalHtml } from "./legal.js";
 import { html, text, json, redirect, q, esc, clientIp, rateLimit, nowIso } from "./util.js";
 
@@ -65,7 +65,14 @@ async function route(request, env, ctx, url, path, cfg) {
   if (path === "/robots.txt")
     return text("User-agent: *\nAllow: /$\nAllow: /subscribe\nAllow: /brief\nAllow: /privacy\nAllow: /terms\nAllow: /cookies\n"
       + "Disallow: /manage\nDisallow: /confirm\nDisallow: /unsubscribe\nDisallow: /welcome\nDisallow: /brief/thanks\n"
-      + "Disallow: /channel\nDisallow: /webhooks\nDisallow: /internal\nDisallow: /admin\nDisallow: /account\n");
+      + "Disallow: /channel\nDisallow: /webhooks\nDisallow: /internal\nDisallow: /admin\nDisallow: /account\nDisallow: /feed\n");
+
+  // ---- private RSS feed ----
+  // /feed/<token>.xml — the token is the subscriber's rss channel target, so
+  // the URL IS the credential (readers can't send auth headers). Access is
+  // re-checked against subscription status on every poll: stop paying and the
+  // feed stops carrying alerts.
+  if (path.startsWith("/feed/") && m === "GET") return rssFeed(request, env, cfg, path);
 
   // ---- legal ----
   if (["/privacy", "/terms", "/cookies"].includes(path) && m === "GET") {
@@ -185,6 +192,60 @@ async function account(request, env, cfg) {
   return redirect("/?m=" + q("If that address has an account, a link is on its way."));
 }
 
+// ---------------------------------------------------------------- private RSS
+// Statuses that still entitle a subscriber to alerts. `past_due` keeps working
+// briefly on purpose — Stripe retries a failed card for a few days and we'd
+// rather not cut off a good customer over a bank blip; `cancelled` does not.
+const FEED_OK = ["active"];
+const FEED_GRACE = ["past_due"];
+
+async function rssFeed(request, env, cfg, path) {
+  const over = rl(request, "feed", cfg, 120); if (over) return over;
+  const token = path.slice("/feed/".length).replace(/\.(xml|rss)$/i, "");
+  const xml = (body, status = 200, cache = "private, max-age=300") =>
+    new Response(body, { status, headers: {
+      "content-type": "application/rss+xml; charset=utf-8",
+      "cache-control": cache,
+      "x-robots-tag": "noindex, nofollow",
+    } });
+
+  if (!/^[A-Za-z0-9_-]{16,}$/.test(token)) return xml("not found", 404, "no-store");
+  const sub = await db.subscriberByFeedToken(env.DB, token);
+  // Unknown token: 404, and never say whether it merely lapsed.
+  if (!sub) return xml("not found", 404, "no-store");
+
+  const selfUrl = `${cfg.site_url}/feed/${token}.xml`;
+  const entitled = FEED_OK.includes(sub.status) || FEED_GRACE.includes(sub.status);
+  if (!entitled) {
+    // A dead feed is confusing in a reader, so say why in an item instead of
+    // 402-ing into a silent red icon.
+    return xml(feedXml(cfg, [{
+      post_key: `lapsed:${sub.id}:${sub.status}`,
+      title: `Your ${cfg.brand} CTI subscription is no longer active`,
+      url: `${cfg.site_url}/account`,
+      seen_at: nowIso(),
+      post_text: `This feed has stopped updating because the subscription is ${sub.status}. `
+        + `Restart it at ${cfg.site_url}/account and alerts resume immediately — the feed URL stays the same.`,
+    }], { selfUrl, title: `${cfg.brand} CTI Alerts — inactive`, note: "Subscription inactive." }), 200, "no-store");
+  }
+
+  const prefs = await db.getPrefs(env.DB, sub.id);
+  const tier = cfg.tiers[sub.tier] || {};
+  const floor = prefs?.min_score_override ?? tier.instant_min_score ?? 0;
+  const vendors = (prefs?.vendors || []).map((v) => v.toLowerCase()).filter(Boolean);
+  let posts = await db.postsForFeed(env.DB, 60);
+  posts = posts.filter((p) => (p.score ?? 0) >= floor).filter((p) => {
+    if (!vendors.length) return true;
+    const hay = `${p.title} ${p.post_text} ${p.source}`.toLowerCase();
+    return vendors.some((v) => hay.includes(v));
+  }).slice(0, 50);
+
+  const note = `Alerts scoring ${floor}+ for ${sub.email}`
+    + (vendors.length ? `, filtered to ${vendors.join(", ")}` : "")
+    + (FEED_GRACE.includes(sub.status) ? " — payment needs attention, see /account" : "");
+  return xml(feedXml(cfg, posts, { selfUrl, title: `${cfg.brand} CTI Alerts`, note }));
+}
+
 // ---------------------------------------------------------------- subscribe
 async function subscribeSubmit(request, env, cfg) {
   const over = rl(request, "subscribe", cfg, 10); if (over) return over;
@@ -202,6 +263,8 @@ async function subscribeSubmit(request, env, cfg) {
     return redirect(`/subscribe?tier=${tier}&m=` + q(`${chanLabel(platform)} is ${avail[platform].why}. Pick another delivery method.`) + "&k=bad");
   let target = "";
   if (platform === "email") target = email;
+  // rss: we mint the feed id ourselves — it becomes the secret in the URL.
+  else if (platform === "rss") target = newId(24);
   else if (platform !== "telegram") {
     const [ok, why] = verifyTarget(platform, f.target || "");
     if (!ok) return redirect(`/subscribe?tier=${tier}&m=` + q(why) + "&k=bad");
@@ -361,6 +424,16 @@ async function manageChannelAdd(request, env, cfg) {
     return redirect(`/manage?t=${tok}&m=` + q("That channel isn't available on your plan.") + "&k=bad");
   if (sub.channels.filter((c) => c.kind !== "email").length >= (tcfg.max_channels || 2))
     return redirect(`/manage?t=${tok}&m=` + q("You've reached your plan's channel limit.") + "&k=bad");
+  // rss has no user-supplied target: mint the feed id, and it's live at once
+  // (nothing to test-ping — the reader pulls it).
+  if (f.kind === "rss") {
+    if (sub.channels.some((c) => c.kind === "rss"))
+      return redirect(`/manage?t=${tok}&m=` + q("You already have a feed URL.") + "&k=bad");
+    const feedId = newId(24);
+    await db.addChannel(env.DB, sub.id, "rss", feedId, true, "self-serve");
+    await db.logEvent(env.DB, "channel:rss_created", sub.id, {});
+    return redirect(`/manage?t=${tok}&m=` + q("Your private feed URL is ready — copy it into your reader."));
+  }
   const [ok, why] = verifyTarget(f.kind, f.target || "");
   if (!ok) return redirect(`/manage?t=${tok}&m=` + q(why) + "&k=bad");
   const r = await send(env, cfg, f.kind, (f.target || "").trim(), "SecurityCyber CTI — channel connected",
@@ -585,6 +658,15 @@ async function adminApi(request, env, cfg, url, path) {
     for (const r of s.active) mrr += r.n * monthlyPence(cfg, r.tier, r.cadence || "monthly");
     return json({
       ...s, mrr_pence: mrr, problems: problems(cfg, env), advisories: advisories(cfg),
+      // Presence only — never the values. Lets the owner dashboard show which
+      // secrets are actually reaching the running Worker.
+      secrets: Object.fromEntries(["STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET", "RESEND_API_KEY",
+        "SUBS_TOKEN_SECRET", "INGEST_SECRET", "ADMIN_TOKEN", "TELEGRAM_BOT_TOKEN",
+        "TELEGRAM_BOT_USERNAME", "TELEGRAM_WEBHOOK_SECRET"].map((k) => [k, !!env[k]])),
+      channels: channelAvailability(env, cfg),
+      live: !!cfg.live,
+      stripe_mode: /^sk_live_/.test(env.STRIPE_SECRET_KEY || "") ? "live"
+        : (env.STRIPE_SECRET_KEY ? "test" : "unset"),
       briefs_24h: await db.purchaseCount24h(D),
       last_digest: await db.kvGet(D, "last_digest"), last_retention: await db.kvGet(D, "last_retention"),
     });

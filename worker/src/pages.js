@@ -62,6 +62,7 @@ table{border-collapse:collapse;width:100%;font-size:13.5px;margin:10px 0}
 td,th{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
 th{color:var(--dim);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.04em}
 code{background:var(--bg3);border:1px solid var(--line);border-radius:4px;padding:1px 5px;font:.85em var(--mono)}
+code.feedurl{display:inline-block;word-break:break-all;white-space:normal;color:var(--accent);padding:5px 8px;line-height:1.5}
 hr{border:0;border-top:1px solid var(--line-dim);margin:24px 0}
 footer{margin-top:52px;padding-top:22px;border-top:1px solid var(--line-dim);color:var(--faint);font-size:12.5px}
 footer .fb{display:flex;align-items:center;gap:8px;font-family:var(--display);font-weight:700;color:var(--white);margin-bottom:8px}
@@ -132,6 +133,7 @@ ${esc(legal)}${ico} · Independent UK blue-team security advisory.<br>
 
 export const CHAN_META = {
   email: ["Email", "the address to send alerts to", "you@example.com"],
+  rss: ["RSS feed", "nothing here — we'll mint you a private feed URL for your reader", ""],
   discord: ["Discord", "a channel webhook URL (Server Settings → Integrations → Webhooks → New Webhook → Copy URL)", "https://discord.com/api/webhooks/…"],
   slack: ["Slack", "an incoming-webhook URL (api.slack.com/messaging/webhooks)", "https://hooks.slack.com/services/…"],
   telegram: ["Telegram", "nothing here — after payment you'll get a one-tap link to our bot", ""],
@@ -357,6 +359,48 @@ and the next exploited vulnerability that touches your stack will find you — n
   return page(cfg, "Threat intelligence alerts for defenders", body, flash, flashKind);
 }
 
+// ---- private RSS feed (RSS 2.0) ---------------------------------------
+// XML needs its own escaper: esc() leaves quotes/apostrophes alone, which is
+// fine in HTML text nodes but not inside XML attributes or CDATA-free content.
+function xesc(s) {
+  return String(s == null ? "" : s)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&apos;")
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, "");  // XML 1.0 forbids these
+}
+const rfc822 = (iso) => { const d = new Date(iso || Date.now()); return (isNaN(d) ? new Date() : d).toUTCString(); };
+
+export function feedXml(cfg, posts, { selfUrl, title, note = "" } = {}) {
+  const items = posts.map((p) => {
+    const cves = Array.isArray(p.cve_ids) ? p.cve_ids : [];
+    const desc = (p.post_text || p.short_text || "").trim();
+    return `<item>
+<title>${xesc(p.title || cves.join(", ") || "Threat alert")}</title>
+<link>${xesc(p.url || cfg.site_url)}</link>
+<guid isPermaLink="false">${xesc(p.post_key)}</guid>
+<pubDate>${rfc822(p.seen_at)}</pubDate>
+${p.source ? `<source url="${xesc(cfg.site_url)}">${xesc(p.source)}</source>` : ""}
+${cves.map((c) => `<category>${xesc(c)}</category>`).join("")}
+<description>${xesc(desc + (p.score != null ? `\n\nImpact score: ${p.score}/100` : "")
+      + (p.url ? `\n${p.url}` : ""))}</description>
+</item>`;
+  }).join("\n");
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+<channel>
+<title>${xesc(title || `${cfg.brand} CTI Alerts`)}</title>
+<link>${xesc(cfg.site_url)}</link>
+<description>${xesc(note || "Prioritised threat intelligence for defenders — only what clears the bar.")}</description>
+<language>en-gb</language>
+<lastBuildDate>${rfc822(posts[0]?.seen_at)}</lastBuildDate>
+<ttl>30</ttl>
+${selfUrl ? `<atom:link href="${xesc(selfUrl)}" rel="self" type="application/rss+xml"/>` : ""}
+${items}
+</channel>
+</rss>`;
+}
+
 export function subscribeForm(cfg, tier, flash = "", flashKind = "", avail = null, preCadence = "") {
   const t = cfg.tiers[tier];
   const allowed = (t.channels || []).filter((x) => CHAN_META[x]);
@@ -416,9 +460,20 @@ export function managePage(cfg, sub, tok, flash = "", flashKind = "") {
     const rm = ch.kind === "email" ? "" :
       `<form method=post action="/manage/channel/remove" style="display:inline"><input type=hidden name=t value="${esc(tok)}">
 <input type=hidden name=cid value="${ch.id}"><button class="btn ghost" style="padding:4px 10px;font-size:13px">remove</button></form>`;
-    return `<tr><td>${esc(chanLabel(ch.kind))}</td><td class=muted>${esc(short(ch.target))}</td><td>${v} ${rm}</td></tr>`;
+    // For rss the target is the feed secret — show the full URL to copy, not a
+    // truncated id, since pasting it into a reader is the whole point.
+    const where = ch.kind === "rss"
+      ? `<code class=feedurl>${esc(cfg.site_url)}/feed/${esc(ch.target)}.xml</code>`
+      : `<span class=muted>${esc(short(ch.target))}</span>`;
+    return `<tr><td>${esc(chanLabel(ch.kind))}</td><td>${where}</td><td>${v} ${rm}</td></tr>`;
   }).join("");
-  const addOpts = (tierCfg.channels || []).filter((x) => x !== "email" && x !== "telegram" && CHAN_META[x])
+  const hasRss = sub.channels.some((ch) => ch.kind === "rss");
+  const rssNote = hasRss ? `<p class=muted style="margin-top:10px">Paste that feed URL into any reader
+(Feedly, Inoreader, NetNewsWire, Thunderbird…). It's private to you — treat it like a password, and it
+keeps updating for as long as the subscription is active.</p>` : "";
+  const addOpts = (tierCfg.channels || [])
+    .filter((x) => x !== "email" && x !== "telegram" && CHAN_META[x])
+    .filter((x) => !(x === "rss" && hasRss))   // one feed per subscriber
     .map((x) => `<option value="${x}" data-hint="${esc(CHAN_META[x][1])}" data-ph="${esc(CHAN_META[x][2])}">${esc(chanLabel(x))}</option>`).join("");
   const portal = sub.stripe_customer_id ?
     `<form method=post action="/manage/portal"><input type=hidden name=t value="${esc(tok)}">
@@ -428,7 +483,7 @@ export function managePage(cfg, sub, tok, flash = "", flashKind = "") {
 <p class=muted>Plan: <b>${esc(sub.tier[0].toUpperCase() + sub.tier.slice(1))}</b> (${esc(sub.cadence)}) ·
 Status: <b>${esc(sub.status)}</b> · ${esc(sub.email)}</p>
 <h2>Channels</h2>
-<div class=card><table><tbody><tr><th>type</th><th>where</th><th></th></tr>${chRows}</tbody></table>
+<div class=card><table><tbody><tr><th>type</th><th>where</th><th></th></tr>${chRows}</tbody></table>${rssNote}
 <form method=post action="/manage/channel/add" style="margin-top:12px"><input type=hidden name=t value="${esc(tok)}">
 <div class=row><select name=kind id=ak style="max-width:150px">${addOpts}</select>
 <input type=text name=target id=at style="flex:1;min-width:200px"><button class=btn>Add</button></div>

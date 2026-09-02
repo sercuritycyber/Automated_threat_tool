@@ -3,7 +3,7 @@
 import { sign, verify, newId, BadToken, timingSafeEqual } from "../src/tokens.js";
 import { config, priceToTier, priceId, monthlyPence, problems } from "../src/config.js";
 import { verifyTarget, teaser, channelAvailability } from "../src/channels.js";
-import { landing, subscribeForm } from "../src/pages.js";
+import { landing, subscribeForm, feedXml } from "../src/pages.js";
 import * as billing from "../src/billing.js";
 import { mdToHtml, esc } from "../src/util.js";
 import { legalHtml } from "../src/legal.js";
@@ -71,6 +71,30 @@ ok("CONFIG.channels_disabled forces a kind off",
   !channelAvailability({ RESEND_API_KEY: "re_x" }, config({ ...cenv, CONFIG: JSON.stringify({ channels_disabled: ["slack"] }) })).slack.ok);
 ok("unavailable channels render disabled on the form",
   subscribeForm(cNoPrice, "individual", "", "", availNone).includes("unavailable"));
+
+// ---- private RSS feed ----
+const feedPosts = [
+  { post_key: "p1", title: "Fortinet <RCE> & \"chaos\"", url: "https://ex.co/a?x=1&y=2", source: "Vendor",
+    score: 96, cve_ids: ["CVE-2026-1111"], post_text: "Patch now.", seen_at: "2026-09-02T10:00:00Z" },
+  { post_key: "p2", title: "Second", url: "https://ex.co/b", source: "KEV", score: 80, cve_ids: [],
+    post_text: "Body", seen_at: "2026-09-01T10:00:00Z" },
+];
+const fx = feedXml(cNoPrice, feedPosts, { selfUrl: "https://cti.example/feed/abc.xml" });
+ok("feed is well-formed RSS 2.0", fx.startsWith("<?xml") && fx.includes('<rss version="2.0"') && fx.trimEnd().endsWith("</rss>"));
+ok("feed has one item per post", (fx.match(/<item>/g) || []).length === 2);
+// Every & must open a real entity — otherwise the reader sees malformed XML.
+ok("feed escapes XML metacharacters",
+  fx.includes("&lt;RCE&gt;") && fx.includes("&quot;chaos&quot;")
+  && fx.includes("https://ex.co/a?x=1&amp;y=2")
+  && !/&(?!(amp|lt|gt|quot|apos);)/.test(fx));
+ok("feed carries guid, pubDate and self link",
+  fx.includes('<guid isPermaLink="false">p1</guid>') && fx.includes("<pubDate>") && fx.includes('rel="self"'));
+ok("feed exposes CVE categories + score", fx.includes("<category>CVE-2026-1111</category>") && fx.includes("96/100"));
+ok("empty feed still valid", feedXml(cNoPrice, []).includes("</channel>"));
+ok("rss is an offered channel", cNoPrice.tiers.individual.channels.includes("rss"));
+ok("rss target accepts a minted id, rejects junk",
+  verifyTarget("rss", "abcdefghijklmnopqrstuvwx")[0] && !verifyTarget("rss", "short")[0]);
+ok("rss is always available (nothing to configure)", channelAvailability({}, cNoPrice).rss.ok);
 
 // ---- channels ----
 ok("verifyTarget discord ok", verifyTarget("discord", "https://discord.com/api/webhooks/123/abc")[0]);

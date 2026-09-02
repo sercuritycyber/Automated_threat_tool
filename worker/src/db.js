@@ -207,6 +207,21 @@ export async function postsSince(db, hours) {
 export const trimPostsLog = (db, keep = 500) =>
   run(db, "DELETE FROM posts_log WHERE post_key NOT IN (SELECT post_key FROM posts_log ORDER BY seen_at DESC LIMIT ?)", keep);
 
+// ---- private RSS feeds -------------------------------------------
+// A feed URL is /feed/<token>.xml where <token> is the `target` of the
+// subscriber's rss channel row. Resolving it through that row means revoking a
+// feed is just deleting the row — there's no separate token table or expiry.
+export async function postsForFeed(db, limit = 50) {
+  // Newest first: a reader wants chronology, unlike the digest which ranks by score.
+  const rows = await many(db, "SELECT * FROM posts_log ORDER BY seen_at DESC LIMIT ?", limit);
+  return rows.map((r) => ({ ...r, cve_ids: vendorsLoad(r.cve_ids) }));
+}
+export const subscriberByFeedToken = (db, token) =>
+  one(db, `SELECT s.* FROM subscribers s JOIN channels c ON c.subscriber_id = s.id
+           WHERE c.kind = 'rss' AND c.target = ?`, token);
+export const feedTokenFor = (db, sid) =>
+  one(db, "SELECT target FROM channels WHERE subscriber_id = ? AND kind = 'rss' LIMIT 1", sid);
+
 // ---- one-off purchases (paid threat briefs) -----------------------
 export async function recordPurchase(db, p) {
   await run(db,

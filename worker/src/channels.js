@@ -28,6 +28,8 @@ export function channelAvailability(env, cfg) {
     email: env.RESEND_API_KEY ? mk(true) : mk(false, "email delivery isn't switched on yet"),
     telegram: (env.TELEGRAM_BOT_TOKEN && env.TELEGRAM_BOT_USERNAME)
       ? mk(true) : mk(false, "the Telegram bot isn't connected yet"),
+    // Pull, not push: we mint the URL, the reader fetches it. Nothing to configure.
+    rss: mk(true),
     discord: mk(true),
     slack: mk(true),
     webhook: mk(true),
@@ -153,6 +155,10 @@ export async function send(env, cfg, kind, target, subject, body, opts = {}) {
     case "telegram": return sendTelegram(env, target, subject, teaser(body, 3900, shortText));
     case "webhook": return sendWebhook(env, target, subject, body, jsonPayload);
     case "ntfy": return sendNtfy(target, subject, body, priority);
+    // rss is pull, not push: the item is already in posts_log and appears the
+    // next time the reader polls /feed/<token>.xml. Report success so the
+    // delivery is recorded and not retried.
+    case "rss": return res("rss", true, "feed");
     default: return res(kind, false, "", `unknown channel '${kind}'`);
   }
 }
@@ -167,6 +173,9 @@ export function verifyTarget(kind, target) {
     case "telegram": return /^-?\d+$/.test(target) ? [true, ""] : [false, "expected a numeric chat id — use the bot link"];
     case "webhook": return /^https:\/\//.test(target) ? [true, ""] : [false, "must be an https:// URL"];
     case "ntfy": return /^https?:\/\/[^/]+\/.+/.test(target) ? [true, ""] : [false, "must be a full ntfy topic URL"];
+    // rss targets are the feed token WE mint, never user input — so any
+    // non-empty opaque id is valid here.
+    case "rss": return /^[A-Za-z0-9_-]{16,}$/.test(target) ? [true, ""] : [false, "invalid feed id"];
     default: return [false, `unknown channel '${kind}'`];
   }
 }
