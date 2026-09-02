@@ -1,0 +1,22 @@
+# Podman Quadlet — the owner dashboard, always-on, localhost only.
+[Unit]
+Description=SecurityCyber CTI owner dashboard (127.0.0.1:8799)
+After=network-online.target
+
+[Container]
+Image=localhost/threatintel:latest
+AutoUpdate=local
+PublishPort=127.0.0.1:8799:8799
+Volume=%h/Threatintel/config:/app/config:z
+Volume=%h/Threatintel/state:/app/state:z
+Volume=%h/Threatintel/logs:/app/logs:z
+Volume=%h/Threatintel/drafts:/app/drafts:z
+Exec=python3 -m uvicorn web.app:app --host 0.0.0.0 --port 8799 --workers 1
+Environment=PYTHONUNBUFFERED=1
+
+[Service]
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

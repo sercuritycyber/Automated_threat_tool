@@ -1,32 +1,38 @@
-# Threatintel pipeline as a container image (podman / docker).
+# Threatintel pipeline — self-contained container image (podman / docker).
 #
-# The pipeline shells out to the `claude` CLI, whose auth lives in ~/.claude on
-# the host, so that directory and config/ + state/ + logs/ are BIND-MOUNTED at
-# run time (see deploy/threatintel.container). Nothing secret is baked in.
+# Base is fedora-minimal so the bundled `claude` CLI has the glibc it expects
+# (the host is Fedora; a Debian/Alpine base risks a glibc/musl mismatch on the
+# claude binary). Nothing secret is baked in — config/env, settings.yaml,
+# state/, logs/ and the claude OAuth dir are BIND-MOUNTED at run time
+# (deploy/threatintel.container).
 #
 # Build:  podman build -t threatintel:latest -f deploy/Containerfile .
-FROM python:3.13-slim
+FROM registry.fedoraproject.org/fedora-minimal:44
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-      bash ca-certificates curl git tini \
-    && rm -rf /var/lib/apt/lists/*
+RUN microdnf install -y --setopt=install_weak_deps=0 \
+      python3 python3-pip bash ca-certificates git tini shadow-utils \
+    && microdnf clean all
 
-# claude CLI (native install; self-updates are disabled in the unit via env)
+# claude CLI, pinned. Self-update is disabled in the unit; rebuild to bump.
 RUN curl -fsSL https://claude.ai/install.sh | bash -s -- --no-modify-path \
-    && ln -sf /root/.local/bin/claude /usr/local/bin/claude || true
+    && ln -sf /root/.local/bin/claude /usr/local/bin/claude
 
 WORKDIR /app
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip3 install --no-cache-dir -r requirements.txt
 
 COPY bin/ ./bin/
 COPY lib/ ./lib/
+COPY web/ ./web/
 COPY prompts/ ./prompts/
 COPY config/feeds.yaml ./config/feeds.yaml
 
-# config/env, config/settings.yaml, state/, logs/ and the claude auth dir are
+# config/env, config/settings.yaml, state/, logs/, drafts/ and ~/.claude are
 # provided by bind mounts at run time — never copied in.
-ENV PYTHONUNBUFFERED=1 DISABLE_AUTOUPDATER=1 CLAUDE_DISABLE_AUTOUPDATE=1
+ENV PYTHONUNBUFFERED=1 \
+    DISABLE_AUTOUPDATER=1 \
+    CLAUDE_DISABLE_AUTOUPDATE=1 \
+    HOME=/root
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["bash", "bin/run.sh"]
