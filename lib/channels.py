@@ -128,6 +128,23 @@ def _tg_escape(s: str) -> str:
     return re.sub(r"([_*\[\]()~`>#+\-=|{}.!])", r"\\\1", s or "")
 
 
+# ------------------------------------------------------------------ discord
+def _send_discord(webhook_url: str, subject: str, body: str) -> dict:
+    if not re.match(r"https://(discord|discordapp)\.com/api/webhooks/", webhook_url or ""):
+        return _res("discord", False, error="not a discord.com/api/webhooks URL")
+    content = f"**{subject}**\n{body}"
+    if len(content) > 2000:
+        content = content[:1970].rstrip() + "\n…"
+    try:
+        r = requests.post(webhook_url, json={"content": content, "flags": 4,
+                                             "allowed_mentions": {"parse": []}},
+                          headers={"User-Agent": UA}, timeout=20)
+    except requests.RequestException as e:
+        return _res("discord", False, error=str(e)[:200])
+    return _res("discord", r.ok, ref="posted") if r.ok \
+        else _res("discord", False, error=f"HTTP {r.status_code}: {r.text[:150]}")
+
+
 # ------------------------------------------------------------------ generic webhook
 def _send_webhook(url: str, subject: str, body: str, json_payload: dict | None, creds: dict) -> dict:
     if not re.match(r"https?://", url or ""):
@@ -172,6 +189,8 @@ def send(kind: str, target: str, subject: str, body: str, *, json_payload: dict 
         return _send_slack(target, subject, body)
     if kind == "telegram":
         return _send_telegram(target, subject, body, c)
+    if kind == "discord":
+        return _send_discord(target, subject, body)
     if kind == "webhook":
         return _send_webhook(target, subject, body, json_payload, c)
     if kind == "ntfy":
@@ -188,6 +207,9 @@ def verify_target(kind: str, target: str, creds: dict | None = None) -> tuple[bo
     if kind == "slack":
         ok = target.startswith("https://hooks.slack.com/")
         return ok, "" if ok else "must be a Slack incoming-webhook URL (https://hooks.slack.com/…)"
+    if kind == "discord":
+        ok = bool(re.match(r"https://(discord|discordapp)\.com/api/webhooks/\d+/", target))
+        return ok, "" if ok else "must be a Discord webhook URL (Server Settings → Integrations → Webhooks)"
     if kind == "telegram":
         ok = bool(re.match(r"-?\d+$", target))
         return ok, "" if ok else "expected a numeric chat id — use the bot link to get yours"

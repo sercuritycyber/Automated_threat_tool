@@ -44,13 +44,16 @@ def main() -> int:
 
     # --- migrations ---
     n = S.ensure_schema()
-    check("schema applied", d.schema_version() == 1, f"version={d.schema_version()}")
-    check("migrate is idempotent", S.ensure_schema() == 0 or True)
+    check("schema applied", d.schema_version() == 2, f"version={d.schema_version()}")
+    check("migrate is idempotent", S.ensure_schema() == 0)
     tabs = {r["name"] for r in d.query("SELECT name FROM sqlite_master WHERE type='table'")} \
         if d.backend == "sqlite" else set()
     if d.backend == "sqlite":
         check("core tables exist",
-              {"subscribers", "channels", "prefs", "consents", "deliveries", "events"} <= tabs)
+              {"subscribers", "channels", "prefs", "consents", "deliveries", "events",
+               "signup_intents"} <= tabs)
+        cols = {r["name"] for r in d.query("PRAGMA table_info(subscribers)")}
+        check("cadence column added", "cadence" in cols)
 
     # --- tokens ---
     t = tokens.sign({"sub": 7, "act": "manage"}, ttl=60)
@@ -79,9 +82,18 @@ def main() -> int:
     check("problems() lists blockers", "subscriptions.enabled is false" in subsconfig.problems())
 
     # --- CRUD ---
-    sid = S.create_pending("Alice@Example.com ", "team", source="stripe", stripe_customer_id="cus_1")
+    sid = S.create_pending("Alice@Example.com ", "team", source="stripe",
+                           stripe_customer_id="cus_1", cadence="weekly")
     sub = S.get(sid)
     check("create_pending lowercases email", sub["email"] == "alice@example.com")
+    check("cadence stored", S.get(sid, hydrate=False)["cadence"] == "weekly")
+
+    itok = tokens.sign({"x": 1}, ttl=1).split(".")[0][:12] + "T"
+    S.create_intent(itok, "z@ex.com", "individual", "monthly", "discord",
+                    "https://discord.com/api/webhooks/1/x", ip="203.0.113.1")
+    check("signup intent round-trips", S.get_intent(itok)["channel_kind"] == "discord")
+    S.consume_intent(itok)
+    check("consumed intent is gone", S.get_intent(itok) is None)
     check("email channel auto-created", any(ch["kind"] == "email" for ch in sub["channels"]))
     check("prefs row auto-created", sub["prefs"]["digest"] is True)
 

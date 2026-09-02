@@ -18,7 +18,8 @@ from datetime import datetime, timezone
 from db import get_db  # type: ignore  (lib/ is on sys.path via callers)
 
 STATUSES = ("pending_payment", "unconfirmed", "active", "paused", "past_due", "cancelled")
-CHANNEL_KINDS = ("email", "slack", "telegram", "webhook", "ntfy")
+CHANNEL_KINDS = ("email", "discord", "slack", "telegram", "webhook", "ntfy")
+CADENCES = ("monthly", "weekly")
 TERMS_VERSION = "2026-09-02"
 
 MIGRATIONS: list[tuple[int, str]] = [
@@ -110,6 +111,22 @@ MIGRATIONS: list[tuple[int, str]] = [
         value TEXT NOT NULL
     );
     """),
+    (2, """
+    ALTER TABLE subscribers ADD COLUMN cadence TEXT NOT NULL DEFAULT 'monthly';
+
+    CREATE TABLE signup_intents (
+        token       TEXT PRIMARY KEY,
+        email       TEXT NOT NULL,
+        tier        TEXT NOT NULL,
+        cadence     TEXT NOT NULL,
+        channel_kind   TEXT,
+        channel_target TEXT,
+        ip          TEXT,
+        user_agent  TEXT,
+        created_at  TEXT NOT NULL,
+        consumed    INTEGER NOT NULL DEFAULT 0
+    );
+    """),
 ]
 
 _ready = False
@@ -156,20 +173,23 @@ def _hydrate(sub: dict | None) -> dict | None:
 
 # --------------------------------------------------------------------------- create / fetch
 def create_pending(email: str, tier: str, source: str = "stripe",
-                   stripe_customer_id: str | None = None, name: str | None = None) -> int:
+                   stripe_customer_id: str | None = None, name: str | None = None,
+                   cadence: str = "monthly") -> int:
     email = email.strip().lower()
+    cadence = cadence if cadence in CADENCES else "monthly"
     d = db()
     existing = get_by_email(email)
     if existing:
         # returning subscriber — reuse the row, move it back to pending
-        d.execute("UPDATE subscribers SET tier=?, source=?, stripe_customer_id=COALESCE(?, stripe_customer_id), "
+        d.execute("UPDATE subscribers SET tier=?, cadence=?, source=?, "
+                  "stripe_customer_id=COALESCE(?, stripe_customer_id), "
                   "status=CASE WHEN status IN ('cancelled') THEN 'pending_payment' ELSE status END WHERE id=?",
-                  [tier, source, stripe_customer_id, existing["id"]])
+                  [tier, cadence, source, stripe_customer_id, existing["id"]])
         return existing["id"]
     res = d.execute(
-        "INSERT INTO subscribers(email, name, tier, status, source, stripe_customer_id, created_at) "
-        "VALUES (?, ?, ?, 'pending_payment', ?, ?, ?)",
-        [email, name, tier, source, stripe_customer_id, _now()])
+        "INSERT INTO subscribers(email, name, tier, cadence, status, source, stripe_customer_id, created_at) "
+        "VALUES (?, ?, ?, ?, 'pending_payment', ?, ?, ?)",
+        [email, name, tier, cadence, source, stripe_customer_id, _now()])
     sid = res.lastrowid
     d.execute("INSERT INTO prefs(subscriber_id, updated_at) VALUES (?, ?)", [sid, _now()])
     d.execute("INSERT INTO channels(subscriber_id, kind, target, verified, created_at) "
@@ -238,6 +258,36 @@ def activate(subscriber_id: int, stripe_subscription_id: str | None = None,
                  "current_period_end = COALESCE(?, current_period_end) WHERE id = ?",
                  [stripe_subscription_id, current_period_end, subscriber_id])
     set_status(subscriber_id, "active", "activated")
+
+
+def set_cadence(subscriber_id: int, cadence: str) -> None:
+    if cadence in CADENCES:
+        db().execute("UPDATE subscribers SET cadence = ? WHERE id = ?", [cadence, subscriber_id])
+
+
+# --------------------------------------------------------------------------- signup intents
+def create_intent(token: str, email: str, tier: str, cadence: str,
+                  channel_kind: str | None, channel_target: str | None,
+                  ip: str | None = None, user_agent: str | None = None) -> None:
+    db().execute(
+        "INSERT INTO signup_intents(token, email, tier, cadence, channel_kind, channel_target, "
+        "ip, user_agent, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [token, email.strip().lower(), tier, cadence, channel_kind, channel_target,
+         ip, user_agent, _now()])
+
+
+def get_intent(token: str) -> dict | None:
+    return _row(db().query("SELECT * FROM signup_intents WHERE token = ? AND consumed = 0", [token]))
+
+
+def consume_intent(token: str) -> None:
+    db().execute("UPDATE signup_intents SET consumed = 1 WHERE token = ?", [token])
+
+
+def purge_intents(hours: int = 48) -> int:
+    cut = datetime.fromtimestamp(time.time() - hours * 3600, timezone.utc).isoformat()
+    r = db().execute("DELETE FROM signup_intents WHERE created_at < ? OR consumed = 1", [cut])
+    return r.rowcount or 0
 
 
 def set_stripe_ids(subscriber_id: int, customer_id: str | None = None,

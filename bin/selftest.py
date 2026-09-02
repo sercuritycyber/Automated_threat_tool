@@ -94,7 +94,8 @@ def main() -> int:
     (ok if env.get("STRIPE_WEBHOOK_SECRET") else (bad if cfg.get("live") else warn))(
         "STRIPE_WEBHOOK_SECRET " + ("set" if env.get("STRIPE_WEBHOOK_SECRET") else "not set"))
     for name, t in cfg["tiers"].items():
-        (ok if t.get("price_id") else bad)(f"tier '{name}' price_id: {t.get('price_id') or 'MISSING'}")
+        got = [c for c in ("monthly", "weekly") if t.get(f"{c}_price_id")]
+        (ok if got else bad)(f"tier '{name}' Stripe prices: {', '.join(got) or 'NONE'}")
 
     hd("Email delivery")
     if env.get("EMAIL_SMTP_HOST"):

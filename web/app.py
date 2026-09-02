@@ -1546,25 +1546,14 @@ def _subs_guard() -> HTMLResponse | None:
     return None
 
 
-def _price_pence(display: str) -> int:
-    m = re.search(r"£\s*([\d.]+)", display or "")
-    if not m:
-        return 0
-    val = float(m.group(1))
-    if "week" in (display or "").lower():
-        val *= 52 / 12
-    return round(val * 100)
-
-
 def subs_mrr_pence() -> int:
+    """Estimate monthly recurring revenue from active subscribers (per-tier x cadence)."""
     if not _SUBS_OK:
         return 0
-    cfg = subsconfig.load()
-    st = SUBS.stats()
-    total = 0
-    for tier, n in st.get("active_by_tier", {}).items():
-        total += n * _price_pence(cfg["tiers"].get(tier, {}).get("display_price", ""))
-    return total
+    rows = SUBS.db().query(
+        "SELECT tier, cadence, COUNT(*) n FROM subscribers "
+        "WHERE status IN ('active','paused','past_due') GROUP BY tier, cadence")
+    return sum(r["n"] * subsconfig.monthly_pence(r["tier"], r["cadence"] or "monthly") for r in rows)
 
 
 @app.get("/subscribers", response_class=HTMLResponse)
@@ -1878,16 +1867,24 @@ def subscriptions_settings(request: Request):
 </div></div>
 
 <h2>Individual tier</h2><div class=card><div class=grid>
-<div><label>Stripe price id</label><input type=text name=i_price_id value="{e(ti.get('price_id',''))}"></div>
-<div><label>Display price</label><input type=text name=i_display_price value="{e(ti.get('display_price',''))}"></div>
+<div><label>Monthly Stripe price id</label><input type=text name=i_monthly_price_id value="{e(ti.get('monthly_price_id',''))}"></div>
+<div><label>Monthly display</label><input type=text name=i_monthly_display value="{e(ti.get('monthly_display',''))}"></div>
+<div><label>Monthly pence <small>— for MRR est.</small></label><input type=number name=i_monthly_pence value="{e(ti.get('monthly_pence',800))}"></div>
+<div><label>Weekly Stripe price id</label><input type=text name=i_weekly_price_id value="{e(ti.get('weekly_price_id',''))}"></div>
+<div><label>Weekly display</label><input type=text name=i_weekly_display value="{e(ti.get('weekly_display',''))}"></div>
+<div><label>Weekly pence</label><input type=number name=i_weekly_pence value="{e(ti.get('weekly_pence',200))}"></div>
 <div><label>Instant min score</label><input type=number name=i_instant_min_score value="{e(ti.get('instant_min_score',90))}"></div>
 <div><label>Max channels</label><input type=number name=i_max_channels value="{e(ti.get('max_channels',2))}"></div>
 </div>
 <label>Blurb</label><input type=text name=i_blurb value="{e(ti.get('blurb',''))}"></div>
 
 <h2>Team tier</h2><div class=card><div class=grid>
-<div><label>Stripe price id</label><input type=text name=t_price_id value="{e(tt.get('price_id',''))}"></div>
-<div><label>Display price</label><input type=text name=t_display_price value="{e(tt.get('display_price',''))}"></div>
+<div><label>Monthly Stripe price id</label><input type=text name=t_monthly_price_id value="{e(tt.get('monthly_price_id',''))}"></div>
+<div><label>Monthly display</label><input type=text name=t_monthly_display value="{e(tt.get('monthly_display',''))}"></div>
+<div><label>Monthly pence</label><input type=number name=t_monthly_pence value="{e(tt.get('monthly_pence',1800))}"></div>
+<div><label>Weekly Stripe price id</label><input type=text name=t_weekly_price_id value="{e(tt.get('weekly_price_id',''))}"></div>
+<div><label>Weekly display</label><input type=text name=t_weekly_display value="{e(tt.get('weekly_display',''))}"></div>
+<div><label>Weekly pence</label><input type=number name=t_weekly_pence value="{e(tt.get('weekly_pence',500))}"></div>
 <div><label>Instant min score</label><input type=number name=t_instant_min_score value="{e(tt.get('instant_min_score',75))}"></div>
 <div><label>Max channels</label><input type=number name=t_max_channels value="{e(tt.get('max_channels',6))}"></div>
 </div>
@@ -1929,8 +1926,13 @@ async def subscriptions_save(request: Request):
     tiers = sub.setdefault("tiers", {})
     for short, name in (("i", "individual"), ("t", "team")):
         t = tiers.setdefault(name, {})
-        t["price_id"] = f.get(f"{short}_price_id", "").strip()
-        t["display_price"] = f.get(f"{short}_display_price", "").strip()
+        for cad in ("monthly", "weekly"):
+            t[f"{cad}_price_id"] = f.get(f"{short}_{cad}_price_id", "").strip()
+            t[f"{cad}_display"] = f.get(f"{short}_{cad}_display", "").strip()
+            try:
+                t[f"{cad}_pence"] = int(f.get(f"{short}_{cad}_pence", 0))
+            except (TypeError, ValueError):
+                pass
         t["blurb"] = f.get(f"{short}_blurb", "").strip()
         for nk in ("instant_min_score", "max_channels"):
             try:

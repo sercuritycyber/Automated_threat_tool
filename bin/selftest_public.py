@@ -50,25 +50,34 @@ def main() -> int:
         "contact_email": "privacy@example.com", "from_email": "alerts@example.com",
         "retention_days_cancelled": 180, "retention_days_unconfirmed": 7,
         "tiers": {
-            "individual": {"price_id": "price_i", "display_price": "£8/mo", "blurb": "x",
+            "individual": {"monthly_price_id": "price_i", "weekly_price_id": "price_iw",
+                           "monthly_display": "£8/mo", "weekly_display": "£2/wk",
+                           "monthly_pence": 800, "weekly_pence": 200, "blurb": "x",
                            "instant_min_score": 90, "daily_digest": True, "attach_json": False,
-                           "channels": ["email", "telegram", "ntfy"], "max_channels": 2},
-            "team": {"price_id": "price_t", "display_price": "£18/mo", "blurb": "y",
+                           "channels": ["email", "discord", "telegram", "ntfy"], "max_channels": 2},
+            "team": {"monthly_price_id": "price_t", "weekly_price_id": "price_tw",
+                     "monthly_display": "£18/mo", "weekly_display": "£5/wk",
+                     "monthly_pence": 1800, "weekly_pence": 500, "blurb": "y",
                      "instant_min_score": 75, "daily_digest": True, "attach_json": True,
-                     "channels": ["email", "slack", "telegram", "webhook", "ntfy"], "max_channels": 6},
+                     "channels": ["email", "discord", "slack", "telegram", "webhook", "ntfy"], "max_channels": 6},
         }}
-    subsconfig.price_to_tier = lambda: {"price_i": "individual", "price_t": "team"}
+    subsconfig.price_to_tier = lambda: {"price_i": ("individual", "monthly"), "price_iw": ("individual", "weekly"),
+                                        "price_t": ("team", "monthly"), "price_tw": ("team", "weekly")}
+    subsconfig.price_id = lambda t, cad: {("individual", "monthly"): "price_i", ("individual", "weekly"): "price_iw",
+                                          ("team", "monthly"): "price_t", ("team", "weekly"): "price_tw"}.get((t, cad), "")
     subsconfig.problems = lambda: []
 
     import web.public_app as P
     P.subsconfig.load = subsconfig.load
     P.subsconfig.problems = subsconfig.problems
+    P.subsconfig.price_id = subsconfig.price_id
     billing.subsconfig.price_to_tier = subsconfig.price_to_tier
     billing.subsconfig.load = subsconfig.load
+    billing.subsconfig.price_id = subsconfig.price_id
 
     # mock stripe checkout + portal
-    billing.create_checkout_session = lambda tier, email, success_url, cancel_url, client_reference=None: \
-        {"id": "cs_1", "url": "https://checkout.stripe.com/c/cs_1?tier=" + tier}
+    billing.create_checkout_session = lambda tier, cadence, email, success_url, cancel_url, client_reference=None: \
+        {"id": "cs_1", "url": f"https://checkout.stripe.com/c/cs_1?tier={tier}&cad={cadence}&ref={client_reference}"}
     billing.portal_session = lambda cid, return_url: {"url": "https://billing.stripe.com/p/1"}
     billing.cancel_subscription = lambda sid, at_period_end=False: {"status": "canceled"}
     billing.get_subscription = lambda sid: {"items": {"data": [{"price": {"id": "price_t"}}]}}
@@ -90,19 +99,32 @@ def main() -> int:
     r = c.get("/")
     check("landing lists both tiers", "Individual" in r.text and "Team" in r.text)
 
-    # --- subscribe -> stripe redirect ---
+    # --- subscribe form renders + POST redirects to Stripe with an intent ref ---
     r = c.get("/subscribe?tier=team")
-    check("subscribe redirects to Stripe", r.status_code == 303 and "checkout.stripe.com" in r.headers["location"])
+    check("subscribe form renders with cadence + platform", r.status_code == 200
+          and "name=cadence" in r.text and "Discord" in r.text and 'value="weekly"' in r.text)
+    r = c.post("/subscribe", data={"tier": "team", "cadence": "weekly", "email": "amy@example.com",
+                                   "platform": "discord",
+                                   "target": "https://discord.com/api/webhooks/123/abc", "agree": "on"})
+    check("subscribe POST -> Stripe with intent ref", r.status_code == 303
+          and "checkout.stripe.com" in r.headers["location"] and "cad=weekly" in r.headers["location"])
+    intent_ref = r.headers["location"].split("ref=")[1]
+    check("signup intent stored", S.get_intent(intent_ref) is not None
+          and S.get_intent(intent_ref)["channel_kind"] == "discord")
 
-    # --- stripe webhook: checkout completed ---
+    # --- stripe webhook: checkout completed (carries the intent ref) ---
     ev = {"id": "evt_1", "type": "checkout.session.completed", "data": {"object": {
-        "id": "cs_1", "customer": "cus_1", "subscription": "sub_1",
-        "customer_details": {"email": "amy@example.com"}, "metadata": {"tier": "team"}}}}
+        "id": "cs_1", "customer": "cus_1", "subscription": "sub_1", "client_reference_id": intent_ref,
+        "customer_details": {"email": "amy@example.com"}, "metadata": {"tier": "team", "cadence": "weekly"}}}}
     r = c.post("/webhooks/stripe", content=json.dumps(ev), headers={"stripe-signature": "x"})
     check("webhook accepted", r.status_code == 200 and r.json()["action"] == "send_confirm")
     check("confirm email sent", any(m["to"] == "amy@example.com" and "Confirm" in m["subject"] for m in EMAILS))
     sub = S.get_by_email("amy@example.com")
     check("subscriber unconfirmed after checkout", sub["status"] == "unconfirmed")
+    check("cadence from checkout = weekly", sub["cadence"] == "weekly")
+    check("discord channel created from signup intent (unverified)",
+          any(ch["kind"] == "discord" and not ch["verified"] for ch in S.channels_for(sub["id"])))
+    check("intent consumed", S.get_intent(intent_ref) is None)
 
     # --- bad webhook signature ---
     billing.verify_webhook = lambda *a, **k: (_ for _ in ()).throw(billing.WebhookError("bad sig"))
@@ -118,6 +140,8 @@ def main() -> int:
     check("confirmed -> active", sub["status"] == "active")
     check("consent logged with ip + terms version",
           any(x["kind"] == "signup" and x["granted"] and x["terms_version"] for x in S.consents_for(sub["id"])))
+    check("signup discord channel verified by test-ping on confirm",
+          any(ch["kind"] == "discord" and ch["verified"] for ch in S.channels_for(sub["id"])))
 
     mtok = r.headers["location"].split("t=")[1].split("&")[0]
 

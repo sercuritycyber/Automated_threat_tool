@@ -76,21 +76,21 @@ def _flatten(d: dict, prefix: str = "") -> list[tuple[str, str]]:
 
 
 # --------------------------------------------------------------------------- checkout / portal
-def create_checkout_session(tier: str, email: str | None, success_url: str, cancel_url: str,
-                            client_reference: str | None = None) -> dict:
-    cfg = subsconfig.load()
-    tc = cfg["tiers"].get(tier)
-    if not tc or not tc.get("price_id"):
-        raise StripeError(f"tier '{tier}' has no price_id configured")
+def create_checkout_session(tier: str, cadence: str, email: str | None, success_url: str,
+                            cancel_url: str, client_reference: str | None = None) -> dict:
+    cadence = cadence if cadence in ("monthly", "weekly") else "monthly"
+    pid = subsconfig.price_id(tier, cadence)
+    if not pid:
+        raise StripeError(f"tier '{tier}' has no {cadence} Stripe price configured")
     payload = {
         "mode": "subscription",
-        "line_items": [{"price": tc["price_id"], "quantity": 1}],
+        "line_items": [{"price": pid, "quantity": 1}],
         "success_url": success_url,
         "cancel_url": cancel_url,
         "allow_promotion_codes": True,
         "billing_address_collection": "auto",
-        "subscription_data": {"metadata": {"tier": tier}},
-        "metadata": {"tier": tier},
+        "subscription_data": {"metadata": {"tier": tier, "cadence": cadence}},
+        "metadata": {"tier": tier, "cadence": cadence},
         "consent_collection": {"terms_of_service": "required"},
     }
     if email:
@@ -167,20 +167,38 @@ def handle_event(event: dict) -> dict:
         email = (obj.get("customer_details") or {}).get("email") or obj.get("customer_email")
         customer = obj.get("customer")
         subscription = obj.get("subscription")
-        tier = (obj.get("metadata") or {}).get("tier")
-        if not tier and subscription:
+        meta = obj.get("metadata") or {}
+        tier, cadence = meta.get("tier"), meta.get("cadence")
+        client_ref = obj.get("client_reference_id")
+        intent = S.get_intent(client_ref) if client_ref else None
+        if intent:
+            tier = tier or intent["tier"]
+            cadence = cadence or intent["cadence"]
+            email = email or intent["email"]
+        if (not tier or not cadence) and subscription:
             try:
                 sub_obj = get_subscription(subscription)
-                tier = p2t.get(_price_id_from_subscription_obj(sub_obj))
+                t = p2t.get(_price_id_from_subscription_obj(sub_obj))
+                if t:
+                    tier, cadence = tier or t[0], cadence or t[1]
             except StripeError:
                 pass
         tier = tier or "individual"
+        cadence = cadence if cadence in ("monthly", "weekly") else "monthly"
         if email:
-            sid = S.create_pending(email, tier, source="stripe", stripe_customer_id=customer)
+            sid = S.create_pending(email, tier, source="stripe", stripe_customer_id=customer,
+                                   cadence=cadence)
             S.set_stripe_ids(sid, customer_id=customer, subscription_id=subscription)
             S.set_status(sid, "unconfirmed", "checkout complete")
-            S.log_event("stripe:checkout_completed", sid, {"session": obj.get("id")})
-            result = {"action": "send_confirm", "subscriber_id": sid, "email": email, "tier": tier}
+            S.log_event("stripe:checkout_completed", sid, {"session": obj.get("id"), "cadence": cadence})
+            ch = None
+            if intent and intent.get("channel_kind"):
+                ch = {"kind": intent["channel_kind"], "target": intent.get("channel_target") or ""}
+                if ch["target"]:
+                    S.add_channel(sid, ch["kind"], ch["target"], verified=False, label="signup")
+                S.consume_intent(client_ref)
+            result = {"action": "send_confirm", "subscriber_id": sid, "email": email,
+                      "tier": tier, "cadence": cadence, "channel": ch}
         else:
             result = {"action": "error", "detail": "no email on checkout session"}
 

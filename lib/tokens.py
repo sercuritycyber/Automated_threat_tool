@@ -61,6 +61,11 @@ def sign(payload: dict, ttl: int = 7 * 86400) -> str:
     return f"{p}.{sig}"
 
 
+def new_id(nbytes: int = 18) -> str:
+    """An unguessable URL-safe id (not signed — for lookup keys like signup intents)."""
+    return _b64e(secrets.token_bytes(nbytes))
+
+
 def verify(token: str, expect_act: str | None = None) -> dict:
     if not isinstance(token, str) or token.count(".") != 1 or not token.isascii():
         raise BadToken("malformed token")

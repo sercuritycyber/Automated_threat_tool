@@ -47,10 +47,12 @@ def main() -> int:
     dbmod.reset_db_singleton()
     S.ensure_schema()
 
-    subsconfig.price_to_tier = lambda: {"price_indiv": "individual", "price_team": "team"}
+    subsconfig.price_to_tier = lambda: {"price_indiv": ("individual", "monthly"),
+                                        "price_team": ("team", "monthly")}
     subsconfig.load = lambda: {"tiers": {
-        "individual": {"price_id": "price_indiv", "instant_min_score": 90},
-        "team": {"price_id": "price_team", "instant_min_score": 75}}}
+        "individual": {"monthly_price_id": "price_indiv", "instant_min_score": 90},
+        "team": {"monthly_price_id": "price_team", "instant_min_score": 75}}}
+    subsconfig.price_id = lambda t, c: {"individual": "price_indiv", "team": "price_team"}.get(t, "")
 
     # --- signature verification ---
     body = json.dumps({"id": "evt_x", "type": "ping"}).encode()
@@ -126,8 +128,9 @@ def main() -> int:
         "customer_details": {"email": "b@example.com"}, "metadata": {}}}}
     billing.get_subscription = lambda sid: {"items": {"data": [{"price": {"id": "price_indiv"}}]}}
     r = billing.handle_event(ev6)
-    check("tier inferred from price when metadata missing",
-          S.get_by_email("b@example.com")["tier"] == "individual")
+    b = S.get_by_email("b@example.com")
+    check("tier + cadence inferred from price when metadata missing",
+          b["tier"] == "individual" and b["cadence"] == "monthly")
 
     print()
     if FAILED:

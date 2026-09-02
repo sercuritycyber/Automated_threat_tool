@@ -31,23 +31,31 @@ DEFAULTS: dict = {
     "rate_limit_per_min": 20,
     "tiers": {
         "individual": {
-            "price_id": "",
-            "display_price": "£8 / month",
+            "monthly_price_id": "",
+            "weekly_price_id": "",
+            "monthly_display": "£8 / month",
+            "weekly_display": "£2 / week",
+            "monthly_pence": 800,
+            "weekly_pence": 200,
             "blurb": "Instant alerts for anything scoring 90+, plus a daily digest.",
             "instant_min_score": 90,
             "daily_digest": True,
             "attach_json": False,
-            "channels": ["email", "telegram", "ntfy"],
+            "channels": ["email", "discord", "telegram", "ntfy"],
             "max_channels": 2,
         },
         "team": {
-            "price_id": "",
-            "display_price": "£18 / month",
-            "blurb": "Everything scoring 75+ instantly, a daily digest, machine-readable JSON, and Slack.",
+            "monthly_price_id": "",
+            "weekly_price_id": "",
+            "monthly_display": "£18 / month",
+            "weekly_display": "£5 / week",
+            "monthly_pence": 1800,
+            "weekly_pence": 500,
+            "blurb": "Everything scoring 75+ instantly, a daily digest, machine-readable JSON, Slack and Discord.",
             "instant_min_score": 75,
             "daily_digest": True,
             "attach_json": True,
-            "channels": ["email", "slack", "telegram", "webhook", "ntfy"],
+            "channels": ["email", "discord", "slack", "telegram", "webhook", "ntfy"],
             "max_channels": 6,
         },
     },
@@ -82,8 +90,29 @@ def tier(name: str) -> dict:
     return load()["tiers"].get(name, load()["tiers"]["individual"])
 
 
-def price_to_tier() -> dict[str, str]:
-    return {t["price_id"]: name for name, t in load()["tiers"].items() if t.get("price_id")}
+def price_to_tier() -> dict[str, tuple[str, str]]:
+    """{stripe_price_id: (tier_name, cadence)} for every configured price."""
+    out: dict[str, tuple[str, str]] = {}
+    for name, t in load()["tiers"].items():
+        for cad in ("monthly", "weekly"):
+            pid = t.get(f"{cad}_price_id")
+            if pid:
+                out[pid] = (name, cad)
+    return out
+
+
+def price_id(tier_name: str, cadence: str) -> str:
+    return load()["tiers"].get(tier_name, {}).get(f"{cadence}_price_id", "")
+
+
+def tier_pence(tier_name: str, cadence: str) -> int:
+    return int(load()["tiers"].get(tier_name, {}).get(f"{cadence}_pence", 0) or 0)
+
+
+def monthly_pence(tier_name: str, cadence: str) -> int:
+    """A tier's revenue normalised to per-month, for MRR estimates."""
+    p = tier_pence(tier_name, cadence)
+    return round(p * 52 / 12) if cadence == "weekly" else p
 
 
 def problems() -> list[str]:
@@ -102,8 +131,8 @@ def problems() -> list[str]:
     if not c["ico_registration"]:
         out.append("subscriptions.ico_registration is not set — register with the ICO first")
     for name, t in c["tiers"].items():
-        if not t.get("price_id"):
-            out.append(f"tier '{name}' has no Stripe price_id")
+        if not (t.get("monthly_price_id") or t.get("weekly_price_id")):
+            out.append(f"tier '{name}' has no Stripe price id (monthly or weekly)")
     if c["live"]:
         if not os.getenv("STRIPE_SECRET_KEY", "").startswith("sk_live_"):
             out.append("subscriptions.live is true but STRIPE_SECRET_KEY is not an sk_live_ key")

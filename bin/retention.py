@@ -44,8 +44,10 @@ def main() -> int:
 
     nc = S.purge_cancelled(d_cancel)
     nu = S.purge_unconfirmed(d_unconf)
+    ni = S.purge_intents(48)
     S.kv_set("last_retention_run", S._now())
-    print(f"[retention] erased {nc} cancelled (>{d_cancel}d), {nu} unconfirmed (>{d_unconf}d)")
+    print(f"[retention] erased {nc} cancelled (>{d_cancel}d), {nu} unconfirmed (>{d_unconf}d), "
+          f"{ni} stale signup intent(s)")
     return 0
 
 

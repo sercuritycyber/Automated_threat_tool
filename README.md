@@ -154,8 +154,15 @@ bin/backup_db.py daily DB backup (local sqlite) — cti-backup.timer
   `TURSO_AUTH_TOKEN` are set; local SQLite otherwise. `lib/db.py` picks
   automatically — same schema either way.
 - **Payments:** Stripe hosted Checkout + Customer Portal — no card data touches
-  this code. Test mode until `subscriptions.live: true` with `sk_live_` keys.
-- **Channels:** email, Slack, Telegram, generic webhook, ntfy.
+  this code. **Weekly or monthly** billing per tier (set the price ids you want;
+  the sign-up only offers the cadences you've configured). Test mode until
+  `subscriptions.live: true` with `sk_live_` keys.
+- **Channels:** email, **Discord**, Slack, Telegram, generic webhook, ntfy.
+  The subscriber picks their platform and pastes the handle/webhook during
+  sign-up; the choice rides through Stripe as a signed intent and the channel
+  is test-pinged on confirmation.
+- **Branding:** the public site uses the SecurityCyber look (securitycyber.uk) —
+  dark theme, blue defensive accent, Syne / DM Sans.
 - **Compliance:** `docs/legal/` holds the privacy policy, terms, cookie
   statement and an **owner compliance runbook** (ICO registration, DSAR
   process, breach notification, retention, PECR). The pages render at

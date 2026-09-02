@@ -95,7 +95,10 @@ async def security_headers(request: Request, call_next):
     resp.headers.setdefault("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
     resp.headers.setdefault(
         "Content-Security-Policy",
-        "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+        "default-src 'self'; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        "font-src 'self' https://fonts.gstatic.com; "
+        "img-src 'self' data:; script-src 'self' 'unsafe-inline'; "
         "form-action 'self' https://checkout.stripe.com; frame-ancestors 'none'; base-uri 'none'")
     return resp
 
@@ -189,70 +192,130 @@ def render_legal(name: str) -> str | None:
 
 
 # --------------------------------------------------------------------------- layout
+# SecurityCyber brand system (securitycyber.uk) — dark, blue defensive accent,
+# Syne / DM Sans / JetBrains Mono, the lightning "Z" mark.
+LOGO_SVG = (
+    '<svg viewBox="0 0 48 46" width="26" height="26" fill="none" aria-hidden="true">'
+    '<path fill="#3b82f6" d="M25.946 44.938c-.664.845-2.021.375-2.021-.698V33.937a2.26 2.26 0 0 0-2.262-2.262'
+    'H10.287c-.92 0-1.456-1.04-.92-1.788l7.48-10.471c1.07-1.497 0-3.578-1.842-3.578H1.237c-.92 0-1.456-1.04-.92-1.788'
+    'L10.013.474c.214-.297.556-.474.92-.474h28.894c.92 0 1.456 1.04.92 1.788l-7.48 10.471c-1.07 1.498 0 3.579 1.842 3.579'
+    'h11.377c.943 0 1.473 1.088.89 1.83L25.947 44.94z"/></svg>')
+
+MAIN_SITE = "https://securitycyber.uk"
+
 CSS = """
-:root{--bg:#fbfbfd;--ink:#1a1f28;--dim:#5b6472;--line:#e3e6ec;--accent:#2f6fed;
---good:#1f9d55;--bad:#d64545;--card:#fff;--radius:12px}
-@media (prefers-color-scheme:dark){:root:not([data-theme=light]){
---bg:#0e1116;--ink:#e6edf3;--dim:#9aa4b2;--line:#232a35;--card:#161b22;--accent:#4f8bff}}
-*{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--ink);
-font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
-a{color:var(--accent)}
-.wrap{max-width:760px;margin:0 auto;padding:32px 20px 64px}
-header .brand{font-weight:800;font-size:18px;letter-spacing:-.01em;text-decoration:none;color:var(--ink)}
-header .brand span{color:var(--accent)}
-h1{font-size:30px;line-height:1.2;letter-spacing:-.02em;margin:.3em 0}
-h2{font-size:20px;margin:1.6em 0 .5em}
-h3{font-size:16px;margin:1.3em 0 .4em}
-.lede{font-size:18px;color:var(--dim)}
-.card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:20px 22px;margin:16px 0}
-.tiers{display:grid;grid-template-columns:1fr 1fr;gap:16px}
-@media(max-width:620px){.tiers{grid-template-columns:1fr}}
-.tier{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:20px}
-.tier h3{margin-top:0}
-.price{font-size:26px;font-weight:800}
-.btn{display:inline-block;background:var(--accent);color:#fff;border:0;border-radius:9px;
-padding:11px 20px;font:inherit;font-weight:650;cursor:pointer;text-decoration:none}
-.btn.ghost{background:transparent;border:1px solid var(--line);color:var(--ink)}
-.btn.bad{background:var(--bad)}
-.btn:hover{filter:brightness(1.06)}
-label{display:block;margin:14px 0 5px;font-weight:600;font-size:14px}
-label small{font-weight:400;color:var(--dim)}
-input[type=text],input[type=email],input[type=url],textarea,select{width:100%;background:var(--bg);
-border:1px solid var(--line);color:var(--ink);border-radius:9px;padding:10px 12px;font:inherit}
-.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
-.pill{display:inline-block;padding:2px 9px;border-radius:20px;font-size:12px;font-weight:650;border:1px solid var(--line)}
-.pill.good{color:var(--good);border-color:var(--good)}
-.pill.bad{color:var(--bad);border-color:var(--bad)}
-.flash{background:rgba(47,111,237,.1);border:1px solid var(--accent);border-radius:9px;padding:12px 14px;margin:14px 0}
-.flash.bad{background:rgba(214,69,69,.1);border-color:var(--bad)}
-.flash.good{background:rgba(31,157,85,.1);border-color:var(--good)}
-table{border-collapse:collapse;width:100%;font-size:14px;margin:10px 0}
-td,th{border:1px solid var(--line);padding:7px 10px;text-align:left;vertical-align:top}
-code{background:var(--bg);border:1px solid var(--line);border-radius:5px;padding:1px 5px;font-size:.9em}
-hr{border:0;border-top:1px solid var(--line);margin:22px 0}
-footer{margin-top:48px;padding-top:18px;border-top:1px solid var(--line);color:var(--dim);font-size:13px}
-footer a{color:var(--dim)}
+@import url('https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&family=JetBrains+Mono:wght@400;500&display=swap');
+:root{
+--bg:#0d1422;--bg2:#121c2e;--bg3:#0a1120;--bg4:#162035;
+--line:#1e2d45;--line-dim:rgba(30,45,69,.8);--line-hi:rgba(59,130,246,.3);
+--ink:#e0e8f5;--dim:#7d92b0;--faint:#3a4f6a;--white:#f0f6ff;
+--accent:#3b82f6;--accent-dark:#2563eb;--accent-dim:rgba(59,130,246,.12);
+--brand:#dc2626;--good:#22c55e;--bad:#f87171;--warn:#fbbf24;
+--display:'Syne',sans-serif;--body:'DM Sans',system-ui,sans-serif;--mono:'JetBrains Mono',monospace;
+--radius:8px;--radius-lg:14px}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--ink);font:15px/1.7 var(--body);-webkit-font-smoothing:antialiased}
+a{color:var(--accent);text-decoration:none;transition:color .2s}a:hover{color:var(--accent-dark)}
+.wrap{max-width:780px;margin:0 auto;padding:0 20px 72px}
+nav{display:flex;align-items:center;justify-content:space-between;height:66px;margin-bottom:28px;
+border-bottom:1px solid var(--line-dim)}
+nav .brand{display:flex;align-items:center;gap:9px;font-family:var(--display);font-weight:800;
+font-size:17px;color:var(--white);letter-spacing:-.01em}
+nav .brand b span{color:var(--brand);font-weight:800}
+nav .links a{font-size:.86rem;color:var(--dim);margin-left:18px}nav .links a:hover{color:var(--white)}
+h1{font-family:var(--display);font-weight:800;font-size:31px;line-height:1.18;letter-spacing:-.02em;
+color:var(--white);margin:.4em 0}
+h2{font-family:var(--display);font-weight:700;font-size:19px;color:var(--white);margin:1.8em 0 .6em}
+h3{font-family:var(--display);font-weight:700;font-size:15px;color:var(--white);margin:0 0 .5em}
+p{margin:.6em 0}
+.lede{font-size:17px;color:var(--dim);line-height:1.6}
 .muted{color:var(--dim);font-size:14px}
+.card{background:var(--bg2);border:1px solid var(--line-dim);border-radius:var(--radius-lg);
+padding:22px;margin:16px 0}
+.tiers{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:20px 0}
+@media(max-width:640px){.tiers{grid-template-columns:1fr}}
+.tier{background:var(--bg2);border:1px solid var(--line-dim);border-radius:var(--radius-lg);padding:22px;
+position:relative;overflow:hidden}
+.tier::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:var(--accent);
+transform:scaleX(0);transform-origin:left;transition:transform .3s}
+.tier:hover::before{transform:scaleX(1)}
+.tier .p1{font-family:var(--display);font-size:24px;font-weight:800;color:var(--white)}
+.tier .p2{font-size:13px;color:var(--dim)}
+.tier ul{list-style:none;margin:12px 0;font-size:13.5px;color:var(--dim)}
+.tier ul li{padding:3px 0 3px 18px;position:relative}
+.tier ul li::before{content:'▸';position:absolute;left:0;color:var(--accent)}
+.btn{display:inline-flex;align-items:center;gap:7px;background:var(--accent);color:#fff;border:0;
+border-radius:var(--radius);padding:11px 24px;font:600 .9rem var(--body);cursor:pointer;text-decoration:none;
+transition:all .2s;box-shadow:0 4px 16px rgba(59,130,246,.22)}
+.btn:hover{background:var(--accent-dark);color:#fff;transform:translateY(-2px);box-shadow:0 8px 24px rgba(59,130,246,.32)}
+.btn.ghost{background:var(--accent-dim);color:var(--ink);border:1px solid var(--line-hi);box-shadow:none}
+.btn.ghost:hover{background:rgba(59,130,246,.16);color:var(--white)}
+.btn.bad{background:transparent;border:1px solid var(--bad);color:var(--bad);box-shadow:none}
+.btn.bad:hover{background:rgba(248,113,113,.1);color:var(--bad)}
+label{display:block;margin:15px 0 5px;font-weight:600;font-size:13.5px;color:var(--ink)}
+label small{font-weight:400;color:var(--dim)}
+input[type=text],input[type=email],input[type=url],input[type=number],textarea,select{
+width:100%;background:var(--bg3);border:1px solid var(--line);color:var(--ink);border-radius:var(--radius);
+padding:10px 12px;font:14px var(--body)}
+input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent)}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}
+.seg label{margin:0;cursor:pointer}
+.seg label span{display:block;padding:9px 16px;font-size:13.5px;font-weight:600;color:var(--dim)}
+.seg input{position:absolute;opacity:0}
+.seg input:checked + span{background:var(--accent);color:#fff}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.pill{display:inline-block;padding:2px 9px;border-radius:20px;font-size:12px;font-weight:650;
+border:1px solid var(--line);color:var(--dim)}
+.pill.good{color:var(--good);border-color:rgba(34,197,94,.4)}
+.pill.bad{color:var(--bad);border-color:rgba(248,113,113,.4)}
+.flash{background:var(--accent-dim);border:1px solid var(--line-hi);border-radius:var(--radius);
+padding:12px 15px;margin:14px 0;font-size:14px}
+.flash.bad{background:rgba(248,113,113,.1);border-color:rgba(248,113,113,.4)}
+.flash.good{background:rgba(34,197,94,.1);border-color:rgba(34,197,94,.4)}
+table{border-collapse:collapse;width:100%;font-size:13.5px;margin:10px 0}
+td,th{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+th{color:var(--dim);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.04em}
+code{background:var(--bg3);border:1px solid var(--line);border-radius:4px;padding:1px 5px;font:.85em var(--mono)}
+hr{border:0;border-top:1px solid var(--line-dim);margin:24px 0}
+footer{margin-top:52px;padding-top:22px;border-top:1px solid var(--line-dim);color:var(--faint);font-size:12.5px}
+footer .fb{display:flex;align-items:center;gap:8px;font-family:var(--display);font-weight:700;
+color:var(--white);margin-bottom:8px}
+footer .fb b span{color:var(--brand)}
+footer a{color:var(--dim)}footer a:hover{color:var(--accent)}
 """
 
 
 def page(title: str, body: str, flash: str = "", flash_kind: str = "") -> HTMLResponse:
     c = cfg()
     fl = f'<div class="flash {flash_kind}">{e(flash)}</div>' if flash else ""
-    foot_ico = f' · ICO reg {e(c["ico_registration"])}' if c.get("ico_registration") else ""
-    legal_name = c.get("company_legal_name") or c.get("brand_name", "")
+    foot_ico = f' · ICO registration {e(c["ico_registration"])}' if c.get("ico_registration") else ""
+    legal_name = c.get("company_legal_name") or "SecurityCyber"
+    contact = c.get("contact_email") or c.get("support_email") or "charlie@securitycyber.uk"
     return HTMLResponse(f"""<!doctype html><html lang=en><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1">
 <meta name=robots content="index,follow">
-<title>{e(title)} · {e(c.get('brand_name','Blue Team CTI'))}</title>
+<meta name=color-scheme content="dark">
+<title>{e(title)} · SecurityCyber CTI</title>
+<link rel=icon href="/logo.svg">
 <style>{CSS}</style></head><body><div class=wrap>
-<header><a class=brand href="/">Blue Team <span>CTI</span></a></header>
+<nav>
+  <a class=brand href="/">{LOGO_SVG}<b>Security<span>Cyber</span></b></a>
+  <span class=links><a href="{MAIN_SITE}">Main site</a><a href="/terms">Terms</a><a href="/privacy">Privacy</a></span>
+</nav>
 {fl}{body}
-<footer>{e(legal_name)}{foot_ico} · <a href="/privacy">Privacy</a> ·
-<a href="/terms">Terms</a> · <a href="/cookies">Cookies</a> ·
-<a href="mailto:{e(c.get('contact_email') or c.get('support_email') or '')}">Contact</a></footer>
+<footer>
+<div class=fb>{LOGO_SVG}<b>Security<span>Cyber</span></b> · CTI Alerts</div>
+{e(legal_name)}{foot_ico} · Independent UK cyber-security advisory.<br>
+<a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="/cookies">Cookies</a> ·
+<a href="mailto:{e(contact)}">{e(contact)}</a> · <a href="{MAIN_SITE}">securitycyber.uk</a>
+</footer>
 </div></body></html>""")
+
+
+@app.get("/logo.svg")
+def logo_svg():
+    return Response(LOGO_SVG, media_type="image/svg+xml",
+                    headers={"Cache-Control": "public, max-age=86400"})
 
 
 def flash_from(req: Request) -> tuple[str, str]:
@@ -271,34 +334,45 @@ def landing(request: Request):
     tiers_html = ""
     for name in ("individual", "team"):
         t = c["tiers"].get(name, {})
-        chans = ", ".join(t.get("channels", []))
+        chans = ", ".join(_chan_label(x) for x in t.get("channels", []))
+        has_wk = bool(t.get("weekly_price_id"))
+        has_mo = bool(t.get("monthly_price_id"))
+        wk, mo = t.get("weekly_display", ""), t.get("monthly_display", "")
+        if has_mo and has_wk:
+            price = f"{e(mo)} <span class=p2>or {e(wk)}</span>"
+        elif has_wk and not has_mo:
+            price = e(wk)
+        else:
+            price = e(mo)
         tiers_html += f"""<div class=tier>
 <h3>{e(name.title())}</h3>
-<div class=price>{e(t.get('display_price','—'))}</div>
-<p class=muted>{e(t.get('blurb',''))}</p>
-<ul class=muted>
-<li>Instant alerts at score ≥ {e(t.get('instant_min_score','?'))}</li>
-<li>{'Daily digest' if t.get('daily_digest') else 'No digest'}</li>
-{'<li>Machine-readable JSON attached</li>' if t.get('attach_json') else ''}
-<li>Channels: {e(chans)}</li>
+<div class=p1>{price}</div>
+<p class=muted style="margin-top:8px">{e(t.get('blurb',''))}</p>
+<ul>
+<li>Instant alerts at impact score ≥ {e(t.get('instant_min_score','?'))}</li>
+<li>{'Daily digest of the last 24 hours' if t.get('daily_digest') else 'Instant only'}</li>
+{'<li>Machine-readable JSON attached to every alert</li>' if t.get('attach_json') else ''}
+<li>Send to: {chans}</li>
 </ul>
-<a class=btn href="/subscribe?tier={name}">Subscribe</a>
+<a class=btn href="/subscribe?tier={name}">Choose {name.title()}</a>
 </div>"""
     body = f"""
 <h1>Vulnerability alerts that tell you what to do</h1>
 <p class=lede>We watch vendor advisories, the CISA KEV catalog and reputable
-security research, cut the noise, and send you the handful that matter for
-defenders — each with the CVE, what's affected, and the one action to take.</p>
+security research, cut the noise, and send you only the ones that matter for
+defenders — each with the CVE, what's affected, and the single action to take.</p>
 
 <div class=tiers>{tiers_html}</div>
+<p class=muted>Weekly or monthly billing, cancel anytime. Pick your platform —
+Discord, Slack, Telegram, email, a webhook or ntfy — during sign-up.</p>
 
 <h2>How it works</h2>
 <div class=card>
 <p>Every few hours an automated pipeline pulls the major security feeds,
 cross-references the CISA Known Exploited Vulnerabilities catalog, removes
 near-duplicates, and scores each story for real-world impact. Anything that
-clears your threshold is sent straight to your channels — email, Slack, Telegram,
-a webhook, or ntfy.</p>
+clears your threshold lands on your chosen platform within minutes — with the
+CVE, CVSS, affected versions and the fix.</p>
 <p class=muted>Informational only. It aggregates public advisories and is not a
 substitute for your own vulnerability management. See the <a href="/terms">terms</a>.</p>
 </div>
@@ -308,11 +382,27 @@ substitute for your own vulnerability management. See the <a href="/terms">terms
 <form method=post action="/account">
 <label>Your email <small>— we'll send your preference link</small></label>
 <input type=email name=email required placeholder="you@example.com">
-<div class=row style="margin-top:12px"><button class=btn ghost>Email me my link</button></div>
+<div class=row style="margin-top:12px"><button class="btn ghost">Email me my link</button></div>
 </form>
 </div>
 """
     return page("Vulnerability alerts for defenders", body, m, k)
+
+
+_CHAN_META = {
+    "email": ("Email", "the address to send alerts to", "you@example.com"),
+    "discord": ("Discord", "a channel webhook URL (Server Settings → Integrations → Webhooks → New Webhook → Copy URL)",
+                "https://discord.com/api/webhooks/…"),
+    "slack": ("Slack", "an incoming-webhook URL (api.slack.com/messaging/webhooks)",
+              "https://hooks.slack.com/services/…"),
+    "telegram": ("Telegram", "nothing here — after payment you'll get a one-tap link to our bot", ""),
+    "webhook": ("Webhook", "an https:// URL we POST JSON to", "https://example.com/hook"),
+    "ntfy": ("ntfy", "a full topic URL", "https://ntfy.sh/my-topic"),
+}
+
+
+def _chan_label(k: str) -> str:
+    return _CHAN_META.get(k, (k.title(),))[0]
 
 
 @app.post("/account")
@@ -337,34 +427,130 @@ def _q(s: str) -> str:
     return quote(s)
 
 
-@app.get("/subscribe")
-def subscribe(request: Request, tier: str = "individual"):
-    rl(request, "subscribe", 10)
+@app.get("/subscribe", response_class=HTMLResponse)
+def subscribe_form(request: Request, tier: str = "individual"):
+    rl(request, "subscribe", 20)
     c = cfg()
     if not c.get("enabled") or tier not in c["tiers"]:
         return RedirectResponse("/?m=" + _q("That plan isn't available."), 303)
-    probs = [p for p in subsconfig.problems() if "enabled" not in p and "ico_registration" not in p]
-    if probs:
-        return page("Not quite ready",
-                    "<h1>Checkout isn't live yet</h1><p class=lede>We're still setting up "
-                    "billing. Please check back shortly.</p>"
-                    + ("<p class=muted>Owner: " + e("; ".join(probs)) + "</p>"
-                       if request.query_params.get("debug") else ""))
+    m, k = flash_from(request)
+    t = c["tiers"][tier]
+    allowed = [x for x in t.get("channels", []) if x in _CHAN_META]
+    has_wk, has_mo = bool(t.get("weekly_price_id")), bool(t.get("monthly_price_id"))
+    if not (has_wk or has_mo):
+        return page("Almost there",
+                    "<h1>Checkout isn't switched on yet</h1>"
+                    "<p class=lede>Billing for this plan is being finalised — check back shortly, "
+                    "or use <a href='/'>“Already subscribed?”</a> if you have an account.</p>")
+
+    cad_opts = ""
+    for cad, avail, disp in (("monthly", has_mo, t.get("monthly_display", "")),
+                             ("weekly", has_wk, t.get("weekly_display", ""))):
+        if not avail:
+            continue
+        chk = " checked" if (cad == "monthly" and has_mo) or (cad == "weekly" and not has_mo) else ""
+        cad_opts += (f'<label><input type=radio name=cadence value="{cad}"{chk}>'
+                     f'<span>{e(disp)}</span></label>')
+
+    plat_opts = "".join(
+        f'<option value="{p}" data-hint="{e(_CHAN_META[p][1])}" data-ph="{e(_CHAN_META[p][2])}">'
+        f'{e(_CHAN_META[p][0])}</option>' for p in allowed)
+
+    contact = c.get("contact_email") or "charlie@securitycyber.uk"
+    body = f"""
+<h1>Subscribe — {tier.title()}</h1>
+<p class=lede>{e(t.get('blurb',''))}</p>
+<form method=post action="/subscribe" id=sf>
+<input type=hidden name=tier value="{tier}">
+
+<label>Billing</label>
+<div class=seg>{cad_opts}</div>
+
+<label>Your email <small>— your account + where the confirmation goes</small></label>
+<input type=email name=email required placeholder="you@example.com">
+
+<label>Send alerts to</label>
+<select name=platform id=plat>{plat_opts}</select>
+<p class=muted id=hint style="margin:6px 0 0"></p>
+<input type=text name=target id=tgt style="margin-top:8px">
+
+<label style="font-weight:400;margin-top:18px" class=row>
+<input type=checkbox name=agree required style="width:auto">
+&nbsp;I agree to the <a href="/terms" target=_blank>Terms</a> and
+<a href="/privacy" target=_blank>Privacy Policy</a>, and I want alerts to start straight away.
+</label>
+
+<div class=row style="margin-top:16px">
+<button class=btn>Continue to payment →</button>
+<a class="btn ghost" href="/">Back</a>
+</div>
+<p class=muted style="margin-top:10px">Card details are handled by Stripe — they never touch our servers.
+Questions: <a href="mailto:{e(contact)}">{e(contact)}</a>.</p>
+</form>
+<script>
+(function(){{
+var sel=document.getElementById('plat'),hint=document.getElementById('hint'),tgt=document.getElementById('tgt');
+function upd(){{var o=sel.options[sel.selectedIndex];hint.textContent=o.getAttribute('data-hint')||'';
+var ph=o.getAttribute('data-ph')||'';tgt.placeholder=ph;
+if(sel.value==='telegram'){{tgt.style.display='none';tgt.required=false;}}else{{tgt.style.display='';tgt.required=true;}}}}
+sel.addEventListener('change',upd);upd();
+}})();
+</script>
+"""
+    return page(f"Subscribe — {tier.title()}", body, m, k)
+
+
+@app.post("/subscribe")
+def subscribe_submit(request: Request, tier: str = Form("individual"), cadence: str = Form("monthly"),
+                     email: str = Form(""), platform: str = Form("email"), target: str = Form(""),
+                     agree: str = Form("")):
+    rl(request, "subscribe", 10)
+    c = cfg()
+    email = email.strip().lower()
+    if not c.get("enabled") or tier not in c["tiers"]:
+        return RedirectResponse("/?m=" + _q("That plan isn't available."), 303)
+    if not agree:
+        return RedirectResponse(f"/subscribe?tier={tier}&m=" + _q("Please accept the terms to continue.") + "&k=bad", 303)
+    if "@" not in email or "." not in email.split("@")[-1]:
+        return RedirectResponse(f"/subscribe?tier={tier}&m=" + _q("That email doesn't look right.") + "&k=bad", 303)
+    cadence = cadence if cadence in ("monthly", "weekly") else "monthly"
+    tcfg = c["tiers"][tier]
+    if platform not in tcfg.get("channels", []):
+        platform = "email"
+    ch_target = ""
+    if platform == "email":
+        ch_target = email
+    elif platform != "telegram":
+        ok, why = CH.verify_target(platform, target)
+        if not ok:
+            return RedirectResponse(f"/subscribe?tier={tier}&m=" + _q(why) + "&k=bad", 303)
+        ch_target = target.strip()
+
+    intent_tok = tokens.new_id()
+    S.create_intent(intent_tok, email, tier, cadence,
+                    None if platform == "telegram" else platform,
+                    ch_target or None, ip=client_ip(request),
+                    user_agent=request.headers.get("user-agent", ""))
+    S.log_consent(None, "terms", True, ip=client_ip(request),
+                  user_agent=request.headers.get("user-agent", ""), terms_version=TERMS_VERSION,
+                  detail=f"accepted at signup ({email})")
+
     site = c.get("site_url", "")
     try:
         sess = billing.create_checkout_session(
-            tier, None,
-            success_url=f"{site}/welcome?session_id={{CHECKOUT_SESSION_ID}}",
-            cancel_url=f"{site}/?m=" + _q("Checkout cancelled — no charge made."))
+            tier, cadence, email,
+            success_url=f"{site}/welcome",
+            cancel_url=f"{site}/subscribe?tier={tier}&m=" + _q("Checkout cancelled — no charge made."),
+            client_reference=intent_tok)
     except billing.StripeError as ex:
         return page("Checkout error",
                     f"<h1>Couldn't start checkout</h1><p class=muted>{e(str(ex))}</p>"
-                    "<p><a href='/'>Back</a></p>")
+                    f"<p><a href='/subscribe?tier={tier}'>Try again</a></p>")
     return RedirectResponse(sess["url"], 303)
 
 
 @app.get("/welcome", response_class=HTMLResponse)
-def welcome(request: Request, session_id: str = ""):
+def welcome(request: Request):
     return page("Payment received",
                 "<h1>Payment received — one more step</h1>"
                 "<p class=lede>Check your inbox for a confirmation email and click the link "
@@ -390,15 +576,20 @@ async def stripe_webhook(request: Request):
     act = res.get("action")
     if act == "send_confirm":
         sid, email, tier = res["subscriber_id"], res["email"], res["tier"]
+        cad = res.get("cadence", "monthly")
+        ch = res.get("channel")
         t = tokens.sign({"sub": sid, "act": "confirm"}, ttl=14 * 86400)
         site = cfg().get("site_url", "")
-        send_email(email, "Confirm your Blue Team CTI alerts",
-                   f"Thanks for subscribing to the {tier} plan.\n\n"
+        where = (_chan_label(ch["kind"]) if ch else "email")
+        send_email(email, "Confirm your SecurityCyber CTI alerts",
+                   f"Thanks for subscribing — {tier.title()} plan, billed {cad}.\n\n"
                    f"Confirm your email to switch your alerts on:\n\n"
                    f"{site}/confirm?t={t}\n\n"
+                   f"Your alerts will go to: {where}.\n"
                    f"This link works for 14 days. If you didn't subscribe, ignore this "
-                   f"and email {cfg().get('contact_email','')} — you won't be charged again.")
-        S.log_event("confirm_email_sent", sid)
+                   f"and email {cfg().get('contact_email','') or 'charlie@securitycyber.uk'} — "
+                   f"you won't be charged again.")
+        S.log_event("confirm_email_sent", sid, {"cadence": cad, "channel": ch["kind"] if ch else "email"})
     elif act == "notify_owner":
         notify_owner("CTI billing: " + res.get("detail", "payment issue"))
     elif act in ("cancelled", "recovered"):
@@ -419,14 +610,27 @@ def confirm(request: Request, t: str = ""):
     sub = S.get(sid)
     if not sub:
         return page("Not found", "<h1>Account not found</h1><p>It may have been removed.</p>")
+    note = ""
     if sub["status"] not in ("cancelled",):
         S.set_status(sid, "active", "email confirmed", ip=client_ip(request))
         S.log_consent(sid, "signup", True, ip=client_ip(request),
                       user_agent=request.headers.get("user-agent", ""), terms_version=TERMS_VERSION,
                       detail="double opt-in via /confirm")
-        notify_owner(f"CTI: new subscriber confirmed ({sub['tier']})")
+        # test-ping the channel they picked at signup so it lands verified
+        for ch in sub["channels"]:
+            if ch["kind"] == "email" or ch["verified"]:
+                continue
+            r = CH.send(ch["kind"], ch["target"], "SecurityCyber CTI — you're connected",
+                        "This channel is now linked. Real alerts will arrive here.",
+                        creds=creds(), priority="default")
+            if r["ok"]:
+                S.verify_channel(ch["id"])
+            else:
+                note = f" We couldn't reach your {_chan_label(ch['kind'])} — check it on the next page."
+        notify_owner(f"CTI: new subscriber confirmed ({sub['tier']}, {sub.get('cadence','monthly')})")
     mtok = tokens.sign({"sub": sid, "act": "manage"}, ttl=90 * 86400)
-    return RedirectResponse(f"/manage?t={mtok}&m=" + _q("You're in. Set up your channels below."), 303)
+    return RedirectResponse(f"/manage?t={mtok}&m=" + _q("You're in — alerts are live." + note)
+                            + ("&k=bad" if note else "&k=good"), 303)
 
 
 # --------------------------------------------------------------------------- manage
@@ -461,7 +665,10 @@ def manage(request: Request, t: str = ""):
               ) if ch["kind"] != "email" else ""
         ch_rows += f"<tr><td>{e(ch['kind'])}</td><td class=muted>{e(_short(ch['target']))}</td><td>{v} {rm}</td></tr>"
 
-    add_opts = "".join(f"<option value={x}>{x}</option>" for x in allowed if x not in ("email",))
+    add_opts = "".join(
+        f'<option value="{x}" data-hint="{e(_CHAN_META.get(x, (x,"",""))[1])}" '
+        f'data-ph="{e(_CHAN_META.get(x, (x,"",""))[2])}">{e(_chan_label(x))}</option>'
+        for x in allowed if x not in ("email", "telegram"))
     unsub_link = f"{site}/unsubscribe?t=" + tokens.sign({"sub": sub["id"], "act": "unsubscribe"}, ttl=90 * 86400)
 
     portal_btn = ""
@@ -471,21 +678,27 @@ def manage(request: Request, t: str = ""):
 
     body = f"""
 <h1>Your alert preferences</h1>
-<p class=muted>Plan: <b>{e(sub['tier'])}</b> · Status: <b>{e(sub['status'])}</b> · {e(sub['email'])}</p>
+<p class=muted>Plan: <b>{e(sub['tier'].title())}</b> ({e(sub.get('cadence','monthly'))}) ·
+Status: <b>{e(sub['status'])}</b> · {e(sub['email'])}</p>
 
 <h2>Channels</h2>
 <div class=card>
 <table><tbody><tr><th>type</th><th>where</th><th></th></tr>{ch_rows}</tbody></table>
-<form method=post action="/manage/channel/add" style="margin-top:12px">
+<form method=post action="/manage/channel/add" style="margin-top:12px" id=af>
 <input type=hidden name=t value="{e(tok)}">
 <div class=row>
-<select name=kind style="max-width:160px">{add_opts}</select>
-<input type=text name=target placeholder="webhook URL / ntfy topic URL / Slack webhook URL">
+<select name=kind id=ak style="max-width:150px">{add_opts}</select>
+<input type=text name=target id=at style="flex:1;min-width:200px">
 <button class=btn>Add</button>
 </div>
-<p class=muted style="margin-top:8px">For <b>Telegram</b>, <a href="/channel/telegram?t={e(tok)}">use the bot link</a>.
-For <b>Slack</b>, paste an <a href="https://api.slack.com/messaging/webhooks" rel=noopener>incoming-webhook URL</a>.</p>
+<p class=muted id=ah style="margin-top:8px"></p>
+<p class=muted>For <b>Telegram</b>, <a href="/channel/telegram?t={e(tok)}">use the one-tap bot link →</a></p>
 </form>
+<script>
+(function(){{var s=document.getElementById('ak'),h=document.getElementById('ah'),t=document.getElementById('at');
+function u(){{var o=s.options[s.selectedIndex];h.textContent=o.getAttribute('data-hint')||'';
+t.placeholder=o.getAttribute('data-ph')||'';}}s.addEventListener('change',u);u();}})();
+</script>
 </div>
 
 <h2>What you get alerted about</h2>

@@ -12,8 +12,18 @@ Legend:  `[ ]` todo  `[~]` in progress  `[x]` done + tested  `[!]` blocked (see 
 ---
 
 ## RESUME HERE
-> **ALL 7 PHASES DONE.** The subscription service is built, tested, committed,
-> and ships **disabled**. Remaining work is the owner's, not code:
+> **ALL 7 PHASES DONE** + a follow-up round (2026-09-02 pm):
+>   - Discord added as a delivery channel (webhook URL)
+>   - **weekly OR monthly** billing per tier (`{monthly,weekly}_price_id` +
+>     `_display` + `_pence`); cadence stored on the subscriber; MRR normalises
+>   - branded **SecurityCyber** public site (dark theme, Syne/DM Sans, blue
+>     accent, the lightning mark; nav + footer + `/logo.svg`)
+>   - upfront signup form: tier + cadence + email + platform + handle, then
+>     Stripe; a signed **signup_intent** carries the choice through the webhook;
+>     the picked channel is test-pinged and verified on /confirm
+>   - schema migration **v2** (cadence column + signup_intents table)
+> All 4 selftests still green.
+> Remaining work is the owner's, not code:
 >   1. `git push` — see the GitHub blocker below (needs auth).
 >   2. Turso: create the DB, put `TURSO_DATABASE_URL` + `TURSO_AUTH_TOKEN` in
 >      config/env (see Turso blocker below). Until then PII is local SQLite.
