@@ -129,6 +129,46 @@ Everything below is in the panel (Settings / Feeds), or edit the files directly:
 | change the voice / scoring rubric | — | `prompts/analyst.md` |
 | get pinged on failures | Settings → Notifications | `config/settings.yaml` → `notify.ntfy_url` |
 
+## Paid alert service (optional)
+
+The same `posts[]` the analyst produces can be sold as a subscription — a
+separate, UK-compliant service that runs alongside the brand's own channels.
+It's **off by default** (`subscriptions.enabled: false`).
+
+```
+public site (web/public_app.py, behind Caddy)        owner console (web/app.py)
+  /            landing + pricing                        /subscribers    list, search, DSAR export/erase
+  /subscribe   -> Stripe hosted Checkout               /subscribers/{id} full detail + consent log
+  /confirm     double opt-in, logs consent+IP         /subscriptions  config + go-live readiness
+  /manage      channels, vendor filter, billing portal
+  /unsubscribe one-click pause
+  /webhooks/stripe  ·  /webhooks/telegram
+
+bin/deliver.py   fan-out: instant (after each harvest) + daily digest, per
+                 subscriber tier / vendor filter / channel, deduped
+bin/retention.py weekly purge (cancelled + unconfirmed) — cti-retention.timer
+bin/backup_db.py daily DB backup (local sqlite) — cti-backup.timer
+```
+
+- **Data store:** Turso (libSQL, EU region) when `TURSO_DATABASE_URL` +
+  `TURSO_AUTH_TOKEN` are set; local SQLite otherwise. `lib/db.py` picks
+  automatically — same schema either way.
+- **Payments:** Stripe hosted Checkout + Customer Portal — no card data touches
+  this code. Test mode until `subscriptions.live: true` with `sk_live_` keys.
+- **Channels:** email, Slack, Telegram, generic webhook, ntfy.
+- **Compliance:** `docs/legal/` holds the privacy policy, terms, cookie
+  statement and an **owner compliance runbook** (ICO registration, DSAR
+  process, breach notification, retention, PECR). The pages render at
+  `/privacy` `/terms` `/cookies` with your details filled in from config.
+
+**Setup:** `docs/legal/compliance-runbook.md` is the checklist. In short:
+register with the ICO → fill `subscriptions.*` in Settings → add Stripe/email
+keys in Secrets → `systemd/install-public.sh` → point Caddy at a domain →
+`python3 bin/selftest.py` until it says *ready* → run a test checkout →
+set `live: true`.
+
+Productisation background: `docs/RND.md`.
+
 ## Operations
 
 ```bash
@@ -159,7 +199,20 @@ prompts/analyst.md       stage 2 — the algorithm handed to `claude -p` (writes
 bin/publish_linkedin.py  stage 3 — classify posts[], cap/hold logic, archive, record
 bin/publishers.py        one post() per network: linkedin / mastodon / bluesky / x / email
 bin/notify.py            ntfy helper
-docs/RND.md              productisation / paid-tier notes (not built)
+
+lib/db.py                Turso (libSQL HTTP) / local-SQLite abstraction
+lib/subscribers.py       subscriber store: schema, CRUD, consent + DSAR + retention
+lib/subsconfig.py        subscriptions: config loader + go-live blocker list
+lib/tokens.py            signed expiring URL tokens
+lib/channels.py          per-subscriber senders (email/slack/telegram/webhook/ntfy)
+lib/billing.py           Stripe REST (checkout, webhook verify, portal)
+lib/ratelimit.py         in-process rate limiter for the public app
+web/public_app.py        the public subscriber site + webhooks
+bin/deliver.py           subscriber fan-out (instant + digest)
+bin/retention.py         data-retention purge   bin/backup_db.py   DB backup
+bin/selftest.py          full pre-flight readiness report
+docs/legal/              privacy policy, terms, cookies, compliance runbook
+docs/RND.md              productisation notes   docs/BUILD.md   build tracker
 bin/runlog.py            appends a run summary to state/runs.jsonl (dashboard timeline)
 bin/postlog.py           rolling-24h post counter (daily cap)
 bin/lint_post.py         post-quality linter + gate

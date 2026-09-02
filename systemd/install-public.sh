@@ -10,7 +10,8 @@ set -euo pipefail
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SRC/.." && pwd)"
 UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
-UNITS=(cti-public.service cti-digest.service cti-digest.timer cti-retention.service cti-retention.timer)
+UNITS=(cti-public.service cti-digest.service cti-digest.timer cti-retention.service
+       cti-retention.timer cti-backup.service cti-backup.timer)
 
 c(){ printf '\033[%sm%s\033[0m' "$1" "$2"; }
 ok(){ echo "  $(c '1;32' '✓') $*"; }
@@ -48,7 +49,7 @@ mkdir -p "$UNIT_DIR"
 for u in "${UNITS[@]}"; do cp "$SRC/$u" "$UNIT_DIR/$u"; ok "$u"; done
 systemctl --user daemon-reload
 systemctl --user enable --now cti-public.service
-systemctl --user enable --now cti-digest.timer cti-retention.timer
+systemctl --user enable --now cti-digest.timer cti-retention.timer cti-backup.timer
 ok "services enabled"
 sleep 1
 if [[ "$(systemctl --user is-active cti-public.service)" == active ]]; then

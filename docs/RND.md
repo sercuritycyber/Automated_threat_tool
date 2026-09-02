@@ -1,7 +1,10 @@
 # R&D — productisation notes
 
-> Captured 2026-09-02. Ideas / roadmap only — **not** built, not committed to.
-> The pipeline itself stays free for Blue Team Podcast's own channels.
+> Captured 2026-09-02. **Update: the subscription service described below was
+> then built** — see `docs/BUILD.md` for the phase log and `README.md` →
+> "Paid alert service". This file stays as the background/rationale.
+> It ships **disabled** (`subscriptions.enabled: false`); the brand's own free
+> channels are unchanged.
 
 ## Value proposition & tiers
 
@@ -91,9 +94,12 @@
   covers early volume (Resend 3k/mo, SES ~62k/mo from EC2). A few paying infosec
   subscribers make it self-sustaining.
 
-### Subscriber → EMAIL_TO plumbing (the actual build)
-The one piece of new code needed. Stripe fires webhooks on
-`customer.subscription.created` / `.deleted`:
+### Subscriber → delivery plumbing — ✅ BUILT
+`lib/billing.py` verifies the Stripe webhook; `web/public_app.py` handles
+`/webhooks/stripe`; `lib/subscribers.py` is the store (Turso or SQLite);
+`bin/deliver.py` fans out per subscriber. Original sketch, for reference:
+
+Stripe fires webhooks on `customer.subscription.created` / `.deleted`:
 
 1. Small webhook endpoint (FastAPI route in `web/app.py`, or a separate tiny
    service) verifies the Stripe signature.

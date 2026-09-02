@@ -19,3 +19,4 @@ state/subscribers.db
 state/subscribers.db-*
 state/subscribers.db.*
 config/subscribers.json
+state/backups/

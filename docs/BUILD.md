@@ -12,13 +12,17 @@ Legend:  `[ ]` todo  `[~]` in progress  `[x]` done + tested  `[!]` blocked (see 
 ---
 
 ## RESUME HERE
-> P0 ✅ · P1 ✅ · P2 ✅ · P3 ✅ · P4 ✅ (owner console: Subscribers + Subscriptions pages).
-> Next: **Phase 5 — compliance polish** (retention DONE early; add `notify.py`
-> owner-alert wiring already in webhook; verify consent trail; data-minimisation
-> pass) → **Phase 6** `bin/selftest.py` full preflight + `bin/backup_db.py` +
-> install.sh mention → **Phase 7** README + RND + runbook + memory.
-> Commits: P0 `f8397f3` · P1 `8f137f9` · P2 `5491834` · P3 `c65f396` · P4 `<pending>`.
-> Selftests: `for t in subs deliver billing public; do python3 bin/selftest_$t.py; done` (all green)
+> **ALL 7 PHASES DONE.** The subscription service is built, tested, committed,
+> and ships **disabled**. Remaining work is the owner's, not code:
+>   1. `git push` — see the GitHub blocker below (needs auth).
+>   2. Turso: create the DB, put `TURSO_DATABASE_URL` + `TURSO_AUTH_TOKEN` in
+>      config/env (see Turso blocker below). Until then PII is local SQLite.
+>   3. Everything in `docs/legal/compliance-runbook.md` (ICO, Stripe, email,
+>      DNS/Caddy) — then `python3 bin/selftest.py` until "ready", then flip
+>      `subscriptions.enabled` / `live`.
+> Commits: P0 `f8397f3` · P1 `8f137f9` · P2 `5491834` · P3 `c65f396` · P4 `a81983f` · P5-7 `<pending>`.
+> Tests (all green): `for t in subs deliver billing public; do python3 bin/selftest_$t.py; done`
+> Preflight: `python3 bin/selftest.py`
 
 ## ⚠ MISTAKE LOG
 - Ran `git checkout config/settings.yaml` to undo a test write — but that file had
@@ -183,29 +187,30 @@ SUBS_TOKEN_SECRET=            # random 32+ bytes, for signed links (auto-gen if 
 - [x] dashboard shows a "Paid alert service" summary card when enabled or subs exist
 - [x] nav item "Subscribers"; web/app.py boots fine if the subs stack fails to import (`_SUBS_OK`)
 
-### Phase 5 — compliance
-- [ ] `docs/legal/privacy-policy.md` — UK GDPR / DPA 2018: controller, lawful basis, data collected, processors (Stripe, email provider, Slack, Telegram, hosting), retention, rights, complaints→ICO, contact
-- [ ] `docs/legal/terms.md` — service description, "informational, no patch SLA", liability cap, cancellation, acceptable use, governing law = England & Wales
-- [ ] `docs/legal/cookies.md` — statement that the site sets no non-essential cookies
-- [ ] `docs/legal/compliance-runbook.md` — ICO registration steps + fee, DSAR process (30 days), breach process (72h to ICO), processor list upkeep, retention job schedule
-- [ ] `bin/retention.py` — purge cancelled > N days, unconfirmed > 7 days; wired to a weekly timer
-- [ ] consent record: every state change logged in `consents`/`events` with ts + ip + terms_version
-- [ ] data-minimisation pass: store only what's needed; IP only where consent proof requires it
-- [ ] security headers, HSTS via Caddy, webhook sig verification, token expiry, rate limits — all confirmed
+### Phase 5 — compliance ✅
+- [x] `docs/legal/privacy-policy.md` — controller, lawful basis (contract + consent + LI), data table, processor table (Stripe/Turso/email/Slack/Telegram/hosting) with locations, transfers, retention, full rights + ICO complaint route
+- [x] `docs/legal/terms.md` — "informational only, no patch SLA", cooling-off, acceptable use (no resale), liability cap = 12mo fees, England & Wales
+- [x] `docs/legal/cookies.md` — site sets no cookies; Stripe on its own domain
+- [x] `docs/legal/compliance-runbook.md` — ICO registration + fee, ROPA, DSAR (1 month), breach (72h), PECR soft opt-in, retention, VAT
+- [x] `bin/retention.py` + weekly `cti-retention.timer`
+- [x] consent: logged with ts + ip + user-agent + terms_version at /confirm, /unsubscribe, manual add; `TERMS_VERSION` in lib/subscribers.py
+- [x] data-minimisation: email + optional name + channel targets + Stripe ids + delivery logs; IP/UA only at consent events
+- [x] security headers + CSP in the app, HSTS in Caddyfile, Stripe HMAC verify, token expiry + action scoping, in-process rate limits, optional Telegram webhook secret
 
-### Phase 6 — deploy + hardening
-- [ ] `systemd/install-public.sh` — installs cti-public.service, cti-digest.timer, cti-retention.timer; prints Caddy instructions
-- [ ] `Caddyfile` template (auto-TLS, security headers, reverse_proxy to public app port)
-- [ ] separate low-priv run user for the public app (document; don't require)
-- [ ] `bin/selftest.py` — end-to-end dry check (db, config, stripe key format, channel creds, caddy present)
-- [ ] backups: `bin/backup_db.py` (sqlite .backup) + weekly timer
-- [ ] `requirements.txt` note (still zero new deps) + README
+### Phase 6 — deploy + hardening ✅
+- [x] `systemd/install-public.sh` — installs public/digest/retention/backup units, health-checks, prints the go-live checklist
+- [x] `systemd/Caddyfile` — auto-TLS, HSTS, X-Forwarded-For, reverse_proxy to 127.0.0.1:8080
+- [x] `systemd/cti-public.service` hardened (NoNewPrivileges, ProtectSystem=strict, ReadWritePaths)
+- [x] `bin/selftest.py` — full readiness report (deps, db backend, config problems, Stripe key shape, email, channels, ICO/legal, caddy, units)
+- [x] `bin/backup_db.py` + `cti-backup.timer` (local sqlite .backup, keep 14; no-op on Turso)
+- [x] zero new pip deps — confirmed (stdlib + existing fastapi/uvicorn/requests/pyyaml)
 
-### Phase 7 — docs
-- [ ] README — new "Paid alert service" section + architecture diagram update
-- [ ] `docs/RND.md` — mark the built parts done
-- [ ] operator runbook: first-run setup order (Stripe products → keys → settings → test checkout → go live)
-- [ ] update memory file
+### Phase 7 — docs ✅
+- [x] README — "Paid alert service (optional)" section with the map + setup summary
+- [x] README Files list updated
+- [x] `docs/RND.md` — marked built
+- [x] operator runbook = `docs/legal/compliance-runbook.md` + `install-public.sh` output + `bin/selftest.py`
+- [x] memory file updated
 
 ---
 
