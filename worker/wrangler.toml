@@ -106,6 +106,16 @@ CONFIG = """
 #   STRIPE_SECRET_KEY        sk_test_… then sk_live_…   (checkout won't show without this)
 #   STRIPE_WEBHOOK_SECRET    whsec_…   (from the Stripe dashboard webhook)
 #   RESEND_API_KEY           re_…      (without it, email shows as unavailable)
+#   DISCORD_CLIENT_ID        Discord app -> OAuth2 -> Client ID
+#   DISCORD_CLIENT_SECRET    Discord app -> OAuth2 -> Client Secret
+#   DISCORD_BOT_TOKEN        Discord app -> Bot -> Token (bot must be IN the server,
+#                            with Create Invite + Manage Roles)
+#   DISCORD_GUILD_ID         right-click your server -> Copy Server ID (dev mode on)
+#   DISCORD_SUBSCRIBER_ROLE_ID  optional — role granted on join, revoked when
+#                            a subscription lapses
+#   DISCORD_REMOVE_ON_LAPSE  optional — "1" to kick instead of just unrole
+#   Redirect URI to whitelist in the Discord app:
+#     https://cti.securitycyber.uk/channel/discord/callback
 #   TELEGRAM_BOT_TOKEN       from @BotFather   (optional — else telegram is unavailable)
 #   TELEGRAM_BOT_USERNAME    without the @      (optional)
 #   TELEGRAM_WEBHOOK_SECRET  any random string  (optional)

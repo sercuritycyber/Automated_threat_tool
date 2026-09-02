@@ -1,5 +1,7 @@
 // Per-subscriber delivery channels. Ported from lib/channels.py.
 //   await send(env, cfg, kind, target, subject, body, { jsonPayload, priority, listUnsub })
+import * as discord from "./discord.js";
+
 const UA = "SecurityCyber-CTI/1.0 (+https://securitycyber.uk)";
 
 const res = (kind, ok, ref = "", error = "") => ({ kind, ok, ref, error });
@@ -30,7 +32,11 @@ export function channelAvailability(env, cfg) {
       ? mk(true) : mk(false, "the Telegram bot isn't connected yet"),
     // Pull, not push: we mint the URL, the reader fetches it. Nothing to configure.
     rss: mk(true),
-    discord: mk(true),
+    // Join the SecurityCyber Discord in one click; alerts arrive as bot DMs.
+    discord: discord.discordConfigured(env)
+      ? mk(true) : mk(false, "our Discord isn't connected yet"),
+    // Advanced: push into a server the subscriber runs themselves.
+    discord_webhook: mk(true),
     slack: mk(true),
     webhook: mk(true),
     ntfy: mk(true),
@@ -150,7 +156,15 @@ export async function send(env, cfg, kind, target, subject, body, opts = {}) {
   const { jsonPayload = null, priority = "default", listUnsub = "", shortText = "" } = opts;
   switch (kind) {
     case "email": return sendEmail(env, cfg, target, subject, body, jsonPayload, listUnsub);
-    case "discord": return sendDiscord(target, subject, teaser(body, 1900, shortText));
+    case "discord": {
+      // target is their Discord user id — DM it, so their own score threshold
+      // and vendor filter still decide what they receive.
+      try {
+        const id = await discord.dm(env, target, `**${subject}**\n${teaser(body, 1800, shortText)}`);
+        return res("discord", true, id);
+      } catch (e) { return res("discord", false, "", String(e).slice(0, 200)); }
+    }
+    case "discord_webhook": return sendDiscord(target, subject, teaser(body, 1900, shortText));
     case "slack": return sendSlack(target, subject, body);
     case "telegram": return sendTelegram(env, target, subject, teaser(body, 3900, shortText));
     case "webhook": return sendWebhook(env, target, subject, body, jsonPayload);
@@ -167,7 +181,10 @@ export function verifyTarget(kind, target) {
   target = (target || "").trim();
   switch (kind) {
     case "email": return /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(target) ? [true, ""] : [false, "not a valid email address"];
-    case "discord": return /^https:\/\/(discord|discordapp)\.com\/api\/webhooks\/\d+\//.test(target)
+    // discord targets are Discord user ids (snowflakes) captured via OAuth —
+    // never typed in, so this only guards against corruption.
+    case "discord": return /^\d{15,25}$/.test(target) ? [true, ""] : [false, "connect Discord with the button instead"];
+    case "discord_webhook": return /^https:\/\/(discord|discordapp)\.com\/api\/webhooks\/\d+\//.test(target)
       ? [true, ""] : [false, "must be a Discord webhook URL (Server Settings → Integrations → Webhooks)"];
     case "slack": return target.startsWith("https://hooks.slack.com/") ? [true, ""] : [false, "must be a Slack incoming-webhook URL"];
     case "telegram": return /^-?\d+$/.test(target) ? [true, ""] : [false, "expected a numeric chat id — use the bot link"];

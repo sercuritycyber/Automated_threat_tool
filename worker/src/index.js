@@ -3,6 +3,7 @@ import { config, problems, advisories, priceToTier, monthlyPence,
   paymentLink, paymentLinkUrl, canCheckout, buyableMap, takingRealMoney } from "./config.js";
 import * as db from "./db.js";
 import * as billing from "./billing.js";
+import * as discord from "./discord.js";
 import { send, verifyTarget, channelAvailability } from "./channels.js";
 import { sign, verify, newId, BadToken, timingSafeEqual } from "./tokens.js";
 import { page, landing, subscribeForm, managePage, simple, briefPage, paidPage, feedXml, LOGO_SVG, chanLabel } from "./pages.js";
@@ -156,6 +157,8 @@ async function route(request, env, ctx, url, path, cfg) {
   if (path === "/manage/delete" && m === "POST") return manageDelete(request, env, cfg);
   if (path === "/unsubscribe" && m === "GET") return unsubscribe(request, env, cfg, url);
   if (path === "/channel/telegram" && m === "GET") return telegramLink(request, env, cfg, url);
+  if (path === "/channel/discord" && m === "GET") return discordConnect(request, env, cfg, url);
+  if (path === "/channel/discord/callback" && m === "GET") return discordCallback(request, env, cfg, url);
 
   // ---- pipeline -> worker ----
   if (path === "/internal/ingest" && m === "POST") return internalIngest(request, env, cfg, ctx);
@@ -426,6 +429,12 @@ async function stripeWebhook(request, env, cfg) {
     await notifyOwner(env, cfg, res.detail || "payment issue");
   } else if (["cancelled", "recovered"].includes(res.action)) {
     await notifyOwner(env, cfg, `subscriber ${res.action}`);
+    // Discord access follows payment, exactly as the RSS feed does: lose the
+    // subscriber role on cancellation, get it back on recovery.
+    if (res.subscriber_id) {
+      const s = await db.get(env.DB, res.subscriber_id);
+      if (s) await discordAccess(env, cfg, s, res.action === "recovered");
+    }
   }
   return json({ received: true, action: res.action });
 }
@@ -462,6 +471,84 @@ async function confirm(request, env, cfg, url) {
   }
   const mtok = await sign(env, { sub: sub.id, act: "manage" }, 90 * 86400);
   return redirect(`/manage?t=${mtok}&m=` + q("You're in — alerts are live." + note) + (note ? "&k=bad" : "&k=good"));
+}
+
+// ---------------------------------------------------------------- Discord
+// One click, no username typing: Discord has no way for a bot to look up a
+// user by name or send an add request, so we use OAuth2 `guilds.join`. They
+// approve once, the bot adds them to the server, and alerts then arrive as
+// bot DMs — which keeps each subscriber's own score threshold and vendor
+// filter working (a shared channel could not).
+const discordRedirect = (cfg) => `${cfg.site_url}/channel/discord/callback`;
+
+async function discordConnect(request, env, cfg, url) {
+  const over = rl(request, "discord", cfg, 20); if (over) return over;
+  const tok = url.searchParams.get("t") || "";
+  const [sub] = await manageSub(env, url);
+  if (!sub) return html(simple(cfg, "Link problem", "That link didn't work",
+    "Use “Already subscribed?” on the home page for a fresh one."));
+  if (!discord.discordConfigured(env))
+    return html(simple(cfg, "Not available", "Discord isn't connected yet",
+      "Our Discord isn't set up for subscribers yet — pick another delivery method for now."));
+
+  // The OAuth `state` must be unguessable and must survive the round trip, so
+  // it is a signed, short-lived token naming this subscriber.
+  const state = await sign(env, { sub: sub.id, act: "discord" }, 900);
+  await db.kvSet(env.DB, `discord_state:${sub.id}`, tok);   // to return them to /manage
+  return redirect(discord.authorizeUrl(env, discordRedirect(cfg), state));
+}
+
+async function discordCallback(request, env, cfg, url) {
+  const over = rl(request, "discord", cfg, 20); if (over) return over;
+  const code = url.searchParams.get("code") || "";
+  const state = url.searchParams.get("state") || "";
+  if (url.searchParams.get("error"))
+    return html(simple(cfg, "Not connected", "Discord wasn't connected",
+      "You cancelled at Discord, so nothing changed. You can try again from your preferences."));
+
+  let data;
+  try { data = await verify(env, state, "discord"); }
+  catch { return html(simple(cfg, "Link problem", "That link expired", "Start again from your preferences.")); }
+  const sub = await db.get(env.DB, data.sub);
+  if (!sub) return html(simple(cfg, "Not found", "Account not found", "It may have been removed."));
+  const back = (await db.kvGet(env.DB, `discord_state:${sub.id}`)) || "";
+
+  try {
+    const accessToken = await discord.exchangeCode(env, code, discordRedirect(cfg));
+    const me = await discord.currentUser(env, accessToken);
+    await discord.addToGuild(env, me.id, accessToken);
+    // Store the user id as the channel target — DMs go to it, and it's how we
+    // revoke access later if they stop paying.
+    await db.addChannel(env.DB, sub.id, "discord", me.id, true, `discord:${me.username}`);
+    await db.logEvent(env.DB, "channel:discord_joined", sub.id, { user: me.username });
+    const r = await send(env, cfg, "discord", me.id, `${cfg.brand} CTI — you're connected`,
+      "You're in. Alerts that clear your threshold will arrive here as a DM.", {});
+    const note = r.ok ? "" : " (we couldn't DM you yet — check that you allow DMs from server members)";
+    return redirect(`/manage?t=${encodeURIComponent(back)}&m=`
+      + q(`Discord connected as ${me.global_name}. You've been added to our server${note}.`)
+      + (r.ok ? "&k=good" : "&k=bad"));
+  } catch (e) {
+    console.error("discord connect", e);
+    await notifyOwner(env, cfg, `Discord connect failed for subscriber ${sub.id}: ${e}`);
+    return html(simple(cfg, "Couldn't connect", "Discord didn't connect",
+      "Something went wrong adding you to our server. Nothing was charged and nothing changed — "
+      + "please try again from your preferences, or pick another delivery method."));
+  }
+}
+
+// Access follows payment, like the RSS feed: drop the subscriber role when a
+// subscription stops, restore it when it resumes. Never throws into the
+// caller — losing Discord access must not break status handling.
+async function discordAccess(env, cfg, sub, grant) {
+  if (!discord.discordConfigured(env)) return;
+  const ch = (sub.channels || []).find((c) => c.kind === "discord");
+  if (!ch) return;
+  try {
+    if (grant) await discord.grantSubscriberRole(env, ch.target);
+    else if (env.DISCORD_REMOVE_ON_LAPSE === "1") await discord.removeFromGuild(env, ch.target);
+    else await discord.revokeSubscriberRole(env, ch.target);
+    await db.logEvent(env.DB, grant ? "discord:access_granted" : "discord:access_revoked", sub.id, {});
+  } catch (e) { console.error("discord access", e); }
 }
 
 // Send the subscriber their private feed URL. Called on confirmation and

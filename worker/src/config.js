@@ -50,12 +50,12 @@ const DEFAULTS = {
       monthly_pence: 1800, weekly_pence: 0,
       blurb: "Everything scoring 75+ instantly, a daily digest, machine-readable JSON, Slack and Discord.",
       instant_min_score: 75, attach_json: true,
-      channels: ["email", "rss", "discord", "slack", "telegram", "webhook", "ntfy"], max_channels: 7,
+      channels: ["email", "rss", "discord", "discord_webhook", "slack", "telegram", "webhook", "ntfy"], max_channels: 8,
     },
   },
 };
 
-const CHANNEL_KINDS = ["email", "rss", "discord", "slack", "telegram", "webhook", "ntfy"];
+const CHANNEL_KINDS = ["email", "rss", "discord", "discord_webhook", "slack", "telegram", "webhook", "ntfy"];
 const STATUSES = ["pending_payment", "unconfirmed", "active", "paused", "past_due", "cancelled"];
 const CADENCES = ["monthly", "weekly"];
 

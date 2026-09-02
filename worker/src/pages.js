@@ -139,7 +139,8 @@ ${esc(legal)}${ico} · Independent UK blue-team security advisory.<br>
 export const CHAN_META = {
   email: ["Email", "the address to send alerts to", "you@example.com"],
   rss: ["RSS feed", "nothing here — we'll mint you a private feed URL for your reader", ""],
-  discord: ["Discord", "a channel webhook URL (Server Settings → Integrations → Webhooks → New Webhook → Copy URL)", "https://discord.com/api/webhooks/…"],
+  discord: ["Discord", "nothing here — you'll get a one-click link to join our Discord, and alerts arrive as a DM", ""],
+  discord_webhook: ["Discord (your own server)", "a channel webhook URL (Server Settings → Integrations → Webhooks → New Webhook → Copy URL)", "https://discord.com/api/webhooks/…"],
   slack: ["Slack", "an incoming-webhook URL (api.slack.com/messaging/webhooks)", "https://hooks.slack.com/services/…"],
   telegram: ["Telegram", "nothing here — after payment you'll get a one-tap link to our bot", ""],
   webhook: ["Webhook", "an https:// URL we POST JSON to", "https://example.com/hook"],
@@ -497,7 +498,7 @@ export function managePage(cfg, sub, tok, flash = "", flashKind = "") {
 (Feedly, Inoreader, NetNewsWire, Thunderbird…). It's private to you — treat it like a password, and it
 keeps updating for as long as the subscription is active.</p>` : "";
   const addOpts = (tierCfg.channels || [])
-    .filter((x) => x !== "email" && x !== "telegram" && CHAN_META[x])
+    .filter((x) => !["email", "telegram", "discord"].includes(x) && CHAN_META[x])
     .filter((x) => !(x === "rss" && hasRss))   // one feed per subscriber
     .map((x) => `<option value="${x}" data-hint="${esc(CHAN_META[x][1])}" data-ph="${esc(CHAN_META[x][2])}">${esc(chanLabel(x))}</option>`).join("");
   const portal = sub.stripe_customer_id ?
@@ -513,7 +514,9 @@ Status: <b>${esc(sub.status)}</b> · ${esc(sub.email)}</p>
 <div class=row><select name=kind id=ak style="max-width:150px">${addOpts}</select>
 <input type=text name=target id=at style="flex:1;min-width:200px"><button class=btn>Add</button></div>
 <p class=muted id=ah style="margin-top:8px"></p>
-<p class=muted>For <b>Telegram</b>, <a href="/channel/telegram?t=${esc(tok)}">use the one-tap bot link →</a></p></form>
+<p class=muted>For <b>Telegram</b>, <a href="/channel/telegram?t=${esc(tok)}">use the one-tap bot link →</a></p>
+<p class=muted>For <b>Discord</b>, <a href="/channel/discord?t=${esc(tok)}">connect your account →</a>
+— one click adds you to our server and alerts arrive as a DM. Nothing to copy or paste.</p></form>
 <script>(function(){var s=document.getElementById('ak'),h=document.getElementById('ah'),t=document.getElementById('at');
 function u(){if(!s)return;var o=s.options[s.selectedIndex];h.textContent=o.getAttribute('data-hint')||'';t.placeholder=o.getAttribute('data-ph')||'';}
 if(s){s.addEventListener('change',u);u();}})();</script></div>

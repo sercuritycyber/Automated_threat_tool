@@ -85,7 +85,14 @@ ok("subscribe preselects the cadence from the link",
 const availNone = channelAvailability({}, cNoPrice);
 ok("email unavailable without Resend", !availNone.email.ok && /email/i.test(availNone.email.why));
 ok("telegram unavailable without a bot", !availNone.telegram.ok);
-ok("discord always available (subscriber supplies the webhook)", availNone.discord.ok);
+// Discord is now "join our server, get DMs" — it needs our app + bot, so it
+// is unavailable until those secrets exist. The old push-to-your-own-server
+// behaviour lives on as discord_webhook, which needs nothing from us.
+ok("discord unavailable until our app+bot are configured", !availNone.discord.ok);
+ok("discord available once the app+bot exist",
+  channelAvailability({ DISCORD_CLIENT_ID: "1", DISCORD_CLIENT_SECRET: "2",
+    DISCORD_BOT_TOKEN: "3", DISCORD_GUILD_ID: "4" }, cNoPrice).discord.ok);
+ok("discord_webhook needs nothing from us", availNone.discord_webhook.ok);
 const availOn = channelAvailability({ RESEND_API_KEY: "re_x", TELEGRAM_BOT_TOKEN: "t", TELEGRAM_BOT_USERNAME: "b" }, cNoPrice);
 ok("email + telegram available once configured", availOn.email.ok && availOn.telegram.ok);
 ok("CONFIG.channels_disabled forces a kind off",
@@ -167,8 +174,11 @@ ok("rss target accepts a minted id, rejects junk",
 ok("rss is always available (nothing to configure)", channelAvailability({}, cNoPrice).rss.ok);
 
 // ---- channels ----
-ok("verifyTarget discord ok", verifyTarget("discord", "https://discord.com/api/webhooks/123/abc")[0]);
-ok("verifyTarget discord bad", !verifyTarget("discord", "https://evil.com/x")[0]);
+// discord targets are user-id snowflakes captured via OAuth, never typed
+ok("verifyTarget discord takes a user id", verifyTarget("discord", "123456789012345678")[0]);
+ok("verifyTarget discord rejects a pasted URL", !verifyTarget("discord", "https://discord.com/api/webhooks/1/a")[0]);
+ok("verifyTarget discord_webhook ok", verifyTarget("discord_webhook", "https://discord.com/api/webhooks/123/abc")[0]);
+ok("verifyTarget discord_webhook bad", !verifyTarget("discord_webhook", "https://evil.com/x")[0]);
 ok("verifyTarget slack", verifyTarget("slack", "https://hooks.slack.com/services/x")[0]);
 ok("verifyTarget email", verifyTarget("email", "a@b.co")[0] && !verifyTarget("email", "nope")[0]);
 ok("verifyTarget telegram numeric", verifyTarget("telegram", "12345")[0] && !verifyTarget("telegram", "abc")[0]);
