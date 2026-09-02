@@ -51,3 +51,62 @@
 - Where the subscriber list lives (flat file vs. SQLite vs. the existing Turso).
 - Whether filtering happens in ingest (cheaper) or at delivery (per-subscriber).
 - Rate-of-change: a paid alert that's 30 min slower than free feeds isn't worth £8/mo — the value is the triage + "do now", not the speed.
+
+---
+
+## Running it as a UK micro-SaaS
+
+> From `Turning your automated-system_into_a_sub_service.txt` (see `docs/` for the raw note).
+> Verdict there: viable as a low-overhead side-hustle; validate before scaling.
+
+### Financial viability & tax
+- **£1,000 trading allowance** — HMRC gives a UK sole trader £1,000/yr tax-free
+  trading income. First cohort (≈10 users × £8/mo ≈ £960/yr) fits under it: no tax
+  due, no Self Assessment registration needed *if* it stays the only side income.
+- **Monzo Business** — built-in Making Tax Digital tool (Sage-powered) categorises
+  transactions and tracks income/expenses in real time; no manual spreadsheet.
+- **Payments** — Stripe or Lemon Squeezy for recurring weekly/monthly billing,
+  paid out to the Monzo account.
+
+### Legal & compliance
+- **ICO registration** — running a mailing list of customer emails = processing
+  personal data, so the ICO data-protection fee is **mandatory**. Tier 1
+  micro-business: **£40–£52/year**. Bonus for a security brand — it puts you on
+  the public ICO register (visible accountability).
+- **Terms & conditions** — state clearly the service aggregates *public
+  advisories for information only*, no patch-management SLA. Protects you if a
+  severe CVE slips past the RSS/KEV heuristics.
+
+### Brand & delivery
+- **securitycyber.uk** — deploy a lightweight landing page: the technical merits
+  (CISA KEV cross-reference, near-duplicate clustering, `claude -p` triage, the
+  "do now" line), the two tiers, a Stripe checkout link.
+- **Transactional email** — Resend / Postmark / Amazon SES from the Python
+  script for deliverability. `bin/publishers.py` `post_email` already speaks SMTP;
+  these providers all offer an SMTP endpoint, so it's a credentials swap, not a
+  rewrite. (SES also has a REST API if raw SMTP throughput becomes a limit.)
+
+### Recurring overhead (steady state)
+- ICO fee £40–£52/yr + `securitycyber.uk` renewal. Email provider free tier
+  covers early volume (Resend 3k/mo, SES ~62k/mo from EC2). A few paying infosec
+  subscribers make it self-sustaining.
+
+### Subscriber → EMAIL_TO plumbing (the actual build)
+The one piece of new code needed. Stripe fires webhooks on
+`customer.subscription.created` / `.deleted`:
+
+1. Small webhook endpoint (FastAPI route in `web/app.py`, or a separate tiny
+   service) verifies the Stripe signature.
+2. On create: append `{email, tier, vendors:[], stripe_id}` to a subscribers
+   store — start with `config/subscribers.json` (flat file, git-ignored, chmod
+   600), move to SQLite/Turso only if it grows.
+3. On delete/cancel: mark inactive (keep the row for audit; don't hard-delete).
+4. Delivery: a new `email_digest` publisher (or a flag on `post_email`) that,
+   instead of a single `EMAIL_TO`, iterates active subscribers, applies each
+   subscriber's vendor allow-list to the run's `posts[]`, and sends per-tier
+   (Individual = severe-only + daily digest; Team = everything + JSON attach).
+5. Never put subscriber addresses in `config/env` / `EMAIL_TO` — that's for the
+   brand's own channels; the subscriber list is separate and access-controlled.
+
+Keep the free Blue Team Podcast channels (LinkedIn etc.) exactly as they are —
+the paid tier is an *additional* delivery path off the same `posts[]`.
