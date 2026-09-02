@@ -142,13 +142,18 @@ export const CHAN_META = {
 };
 export const chanLabel = (k) => (CHAN_META[k] || [k])[0];
 
-export function landing(cfg, flash = "", flashKind = "") {
+export function landing(cfg, flash = "", flashKind = "", buyable = null) {
   const cap = (s) => s[0].toUpperCase() + s.slice(1);
   let tiers = "";
   for (const name of ["individual", "team"]) {
     const t = cfg.tiers[name]; if (!t) continue;
     const chans = (t.channels || []).map(chanLabel).join(" · ");
-    const hasM = Number(t.monthly_pence) > 0, hasW = Number(t.weekly_pence) > 0;
+    // Only advertise a cadence we can actually take money for, so the pricing
+    // page and the signup form never disagree about what's on sale.
+    const b = buyable ? (buyable[name] || {}) : { monthly: true, weekly: true };
+    const hasM = Number(t.monthly_pence) > 0 && b.monthly !== false;
+    const hasW = Number(t.weekly_pence) > 0 && b.weekly !== false;
+    if (!hasM && !hasW) continue;
     // Both cadences live in the card; the toggle above swaps which is shown,
     // so the whole decision happens here instead of on the next page.
     // Only emit a cadence that actually has a price, so the toggle can never
@@ -159,7 +164,11 @@ export function landing(cfg, flash = "", flashKind = "") {
       ? `<div class=p2><span data-cad=monthly>that's ${esc(t.weekly_display)} billed weekly instead</span>`
         + `<span data-cad=weekly hidden>that's ${esc(t.monthly_display)} billed monthly instead</span></div>`
       : "";
-    tiers += `<div class=tier><h3>${cap(name)}</h3>
+    // data-cads lists the periods this plan is actually sold on, so the
+    // toggle can hide the whole card rather than leave an empty price on a
+    // monthly-only plan.
+    const cads = [hasM ? "monthly" : "", hasW ? "weekly" : ""].filter(Boolean).join(" ");
+    tiers += `<div class=tier data-cads="${cads}"><h3>${cap(name)}</h3>
 <div class=p1>${perM}${perW}</div>${alt}
 <p class=muted style="margin-top:8px">${esc(t.blurb || "")}</p>
 <ul>
@@ -172,7 +181,8 @@ ${t.attach_json ? "<li>Machine-readable JSON with every alert — pipe it straig
 <a class="btn buy" data-tier="${name}" href="/subscribe?tier=${name}&cadence=monthly">Choose ${cap(name)} →</a></div>`;
   }
   const b = cfg.brief || {};
-  const briefCard = `<div class=tier><h3>One-off brief</h3>
+  const briefBuyable = buyable ? buyable.__brief !== false : true;
+  const briefCard = !briefBuyable ? "" : `<div class=tier><h3>One-off brief</h3>
 <div class=p1>${esc(b.display || "")} <span class=p2>one payment</span></div>
 <p class=muted style="margin-top:8px">Not ready to subscribe? Buy a single deep dive on the
 vulnerability or incident that's on your mind right now.</p>
@@ -299,6 +309,11 @@ function apply(){
       var on=el.dataset.cad===cad;el.classList.toggle('on',on);el.setAttribute('aria-pressed',on);
     }else{ el.hidden = el.dataset.cad!==cad; }
   });
+  // A plan not sold on the selected period disappears entirely — better than
+  // showing a card with no price on it.
+  document.querySelectorAll('#pricing .tier[data-cads]').forEach(function(card){
+    card.hidden = card.dataset.cads.split(' ').indexOf(cad) === -1;
+  });
   document.querySelectorAll('#pricing a.buy').forEach(function(a){
     a.href='/subscribe?tier='+a.dataset.tier+'&cadence='+cad;
   });
@@ -401,12 +416,14 @@ ${items}
 </rss>`;
 }
 
-export function subscribeForm(cfg, tier, flash = "", flashKind = "", avail = null, preCadence = "") {
+export function subscribeForm(cfg, tier, flash = "", flashKind = "", avail = null, preCadence = "", buyable = null) {
   const t = cfg.tiers[tier];
+  const b = buyable ? (buyable[tier] || {}) : { monthly: true, weekly: true };
   const allowed = (t.channels || []).filter((x) => CHAN_META[x]);
   // A cadence is offered when it has a price in pence. The Stripe price id is
   // optional — billing.ensureTierPrice() creates one on the first checkout.
-  const hasM = Number(t.monthly_pence) > 0, hasW = Number(t.weekly_pence) > 0;
+  const hasM = Number(t.monthly_pence) > 0 && b.monthly !== false;
+  const hasW = Number(t.weekly_pence) > 0 && b.weekly !== false;
   let cadOpts = "";
   // Honour the cadence picked on the pricing cards, else default to monthly.
   const want = ["monthly", "weekly"].includes(preCadence) ? preCadence
@@ -446,7 +463,10 @@ Questions: <a href="mailto:${esc(contact)}">${esc(contact)}</a>.</p>
 </form>
 <script>(function(){var s=document.getElementById('plat'),h=document.getElementById('hint'),t=document.getElementById('tgt');
 function u(){var o=s.options[s.selectedIndex];h.textContent=o.getAttribute('data-hint')||'';t.placeholder=o.getAttribute('data-ph')||'';
-if(s.value==='telegram'){t.style.display='none';t.required=false;}else{t.style.display='';t.required=true;}}
+// telegram and rss need nothing typed — we mint the feed id / deep-link the
+// bot ourselves, so hide the box rather than leaving an empty one on screen.
+var noInput=(s.value==='telegram'||s.value==='rss');
+if(noInput){t.style.display='none';t.required=false;t.value='';}else{t.style.display='';t.required=true;}}
 s.addEventListener('change',u);u();})();</script>`;
   return page(cfg, `Subscribe — ${tier}`, body, flash, flashKind);
 }

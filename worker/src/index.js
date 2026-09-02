@@ -1,5 +1,6 @@
 // SecurityCyber CTI Alerts — Cloudflare Worker entrypoint.
-import { config, problems, advisories, priceToTier, monthlyPence } from "./config.js";
+import { config, problems, advisories, priceToTier, monthlyPence,
+  paymentLink, paymentLinkUrl, canCheckout, buyableMap } from "./config.js";
 import * as db from "./db.js";
 import * as billing from "./billing.js";
 import { send, verifyTarget, channelAvailability } from "./channels.js";
@@ -87,7 +88,7 @@ async function route(request, env, ctx, url, path, cfg) {
 
   // ---- landing ----
   if (path === "/" && m === "GET")
-    return html(landing(cfg, url.searchParams.get("m") || "", url.searchParams.get("k") || ""));
+    return html(landing(cfg, url.searchParams.get("m") || "", url.searchParams.get("k") || "", buyable(cfg, env)));
 
   if (path === "/account" && m === "POST") return account(request, env, cfg);
 
@@ -96,17 +97,18 @@ async function route(request, env, ctx, url, path, cfg) {
     const tier = url.searchParams.get("tier") || "individual";
     if (!cfg.tiers[tier]) return redirect("/?m=" + q("That plan isn't available."));
     const t = cfg.tiers[tier];
-    // Checkout is live as soon as Stripe has a key and the tier has a price in
-    // pence — the Stripe price id itself is created on demand by
-    // billing.ensureTierPrice(), so blank ids must NOT hide the form.
+    // Checkout is live when the tier has a price in pence AND there's some way
+    // to take the money — a Payment Link for either cadence, or a secret key
+    // for an API session. Blank Stripe price ids must NOT hide the form.
     const priced = Number(t.monthly_pence) > 0 || Number(t.weekly_pence) > 0;
-    if (!priced || !env.STRIPE_SECRET_KEY)
+    const payable = canCheckout(cfg, env, tier, "monthly") || canCheckout(cfg, env, tier, "weekly");
+    if (!priced || !payable)
       return html(simple(cfg, "Almost there", "Checkout isn't switched on yet",
         "Billing for this plan is being finalised — check back shortly."));
     // ?cadence= carries the monthly/weekly choice made on the pricing cards.
     const pre = url.searchParams.get("cadence");
     return html(subscribeForm(cfg, tier, url.searchParams.get("m") || "", url.searchParams.get("k") || "",
-      channelAvailability(env, cfg), ["monthly", "weekly"].includes(pre) ? pre : ""));
+      channelAvailability(env, cfg), ["monthly", "weekly"].includes(pre) ? pre : "", buyable(cfg, env)));
   }
   if (path === "/subscribe" && m === "POST") return subscribeSubmit(request, env, cfg);
 
@@ -116,8 +118,12 @@ async function route(request, env, ctx, url, path, cfg) {
       "<p class=muted>Didn't get it? Check spam, or use “Already subscribed?” on the home page.</p>"));
 
   // ---- one-off threat brief (Checkout `payment` mode) ----
-  if (path === "/brief" && m === "GET")
+  if (path === "/brief" && m === "GET") {
+    if (!buyable(cfg, env).__brief)
+      return html(simple(cfg, "Almost there", "Not available right now",
+        "One-off briefs aren't on sale at the moment — check back shortly."));
     return html(briefPage(cfg, url.searchParams.get("m") || "", url.searchParams.get("k") || ""));
+  }
   if (path === "/brief/buy" && m === "POST") return briefBuy(request, env, cfg);
   if (path === "/brief/thanks" && m === "GET")
     return html(simple(cfg, "Thank you", "Payment received — thank you",
@@ -156,6 +162,15 @@ async function route(request, env, ctx, url, path, cfg) {
 function cfg_enabled(env) {
   // service is "enabled" unless explicitly turned off via CONFIG {"enabled": false}
   try { const c = env.CONFIG ? JSON.parse(env.CONFIG) : {}; return c.enabled !== false; } catch { return true; }
+}
+
+// What the storefront may offer, per tier+cadence, plus the one-off brief.
+// In checkout_mode "link_only" that means "has a Stripe Payment Link".
+function buyable(cfg, env) {
+  const map = buyableMap(cfg, env);
+  map.__brief = !!(cfg.brief || {}).link
+    || (cfg.checkout_mode !== "link_only" && !!env.STRIPE_SECRET_KEY);
+  return map;
 }
 
 function rl(request, bucket, cfg, limit) {
@@ -280,6 +295,13 @@ async function subscribeSubmit(request, env, cfg) {
     ip: clientIp(request), ua: request.headers.get("user-agent") || "",
     terms_version: cfg.terms_version, detail: `accepted at signup (${email})`,
   });
+  // Prefer a Stripe Payment Link when one is configured: no API call, no
+  // secret key needed, and the intent still rides along on the query string.
+  const link = paymentLinkUrl(paymentLink(cfg, tier, cadence), { clientRef: intentTok, email });
+  if (link) {
+    await db.logEvent(env.DB, "checkout:payment_link", null, { tier, cadence, email });
+    return redirect(link);
+  }
   try {
     const sess = await billing.createCheckoutSession(env, cfg, {
       tier, cadence, email,
@@ -310,6 +332,14 @@ async function briefBuy(request, env, cfg) {
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email))
     return redirect("/brief?m=" + q("That email doesn't look right.") + "&k=bad");
   if (f.topic) await db.kvSet(env.DB, "brief_topic:" + email, String(f.topic).slice(0, 500));
+  // Payment Link first. There's no signup intent for a one-off, so the email
+  // is the only thing to carry over — the webhook matches the purchase on the
+  // address Stripe collects.
+  const bLink = paymentLinkUrl((cfg.brief || {}).link, { email });
+  if (bLink) {
+    await db.logEvent(env.DB, "checkout:brief_payment_link", null, { email });
+    return redirect(bLink);
+  }
   try {
     const sess = await billing.createBriefCheckout(env, cfg, {
       email,
@@ -383,15 +413,39 @@ async function confirm(request, env, cfg, url) {
     });
     for (const ch of sub.channels) {
       if (ch.kind === "email" || ch.verified) continue;
+      // rss is pull, not push — there's nothing to test-ping. Mark it good and
+      // email the URL below instead.
+      if (ch.kind === "rss") { await db.verifyChannel(env.DB, ch.id); continue; }
       const r = await send(env, cfg, ch.kind, ch.target, "SecurityCyber CTI — you're connected",
         "This channel is now linked. Real alerts will arrive here.", { priority: "default" });
       if (r.ok) await db.verifyChannel(env.DB, ch.id);
       else note = ` We couldn't reach your ${chanLabel(ch.kind)} — check it on the next page.`;
     }
+    // A feed URL is useless until the subscriber actually has it, and it's the
+    // one channel we can't push to — so mail it out the moment they're live.
+    await emailFeedUrl(env, cfg, sub);
     await notifyOwner(env, cfg, `new subscriber confirmed (${sub.tier}, ${sub.cadence})`);
   }
   const mtok = await sign(env, { sub: sub.id, act: "manage" }, 90 * 86400);
   return redirect(`/manage?t=${mtok}&m=` + q("You're in — alerts are live." + note) + (note ? "&k=bad" : "&k=good"));
+}
+
+// Send the subscriber their private feed URL. Called on confirmation and
+// whenever they mint a new feed, because RSS is the one channel we can't
+// deliver to until they've pasted the URL into a reader.
+async function emailFeedUrl(env, cfg, sub) {
+  const rss = (sub.channels || []).find((c) => c.kind === "rss");
+  if (!rss) return null;
+  const url = `${cfg.site_url}/feed/${rss.target}.xml`;
+  const r = await send(env, cfg, "email", sub.email, `Your private ${cfg.brand} CTI feed URL`,
+    `Your alerts are live.\n\nAdd this address to your RSS reader — Feedly, Inoreader, NetNewsWire, `
+    + `Thunderbird, anything that takes a feed URL:\n\n${url}\n\n`
+    + `Keep it to yourself: the link is the key, so anyone who has it can read your alerts. `
+    + `If it ever leaks, remove the feed on your preferences page and add a new one — you'll get a fresh URL.\n\n`
+    + `It updates for as long as your subscription is active.\n\n— ${cfg.brand}`,
+    {});
+  await db.logEvent(env.DB, r.ok ? "rss:url_emailed" : "rss:url_email_failed", sub.id, { error: r.error || "" });
+  return r;
 }
 
 // ---------------------------------------------------------------- manage
@@ -444,7 +498,10 @@ async function manageChannelAdd(request, env, cfg) {
     const feedId = newId(24);
     await db.addChannel(env.DB, sub.id, "rss", feedId, true, "self-serve");
     await db.logEvent(env.DB, "channel:rss_created", sub.id, {});
-    return redirect(`/manage?t=${tok}&m=` + q("Your private feed URL is ready — copy it into your reader."));
+    // Mail it too, so it isn't lost the moment they close the tab.
+    const sent = await emailFeedUrl(env, cfg, await db.get(env.DB, sub.id));
+    return redirect(`/manage?t=${tok}&m=` + q("Your private feed URL is ready — it's below, and we've"
+      + (sent && sent.ok ? " emailed it to you." : " tried to email it to you.")));
   }
   const [ok, why] = verifyTarget(f.kind, f.target || "");
   if (!ok) return redirect(`/manage?t=${tok}&m=` + q(why) + "&k=bad");

@@ -3,6 +3,10 @@
 
 const DEFAULTS = {
   live: false,
+  // "link_only" = sell strictly through Stripe Payment Links; a cadence with
+  // no link is simply not offered. "auto" falls back to an API-created
+  // Checkout Session (which needs STRIPE_SECRET_KEY).
+  checkout_mode: "link_only",
   // Delivery kinds to hide from signup regardless of secrets, e.g. ["slack"].
   // Anything listed here shows as "unavailable" and is rejected server-side.
   channels_disabled: [],
@@ -11,6 +15,7 @@ const DEFAULTS = {
   retention_days_unconfirmed: 7,
   digest_window_hours: 24,
   brief: {
+    link: "https://buy.stripe.com/bJe4gy5dRa9z8IX3Pf3ks02",  // Stripe Payment Link (one-off)
     price_id: "",            // set to skip the auto-created product
     name: "SecurityCyber — on-demand threat brief",
     currency: "gbp",
@@ -20,6 +25,13 @@ const DEFAULTS = {
   },
   tiers: {
     individual: {
+      // Stripe Payment Links — preferred. When set, "Continue to payment"
+      // redirects straight here with ?client_reference_id=<signup intent>, so
+      // the webhook can still tie the payment back to the chosen tier,
+      // cadence and delivery channel. Blank falls back to an API-created
+      // Checkout Session (needs STRIPE_SECRET_KEY).
+      monthly_link: "https://buy.stripe.com/aFa3cu6hVdlLf7lbhH3ks01",
+      weekly_link: "https://buy.stripe.com/28EdR8dKn5Tj1gv0D33ks00",
       monthly_price_id: "", weekly_price_id: "",
       monthly_display: "£8 / month", weekly_display: "£2 / week",
       monthly_pence: 800, weekly_pence: 200,
@@ -28,9 +40,14 @@ const DEFAULTS = {
       channels: ["email", "rss", "discord", "telegram", "ntfy"], max_channels: 3,
     },
     team: {
+      monthly_link: "https://buy.stripe.com/bJe5kC8q32H77ETdpP3ks03",
+      weekly_link: "",
       monthly_price_id: "", weekly_price_id: "",
-      monthly_display: "£18 / month", weekly_display: "£5 / week",
-      monthly_pence: 1800, weekly_pence: 500,
+      // Team is monthly only. Weekly billing is offered on Individual alone
+      // (the £2 plan); weekly_pence 0 removes it everywhere — pricing page,
+      // signup form, and the missing-link advisories.
+      monthly_display: "£18 / month", weekly_display: "",
+      monthly_pence: 1800, weekly_pence: 0,
       blurb: "Everything scoring 75+ instantly, a daily digest, machine-readable JSON, Slack and Discord.",
       instant_min_score: 75, attach_json: true,
       channels: ["email", "rss", "discord", "slack", "telegram", "webhook", "ntfy"], max_channels: 7,
@@ -85,6 +102,50 @@ export function priceId(c, tier, cadence) {
   return (c.tiers[tier] || {})[`${cadence}_price_id`] || "";
 }
 
+// The Stripe Payment Link for a tier+cadence, if one is configured.
+export function paymentLink(c, tier, cadence) {
+  return (c.tiers[tier] || {})[`${cadence}_link`] || "";
+}
+
+// Attach our signup intent to a Payment Link. Stripe passes
+// `client_reference_id` straight through to checkout.session.completed, which
+// is how the webhook recovers the tier, cadence and delivery channel the
+// customer chose before we sent them to Stripe. `prefilled_email` saves them
+// retyping the address we already validated.
+export function paymentLinkUrl(link, { clientRef, email } = {}) {
+  if (!link) return "";
+  let u;
+  try { u = new URL(link); } catch { return ""; }
+  if (clientRef) u.searchParams.set("client_reference_id", clientRef);
+  if (email) u.searchParams.set("prefilled_email", email);
+  return u.toString();
+}
+
+// Can this tier+cadence be bought right now?
+//   checkout_mode "link_only" — only if it has a Payment Link. Use this once
+//                               you're selling purely via links, so a cadence
+//                               you haven't made a link for is never offered.
+//   checkout_mode "auto"      — link if present, else an API Checkout Session.
+export function canCheckout(c, env, tier, cadence) {
+  if (paymentLink(c, tier, cadence)) return true;
+  if (c.checkout_mode === "link_only") return false;
+  return !!env.STRIPE_SECRET_KEY;
+}
+
+// { individual: {monthly:true, weekly:false}, team: {...} } — what the
+// storefront may actually offer. Keeps the pricing page and the signup form
+// from disagreeing about what's for sale.
+export function buyableMap(c, env) {
+  const out = {};
+  for (const tier of Object.keys(c.tiers)) {
+    out[tier] = {
+      monthly: Number(c.tiers[tier].monthly_pence) > 0 && canCheckout(c, env, tier, "monthly"),
+      weekly: Number(c.tiers[tier].weekly_pence) > 0 && canCheckout(c, env, tier, "weekly"),
+    };
+  }
+  return out;
+}
+
 export function monthlyPence(c, tier, cadence) {
   const t = c.tiers[tier] || {};
   const p = t[`${cadence}_pence`] || 0;
@@ -102,13 +163,38 @@ export function problems(c, env) {
   // Tier price ids are optional — billing.ensureTierPrice() creates them on
   // first checkout when they're blank. Only the Stripe key + webhook matter.
   if (!env.RESEND_API_KEY) out.push("RESEND_API_KEY secret is not set");
+
+  // However the customer pays — Payment Link or API session — Stripe tells us
+  // about it exactly one way: the webhook. Without the signing secret we
+  // reject every event, so people are charged and never provisioned. This is
+  // the single most important secret and it is ALWAYS required.
+  if (!env.STRIPE_WEBHOOK_SECRET)
+    out.push("STRIPE_WEBHOOK_SECRET is not set — payments will be taken but NO subscriber will ever be created");
+  // Signed confirm / preferences / unsubscribe links can't be made without it.
+  if (!env.SUBS_TOKEN_SECRET)
+    out.push("SUBS_TOKEN_SECRET is not set — confirmation and preferences links will fail");
+
+  const linkOnly = c.checkout_mode === "link_only";
+  if (linkOnly) {
+    const gaps = [];
+    for (const [name, t] of Object.entries(c.tiers)) {
+      for (const cad of ["monthly", "weekly"]) {
+        if (Number(t[`${cad}_pence`]) > 0 && !t[`${cad}_link`]) gaps.push(`${name}/${cad}`);
+      }
+    }
+    if (gaps.length === Object.keys(c.tiers).length * 2)
+      out.push("checkout_mode is link_only but no Stripe Payment Links are set — nothing can be bought");
+  } else if (!env.STRIPE_SECRET_KEY) {
+    out.push("STRIPE_SECRET_KEY secret is not set (use sk_test_ while live=false)");
+  }
+
   if (c.live) {
     // going live = taking real money for a service that holds a customer list
     if (!c.ico_reg) out.push("live=true but ICO_REG is not set — you must register with the ICO before taking real subscribers");
-    if (!/^sk_live_/.test(env.STRIPE_SECRET_KEY || "")) out.push("live=true but STRIPE_SECRET_KEY is not sk_live_");
-    if (!env.STRIPE_WEBHOOK_SECRET) out.push("STRIPE_WEBHOOK_SECRET secret is not set");
-  } else if (!env.STRIPE_SECRET_KEY) {
-    out.push("STRIPE_SECRET_KEY secret is not set (use sk_test_ while live=false)");
+    if (env.STRIPE_SECRET_KEY && !/^sk_live_/.test(env.STRIPE_SECRET_KEY))
+      out.push("live=true but STRIPE_SECRET_KEY is not sk_live_");
+    if (!linkOnly && !env.STRIPE_SECRET_KEY)
+      out.push("live=true but STRIPE_SECRET_KEY is not set");
   }
   return out;
 }
@@ -119,8 +205,24 @@ export function advisories(c) {
   if (!c.live && !c.ico_reg)
     out.push("ICO registration not set yet — required before CONFIG.live: true. Deploy + test now, register at ico.org.uk, then paste ICO_REG.");
   if (!c.live) out.push("Stripe is in TEST mode (CONFIG.live: false) — no real charges. Run a full test checkout before going live.");
-  const noPrice = Object.entries(c.tiers).filter(([, t]) => !t.monthly_price_id && !t.weekly_price_id).map(([n]) => n);
-  if (noPrice.length) out.push(`tiers [${noPrice.join(", ")}] have no Stripe price id — a product + price will be auto-created on the first checkout. Set the ids in CONFIG to reuse existing Stripe products instead.`);
+  if (c.checkout_mode === "link_only") {
+    const gaps = [];
+    for (const [name, t] of Object.entries(c.tiers)) {
+      for (const cad of ["monthly", "weekly"]) {
+        if (Number(t[`${cad}_pence`]) > 0 && !t[`${cad}_link`]) gaps.push(`${name} ${cad}`);
+      }
+    }
+    if (gaps.length)
+      out.push(`No Stripe Payment Link for: ${gaps.join(", ")} — those options are hidden from the pricing page until you add one.`);
+    if (!(c.brief || {}).link)
+      out.push("No Payment Link for the one-off brief — the /brief page is hidden.");
+    out.push("Each Payment Link must be set to redirect to "
+      + `${c.site_url || "<site>"}/welcome after payment (Stripe → the link → After payment → Redirect), `
+      + "otherwise buyers land on Stripe's own receipt page and miss the confirmation step.");
+  } else {
+    const noPrice = Object.entries(c.tiers).filter(([, t]) => !t.monthly_price_id && !t.weekly_price_id).map(([n]) => n);
+    if (noPrice.length) out.push(`tiers [${noPrice.join(", ")}] have no Stripe price id — a product + price will be auto-created on the first checkout.`);
+  }
   return out;
 }
 

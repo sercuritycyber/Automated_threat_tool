@@ -154,17 +154,49 @@ ok("purchases list is all one-off items", purchases.length > 0 && purchases.ever
   ok("malformed feed token is 404", (await fetch(`${BASE}/feed/abc.xml`)).status === 404);
 }
 
-// 6c. A failing checkout must not quote Stripe's error back at the visitor —
-//     it contains the API key ("Invalid API Key provided: sk_test_…").
+// 6c. Checkout must never 5xx, and must never quote Stripe's error back at
+//     the visitor — it contains the API key ("Invalid API Key: sk_test_…").
+//     With a Payment Link configured this is a 302 to buy.stripe.com; without
+//     one it's the API path, which fails against the fake dev key.
 {
   const r = await fetch(`${BASE}/subscribe`, {
-    method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" },
+    method: "POST", redirect: "manual",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
     body: "tier=individual&cadence=weekly&email=leakcheck@test.co&platform=rss&agree=on",
   });
-  const body = await r.text();
-  ok("checkout failure is handled, not a 500", r.status === 200 && /Couldn&#39;t start checkout|Couldn't start checkout/.test(body));
-  ok("checkout error page leaks no key or raw Stripe error",
-    !/sk_test|sk_live|Invalid API Key|HTTP 401/.test(body));
+  const loc = r.headers.get("location") || "";
+  const body = r.status >= 300 && r.status < 400 ? "" : await r.text();
+  ok("checkout never 5xxs", r.status < 500);
+  ok("checkout either redirects to Stripe or renders a handled error",
+    /^https:\/\/buy\.stripe\.com\//.test(loc) || /Couldn&#39;t start checkout|Couldn't start checkout/.test(body));
+  ok("nothing in the checkout response leaks a key or raw Stripe error",
+    !/sk_test|sk_live|Invalid API Key|HTTP 401/.test(body + loc));
+  if (loc) {
+    const u = new URL(loc);
+    ok("payment link carries the signup intent",
+      !!u.searchParams.get("client_reference_id") && u.searchParams.get("prefilled_email") === "leakcheck@test.co");
+  }
+}
+
+// 6d. The feed URL is the one thing an RSS subscriber can't get pushed to
+//     them, so minting one from the preferences page must mail it out.
+{
+  const em = `rssmail${Date.now()}@test.co`;
+  const add = await adminPost("add", { email: em, tier: "team", skip_confirm: true });
+  const mtok = await signToken({ sub: add.id, act: "manage" }, 3600);
+  const r = await fetch(`${BASE}/manage/channel/add`, {
+    method: "POST", redirect: "manual",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: `t=${encodeURIComponent(mtok)}&kind=rss`,
+  });
+  ok("self-serve rss mint succeeds", r.status >= 300 && r.status < 400);
+  const ev = await adminGet(`subscribers/${add.id}`);
+  const kinds = (ev.events || []).map((x) => x.kind);
+  ok("minting a feed logs an email attempt to the subscriber",
+    kinds.some((k) => k === "rss:url_emailed" || k === "rss:url_email_failed"));
+  const chans = (ev.subscriber && ev.subscriber.channels) || ev.channels || [];
+  ok("the minted feed is a usable 24-byte id",
+    JSON.stringify(ev).match(/"kind":"rss","target":"[A-Za-z0-9_-]{16,}"/) !== null || kinds.includes("channel:rss_created"));
 }
 
 // 7. DSAR export + erase

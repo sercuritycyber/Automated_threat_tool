@@ -49,6 +49,12 @@ COMPANY_LEGAL_NAME = "Charlie Collins"
 ICO_REG = ""   # <-- register at ico.org.uk and paste the number here before go-live
 TERMS_VERSION = "2026-09-02"
 # Everything tunable in one JSON blob. Edit and re-deploy.
+#   checkout_mode      — "link_only": sell only via Stripe Payment Links; a
+#                        cadence with no link is hidden. "auto": fall back to
+#                        an API Checkout Session (needs STRIPE_SECRET_KEY).
+#   *_link             — Stripe Payment Link. We append ?client_reference_id=
+#                        (our signup intent) and &prefilled_email=. Set each
+#                        link's "After payment" to redirect to SITE_URL/welcome.
 #   channels_disabled  — kinds to hide from signup, e.g. ["slack"]
 #   *_price_id         — OPTIONAL. Left blank, the Worker creates the Stripe
 #                        product + recurring price on the first checkout and
@@ -57,12 +63,14 @@ TERMS_VERSION = "2026-09-02"
 CONFIG = """
 {
   "live": false,
+  "checkout_mode": "link_only",
   "channels_disabled": [],
   "rate_limit_per_min": 20,
   "retention_days_cancelled": 180,
   "retention_days_unconfirmed": 7,
   "digest_window_hours": 24,
   "brief": {
+    "link": "https://buy.stripe.com/bJe4gy5dRa9z8IX3Pf3ks02",
     "price_id": "",
     "name": "SecurityCyber — on-demand threat brief",
     "currency": "gbp",
@@ -71,6 +79,8 @@ CONFIG = """
   },
   "tiers": {
     "individual": {
+      "monthly_link": "https://buy.stripe.com/aFa3cu6hVdlLf7lbhH3ks01",
+      "weekly_link": "https://buy.stripe.com/28EdR8dKn5Tj1gv0D33ks00",
       "monthly_price_id": "", "weekly_price_id": "",
       "monthly_display": "£8 / month", "weekly_display": "£2 / week",
       "monthly_pence": 800, "weekly_pence": 200,
@@ -79,9 +89,11 @@ CONFIG = """
       "channels": ["email", "rss", "discord", "telegram", "ntfy"], "max_channels": 3
     },
     "team": {
+      "monthly_link": "https://buy.stripe.com/bJe5kC8q32H77ETdpP3ks03",
+      "weekly_link": "",
       "monthly_price_id": "", "weekly_price_id": "",
-      "monthly_display": "£18 / month", "weekly_display": "£5 / week",
-      "monthly_pence": 1800, "weekly_pence": 500,
+      "monthly_display": "£18 / month", "weekly_display": "",
+      "monthly_pence": 1800, "weekly_pence": 0,
       "blurb": "Everything scoring 75+ instantly, a daily digest, machine-readable JSON, Slack and Discord.",
       "instant_min_score": 75, "attach_json": true,
       "channels": ["email", "rss", "discord", "slack", "telegram", "webhook", "ntfy"], "max_channels": 7

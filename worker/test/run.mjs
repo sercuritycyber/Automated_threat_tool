@@ -32,14 +32,18 @@ const p2t = priceToTier(c);
 ok("priceToTier maps all prices", p2t.price_im[0] === "individual" && p2t.price_iw[1] === "weekly" && p2t.price_tm[0] === "team");
 ok("priceId lookup", priceId(c, "individual", "weekly") === "price_iw");
 ok("monthlyPence normalises weekly", monthlyPence(c, "individual", "weekly") === Math.round(200 * 52 / 12));
-ok("problems() clean when configured", problems(c, { RESEND_API_KEY: "re_x", STRIPE_SECRET_KEY: "sk_test_x" }).length === 0);
+// A "clean" env now needs the webhook + token secrets: without them people
+// can pay and never be provisioned, which is a blocker, not a nicety.
+const OKENV = { RESEND_API_KEY: "re_x", STRIPE_SECRET_KEY: "sk_test_x",
+  STRIPE_WEBHOOK_SECRET: "whsec_x", SUBS_TOKEN_SECRET: "tok_x" };
+ok("problems() clean when configured", problems(c, OKENV).length === 0);
 ok("problems() flags missing resend", problems(c, {}).some((x) => /RESEND/.test(x)));
 const cNoIco = config({ ...cenv, ICO_REG: "" });
 ok("problems() does NOT block test-mode deploy on missing ICO",
-  problems(cNoIco, { RESEND_API_KEY: "re_x", STRIPE_SECRET_KEY: "sk_test_x" }).length === 0);
+  problems(cNoIco, OKENV).length === 0);
 ok("problems() DOES block go-live on missing ICO",
   problems(config({ ...cenv, ICO_REG: "", CONFIG: JSON.stringify({ ...JSON.parse(cenv.CONFIG), live: true }) }),
-    { RESEND_API_KEY: "re_x", STRIPE_SECRET_KEY: "sk_live_x", STRIPE_WEBHOOK_SECRET: "whsec_x" })
+    { ...OKENV, STRIPE_SECRET_KEY: "sk_live_x" })
     .some((x) => /ICO/.test(x)));
 
 // ---- storefront renders WITHOUT Stripe price ids (they auto-create) ----
@@ -71,6 +75,55 @@ ok("CONFIG.channels_disabled forces a kind off",
   !channelAvailability({ RESEND_API_KEY: "re_x" }, config({ ...cenv, CONFIG: JSON.stringify({ channels_disabled: ["slack"] }) })).slack.ok);
 ok("unavailable channels render disabled on the form",
   subscribeForm(cNoPrice, "individual", "", "", availNone).includes("unavailable"));
+
+// ---- Stripe Payment Links ----
+{
+  const { paymentLink, paymentLinkUrl, canCheckout, buyableMap } = await import("../src/config.js");
+  const LINK = "https://buy.stripe.com/aFa3cu6hVdlLf7lbhH3ks01";
+  ok("payment link is read from the tier", paymentLink(cNoPrice, "individual", "monthly") === LINK);
+  // client_reference_id is how the webhook recovers tier/cadence/channel.
+  const u = new URL(paymentLinkUrl(LINK, { clientRef: "intent_abc", email: "a@b.co" }));
+  ok("link carries client_reference_id", u.searchParams.get("client_reference_id") === "intent_abc");
+  ok("link prefills the email", u.searchParams.get("prefilled_email") === "a@b.co");
+  ok("link keeps its original path", u.origin + u.pathname === LINK);
+  ok("no link -> no url", paymentLinkUrl("", { clientRef: "x" }) === "");
+  ok("garbage link doesn't throw", paymentLinkUrl("not a url", { clientRef: "x" }) === "");
+
+  // link_only: a cadence without a link is NOT sellable even with a secret key
+  const lo = config({ ...cenv, CONFIG: JSON.stringify({ checkout_mode: "link_only" }) });
+  ok("link_only sells a cadence that has a link", canCheckout(lo, {}, "individual", "monthly"));
+  ok("link_only refuses team weekly (no link yet)", !canCheckout(lo, { STRIPE_SECRET_KEY: "sk_test_x" }, "team", "weekly"));
+  const bm = buyableMap(lo, {});
+  ok("buyableMap matches the configured links",
+    bm.individual.monthly && bm.individual.weekly && bm.team.monthly && !bm.team.weekly);
+  // auto mode still falls back to an API session
+  const au = config({ ...cenv, CONFIG: JSON.stringify({ checkout_mode: "auto" }) });
+  ok("auto mode falls back to the API when there's no link",
+    canCheckout(au, { STRIPE_SECRET_KEY: "sk_test_x" }, "team", "weekly"));
+
+  // the storefront must not advertise what it can't sell
+  const loLanding = landing(lo, "", "", buyableMap(lo, {}));
+  ok("pricing page shows the one weekly offer and no other",
+    (loLanding.match(/data-cad=weekly>/g) || []).length === 1 && loLanding.includes("£2 / week"));
+  ok("Team is monthly only — no weekly price anywhere",
+    loLanding.includes("£18 / month") && !loLanding.includes("£5 / week"));
+  ok("monthly-only card is tagged so the toggle can hide it",
+    /data-cads="monthly"/.test(loLanding) && /data-cads="monthly weekly"/.test(loLanding));
+  const loForm = subscribeForm(lo, "team", "", "", null, "", buyableMap(lo, {}));
+  ok("Team signup form offers monthly only",
+    /value="monthly"/.test(loForm) && !/value="weekly"/.test(loForm));
+  const loForm2 = subscribeForm(lo, "individual", "", "", null, "", buyableMap(lo, {}));
+  ok("Individual signup form still offers both",
+    /value="monthly"/.test(loForm2) && /value="weekly"/.test(loForm2));
+
+  // the webhook secret is now the single critical dependency
+  ok("missing STRIPE_WEBHOOK_SECRET is a blocker",
+    problems(lo, { RESEND_API_KEY: "re_x", SUBS_TOKEN_SECRET: "s" })
+      .some((x) => /STRIPE_WEBHOOK_SECRET/.test(x)));
+  ok("link_only does NOT demand STRIPE_SECRET_KEY",
+    !problems(lo, { RESEND_API_KEY: "re_x", SUBS_TOKEN_SECRET: "s", STRIPE_WEBHOOK_SECRET: "whsec_x" })
+      .some((x) => /STRIPE_SECRET_KEY/.test(x)));
+}
 
 // ---- private RSS feed ----
 const feedPosts = [
