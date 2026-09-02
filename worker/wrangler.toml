@@ -14,7 +14,7 @@ zone_name = "securitycyber.uk"
 [[d1_databases]]
 binding = "DB"
 database_name = "cti-subs"
-database_id = "PUT-D1-DATABASE-ID-HERE"
+database_id = "2d514521-9be2-4c8e-8bf0-73c68bcaeafd"
 
 [triggers]
 # 08:15 UTC daily digest · 03:30 UTC Sunday retention + intent purge
