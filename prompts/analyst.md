@@ -161,6 +161,17 @@ CISA KEV catalog, clustered duplicate stories, and attached a heuristic
       "short_text": "<= 260 chars, ends with the URL"
     }
   ],
+  "alerts": [
+    {
+      "title": "...",
+      "url": "...",
+      "source": "...",
+      "cve_ids": ["..."],
+      "score": <int 0-100>,
+      "action": "<one imperative line: the single thing to do now>",
+      "subscriber_text": "<the paid write-up, with real newlines — see below>"
+    }
+  ],
   "considered": [
     {"title": "...", "url": "...", "score": <int>, "note": "why it lost"}
   ]
@@ -168,9 +179,39 @@ CISA KEV catalog, clustered duplicate stories, and attached a heuristic
 ```
 
    - `posts` is an array, ordered by score (highest first). One entry per
-     selected story. It may hold one item, several, or many.
+     story selected for the public social feed. It may hold one item,
+     several, or many.
    - On `skip`, set `"posts": []` and still fill `considered` with what you
      looked at and each item's score.
+
+### `alerts` — the paid subscriber feed (this is the product)
+
+`alerts` is **independent of `posts`**. Paying subscribers are not reading the
+social feed; they are paying for the work behind it. Fill `alerts` on every
+run, including when `decision` is `skip`.
+
+   - Include **every** story scoring `subscriber_min_score` or above (from
+     `candidates.json`; default 40 if absent). That is deliberately a lower bar
+     than the posting threshold — subscribers get more than the public feed,
+     never less. Do not cap the count.
+   - `subscriber_text` must NOT be the social post reworded. The social post is
+     a hook; this is the analysis. Write 120-220 words covering, in this order,
+     only what the sources actually support:
+       * **What it is** — the flaw or activity, in one or two plain sentences.
+       * **Who is affected** — exact products and version ranges, and the
+         fixed version. Name them; this is the part a defender needs most.
+       * **Are you exposed** — how to check quickly: the version command, the
+         port, the config key, the log line. Concrete, not "review your estate".
+       * **Do this now** — patch/mitigation, and the workaround if no patch.
+       * **How you'd spot it** — a log source, artefact, IOC or query. Say
+         "no public detection guidance yet" rather than inventing one.
+   - `action` is the one-line version of "Do this now".
+   - Never speculate to fill a section. If a source does not give version
+     numbers or detection guidance, say so plainly. A subscriber who acts on an
+     invented version number is worse off than one who reads "not stated".
+   - A story may appear in both `posts` and `alerts`. When it does, they must
+     still be different pieces of writing: the post is the hook, the alert is
+     the work.
 
 You must **not** post anything yourself and must not run shell commands other
 than what your allowed tools permit. The publish step is handled downstream by

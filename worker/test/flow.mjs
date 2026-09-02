@@ -217,6 +217,51 @@ ok("purchases list is all one-off items", purchases.length > 0 && purchases.ever
   ok("v2 thin ping created no subscriber", !subs.some((x) => /thin/.test(x.email || "")));
 }
 
+// 6f. THE PRODUCT: a paying subscriber must receive strictly more, and
+//     different, from what goes out free on socials.
+{
+  const em = `value${Date.now()}@test.co`;
+  const add = await adminPost("add", { email: em, tier: "team", skip_confirm: true });
+  const feedTok = "valuefeedtoken" + Date.now();
+  await adminPost(`subscribers/${add.id}/channel`, { kind: "rss", target: feedTok, verified: true });
+
+  // A story scoring 45: below the public posting bar (60), above the team
+  // floor (35). Free followers never see it; a subscriber must.
+  const quiet = { posts: [{
+    title: "Quiet-day advisory", url: "https://ex.com/quiet" + Date.now(), source: "Vendor", score: 45,
+    cve_ids: ["CVE-2026-45"],
+    action: "Upgrade Acme Gateway to 4.2.1 today.",
+    subscriber_text: "Acme Gateway 4.0.0-4.2.0 are affected; 4.2.1 fixes it. Check with `acme --version`. No public detection guidance yet.",
+  }] };
+  let r = await fetch(`${BASE}/internal/ingest`, {
+    method: "POST", headers: { Authorization: `Bearer ${INGEST}`, "Content-Type": "application/json" },
+    body: JSON.stringify(quiet) });
+  const ing = await r.json();
+  ok("alert with NO social text is still ingested", ing.received === 1);
+
+  const feed = await (await fetch(`${BASE}/feed/${feedTok}.xml`)).text();
+  ok("sub-posting-threshold story reaches a paying subscriber", feed.includes("Quiet-day advisory"));
+  ok("the feed carries the analyst write-up, not a social hook",
+    feed.includes("4.2.1 fixes it") && feed.includes("acme --version"));
+  ok("the feed leads with the action", /DO NOW: Upgrade Acme Gateway/.test(feed));
+
+  // And a story that DOES go out socially must read differently for payers.
+  const both = { posts: [{
+    title: "Both channels", url: "https://ex.com/both" + Date.now(), source: "KEV", score: 95,
+    cve_ids: ["CVE-2026-95"],
+    post_text: "Patch now. https://ex.com/both",
+    action: "Patch to 9.9.9.",
+    subscriber_text: "Versions 9.0-9.8 affected, fixed in 9.9.9. Exposed if TCP/8443 is reachable.",
+  }] };
+  await fetch(`${BASE}/internal/ingest`, {
+    method: "POST", headers: { Authorization: `Bearer ${INGEST}`, "Content-Type": "application/json" },
+    body: JSON.stringify(both) });
+  const feed2 = await (await fetch(`${BASE}/feed/${feedTok}.xml`)).text();
+  ok("a shared story gives subscribers the depth, not the social copy",
+    feed2.includes("TCP/8443") && !feed2.includes("Patch now. https"));
+  await adminPost(`subscribers/${add.id}/erase`, {});
+}
+
 // 7. DSAR export + erase
 const exp = await adminGet(`subscribers/${sid}/export`);
 ok("DSAR export has sections", exp.subscriber && exp.consents && exp.deliveries);

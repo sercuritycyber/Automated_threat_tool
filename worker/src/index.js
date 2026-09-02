@@ -254,16 +254,19 @@ async function rssFeed(request, env, cfg, path) {
     }], { selfUrl, title: `${cfg.brand} CTI Alerts — inactive`, note: "Subscription inactive." }), 200, "no-store");
   }
 
-  const prefs = await db.getPrefs(env.DB, sub.id);
+  // Reuse wants() rather than re-deriving the thresholds here. A second copy
+  // of this logic silently kept the feed on the *instant* bar, so everything
+  // between the tier floor and that bar — the extra a subscriber is paying
+  // for — never appeared in their reader.
   const tier = cfg.tiers[sub.tier] || {};
-  const floor = prefs?.min_score_override ?? tier.instant_min_score ?? 0;
-  const vendors = (prefs?.vendors || []).map((v) => v.toLowerCase()).filter(Boolean);
-  let posts = await db.postsForFeed(env.DB, 60);
-  posts = posts.filter((p) => (p.score ?? 0) >= floor).filter((p) => {
-    if (!vendors.length) return true;
-    const hay = `${p.title} ${p.post_text} ${p.source}`.toLowerCase();
-    return vendors.some((v) => hay.includes(v));
-  }).slice(0, 50);
+  sub.prefs = await db.getPrefs(env.DB, sub.id);
+  const vendors = (sub.prefs.vendors || []).filter(Boolean);
+  const posts = (await db.postsForFeed(env.DB, 120))
+    .filter((p) => wants(p, sub, tier, "digest"))
+    .slice(0, 50);
+  const floor = sub.prefs.min_score_override == null
+    ? Number(tier.min_score ?? 0)
+    : Math.max(Number(tier.min_score ?? 0), Number(sub.prefs.min_score_override));
 
   const note = `Alerts scoring ${floor}+ for ${sub.email}`
     + (vendors.length ? `, filtered to ${vendors.join(", ")}` : "")
@@ -753,7 +756,10 @@ async function internalIngest(request, env, cfg, ctx) {
   const auth = (request.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
   if (!env.INGEST_SECRET || !timingSafeEqual(auth, env.INGEST_SECRET)) return json({ error: "unauthorized" }, 401);
   let body; try { body = await request.json(); } catch { return json({ error: "bad json" }, 400); }
-  const posts = (body.posts || []).filter((p) => (p.post_text || "").trim());
+  // Accept an alert that carries EITHER the paid write-up or the social text.
+  // Filtering on post_text alone silently dropped every subscriber-only alert.
+  const posts = (body.posts || []).filter((p) =>
+    (p.subscriber_text || "").trim() || (p.post_text || "").trim());
   for (const p of posts) {
     p.post_key = normKey(p);
     await db.logPost(env.DB, p);
@@ -774,17 +780,51 @@ function normKey(p) {
 // ---------------------------------------------------------------- delivery
 function vendorMatch(post, vendors) {
   if (!vendors || !vendors.length) return true;
-  const hay = ((post.title || "") + " " + (post.post_text || "") + " " + (post.cve_ids || []).join(" ")).toLowerCase();
+  // Vendor names and product versions live in subscriber_text, so a filter
+  // that only read post_text would miss the very stories it was set up for.
+  const hay = ((post.title || "") + " " + (post.subscriber_text || "") + " "
+    + (post.post_text || "") + " " + (post.cve_ids || []).join(" ")).toLowerCase();
   return vendors.some((v) => hay.includes(v.toLowerCase()));
 }
+// Two bars, deliberately distinct:
+//   tierCfg.min_score          — below this a story never reaches them at all.
+//                                Set BELOW the public posting threshold, so a
+//                                subscriber always sees strictly more than the
+//                                free social feed, never less.
+//   tierCfg.instant_min_score  — at or above this it interrupts them now;
+//                                between the two it still arrives in the daily
+//                                digest and their private feed.
+// A subscriber's own min_score_override replaces the bar in both modes, but
+// can never take them below the tier floor.
 function wants(post, sub, tierCfg, mode) {
   const p = sub.prefs;
   if (mode === "instant" && !p.instant) return false;
   if (mode === "digest" && !p.digest) return false;
-  let thr = p.min_score_override;
-  if (thr == null) thr = mode === "instant" ? (tierCfg.instant_min_score || 90) : 0;
-  if (Number(post.score || 0) < Number(thr)) return false;
+  const score = Number(post.score || 0);
+  const floor = Number(tierCfg.min_score ?? 0);
+  const override = p.min_score_override == null ? null : Number(p.min_score_override);
+  const bar = override != null
+    ? Math.max(floor, override)
+    : (mode === "instant" ? Math.max(floor, Number(tierCfg.instant_min_score ?? 70)) : floor);
+  if (score < bar) return false;
   return vendorMatch(post, p.vendors);
+}
+
+// What a paying subscriber actually receives. The analyst writes
+// `subscriber_text` (versions, exposure check, action, detection) specifically
+// for them; `post_text` is the public social hook and is only a fallback for
+// older pipeline output. Never send the social copy when depth exists — that
+// is the whole reason someone is paying.
+function alertBody(post) {
+  const deep = (post.subscriber_text || "").trim();
+  const act = (post.action || "").trim();
+  if (deep) {
+    let body = deep;
+    if (act && !deep.toLowerCase().includes(act.toLowerCase().slice(0, 24))) body = `${act}\n\n${deep}`;
+    if (post.url && !body.includes(post.url)) body += `\n\nSource: ${post.url}`;
+    return body;
+  }
+  return post.post_text || "";
 }
 
 async function deliverInstant(env, cfg, sub, posts, mode) {
@@ -798,7 +838,7 @@ async function deliverInstant(env, cfg, sub, posts, mode) {
     const subject = (post.title || (post.post_text || "").split("\n")[0]).slice(0, 180);
     const jsonp = tierCfg.attach_json ? { posts: [post] } : null;
     for (const ch of verified) {
-      const r = await send(env, cfg, ch.kind, ch.target, subject, post.post_text || "", {
+      const r = await send(env, cfg, ch.kind, ch.target, subject, alertBody(post), {
         priority: "instant", shortText: post.short_text || "",
         jsonPayload: ["email", "webhook"].includes(ch.kind) ? jsonp : null,
       });
@@ -819,7 +859,9 @@ async function deliverDigest(env, cfg, sub, allPosts) {
   const subject = `${cfg.brand} CTI — daily digest · ${matched.length} item(s)`;
   const lines = [`${matched.length} item(s) from the last 24 hours, highest impact first.`, ""];
   for (const p of matched.sort((a, b) => b.score - a.score)) {
-    lines.push(`• [${p.score}] ${p.short_text || (p.post_text || "").split("\n")[0]}`);
+    // Lead with the action a subscriber is paying for, not the social teaser.
+    lines.push(`• [${p.score}] ${p.title || (p.post_text || "").split("\n")[0]}`);
+    if ((p.action || "").trim()) lines.push(`  DO NOW: ${p.action.trim()}`);
     if ((p.cve_ids || []).length) lines.push(`  ${(p.cve_ids || []).join(", ")}`);
     if (p.url) lines.push(`  ${p.url}`);
     lines.push("");

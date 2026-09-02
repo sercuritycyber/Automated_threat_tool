@@ -395,7 +395,9 @@ const rfc822 = (iso) => { const d = new Date(iso || Date.now()); return (isNaN(d
 export function feedXml(cfg, posts, { selfUrl, title, note = "" } = {}) {
   const items = posts.map((p) => {
     const cves = Array.isArray(p.cve_ids) ? p.cve_ids : [];
-    const desc = (p.post_text || p.short_text || "").trim();
+    // Paid feed: the analyst's subscriber write-up, not the social hook.
+    const desc = (p.subscriber_text || p.post_text || p.short_text || "").trim();
+    const act = (p.action || "").trim();
     return `<item>
 <title>${xesc(p.title || cves.join(", ") || "Threat alert")}</title>
 <link>${xesc(p.url || cfg.site_url)}</link>
@@ -403,8 +405,9 @@ export function feedXml(cfg, posts, { selfUrl, title, note = "" } = {}) {
 <pubDate>${rfc822(p.seen_at)}</pubDate>
 ${p.source ? `<source url="${xesc(cfg.site_url)}">${xesc(p.source)}</source>` : ""}
 ${cves.map((c) => `<category>${xesc(c)}</category>`).join("")}
-<description>${xesc(desc + (p.score != null ? `\n\nImpact score: ${p.score}/100` : "")
-      + (p.url ? `\n${p.url}` : ""))}</description>
+<description>${xesc((act ? `DO NOW: ${act}\n\n` : "") + desc
+      + (p.score != null ? `\n\nImpact score: ${p.score}/100` : "")
+      + (p.url ? `\nSource: ${p.url}` : ""))}</description>
 </item>`;
   }).join("\n");
   return `<?xml version="1.0" encoding="UTF-8"?>

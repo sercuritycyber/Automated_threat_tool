@@ -104,6 +104,11 @@ CREATE TABLE IF NOT EXISTS posts_log (
   cve_ids    TEXT,
   post_text  TEXT,
   short_text TEXT,
+  -- The paid write-up (versions, exposure check, action, detection). Kept
+  -- separate from post_text so a subscriber alert is never just the social
+  -- post reworded.
+  subscriber_text TEXT,
+  action     TEXT,
   seen_at    TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_posts_seen ON posts_log(seen_at);

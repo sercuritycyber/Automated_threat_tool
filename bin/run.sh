@@ -76,7 +76,20 @@ claude -p "$(cat "$ROOT/prompts/analyst.md")" \
   --permission-mode acceptEdits \
   || fail analyst $?
 
-echo "[run] stage 3/4 : publish"
+# Stage 3: paying subscribers FIRST. They are buying the lead time as much as
+# the analysis, so the people who pay hear it before it is given away publicly.
+# Never fatal: a fan-out problem must not stop the brand posting.
+echo "[run] stage 3/4 : subscriber alerts"
+python3 "$ROOT/bin/push_to_worker.py" "$ROOT/state/decision.json" || echo "[run] push_to_worker returned $? (non-fatal)"
+
+# Optional head start before the same story goes out free on socials.
+LEAD_MIN="${CTI_SUBSCRIBER_LEAD_MINUTES:-0}"
+if [[ "$LEAD_MIN" =~ ^[0-9]+$ ]] && (( LEAD_MIN > 0 )); then
+  echo "[run] holding the public post ${LEAD_MIN}m so subscribers stay ahead"
+  sleep $(( LEAD_MIN * 60 ))
+fi
+
+echo "[run] stage 4/4 : publish"
 set +e
 python3 "$ROOT/bin/publish_linkedin.py" --decision "$ROOT/state/decision.json"
 PUB_RC=$?
@@ -87,13 +100,7 @@ case "$PUB_RC" in
   *) fail publish "$PUB_RC" ;;
 esac
 
-# stage 4: push instant alerts to paying subscribers (no-op unless
-# subscriptions.enabled). Never fatal — the brand's post already went out.
-echo "[run] stage 4/4 : subscriber alerts"
-# Production: hand the posts to the CTI Alerts Worker (it owns fan-out + digest).
-# No-op unless CTI_WORKER_URL is set. Never fatal.
-python3 "$ROOT/bin/push_to_worker.py" "$ROOT/state/decision.json" || echo "[run] push_to_worker returned $? (non-fatal)"
-# Legacy local delivery — only if the Worker isn't configured and subscriptions are enabled locally.
+# Legacy local delivery — only if the Worker isn't configured.
 if [[ -z "${CTI_WORKER_URL:-}" ]]; then
   python3 "$ROOT/bin/deliver.py" --instant --from "$ROOT/state/decision.json" || echo "[run] deliver returned $? (non-fatal)"
 fi
