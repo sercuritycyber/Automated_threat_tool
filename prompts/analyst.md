@@ -13,13 +13,17 @@ CISA KEV catalog, clustered duplicate stories, and attached a heuristic
    - If `candidates` is empty, skip to step 6 with decision `skip`,
      reason `"no items in window"`.
 
-2. **Verify the top contenders.** Take the candidates with the highest
-   `pre_score` (up to the top 5). For each, use `WebFetch` on its `url` to
-   read the actual article and confirm the facts. Do not trust headlines.
-   Pull out: CVE ID(s), CVSS, affected products/versions, exploitation status
-   (in-the-wild / PoC only / theoretical), and the available fix or mitigation.
-   If WebFetch fails for a URL, fall back to its `summary` and note lower
-   confidence.
+2. **Verify the top contenders.** Take the highest-`pre_score` candidates
+   (**up to 8**). For each, `WebFetch` its `url`, read the article, and confirm
+   the facts — never trust a headline. Pull out: CVE ID(s), CVSS, affected
+   products and version ranges, exploitation status (in-the-wild / PoC only /
+   theoretical), and the fix or mitigation. If WebFetch fails, fall back to
+   `summary` + `kev_meta` and mark `confidence` lower.
+
+   For the **remaining** candidates that still clear `subscriber_min_score`,
+   do NOT WebFetch — work from `summary`, `cve_ids` and `kev_meta`. These get
+   a short alert (below), not a full brief. This keeps the run's output within
+   budget: a run may surface 25+ stories and you cannot write 25 full briefs.
 
 3. **Score each verified candidate 0–100** using this rubric. The `pre_score`
    is a hint only — your read of the source is authoritative.
@@ -197,9 +201,15 @@ run, including when `decision` is `skip`.
      nothing new. When in doubt, include it — the subscriber streamlines their
      own view with a personal threshold and vendor filter; your job is to make
      sure nothing real is missing. Do not cap the count.
-   - For a lower-impact item the write-up can be short (3-5 sentences) — what it
-     is, who's affected, whether to act — but it must still be the analysis,
-     never the social wording.
+   - Write-up length scales with impact, and the whole `alerts` array must fit
+     one response without truncating the JSON:
+       * the ~8 you verified: the full 120-220 word brief.
+       * everything else: 2-4 sentences — what it is, who's affected, act or not.
+       * if more than ~30 stories clear the bar, keep only the top 30 by score
+     and note the trim in `reason`.
+   - A lower-impact write-up is still the analysis (from the summary), never the
+     social wording, and never invented detail. "Versions not stated in the
+     source" is a valid and useful line.
    - `subscriber_text` must NOT be the social post reworded. The social post is
      a hook; this is the analysis. Write 120-220 words covering, in this order,
      only what the sources actually support:

@@ -70,11 +70,19 @@ if [[ "$USED" -ge "$MAXDAY" ]]; then
 fi
 echo "[run] $CAND_COUNT candidates queued for the analyst  ($USED/$MAXDAY posts used today)"
 
-echo "[run] stage 2/3 : analyst (claude -p)"
+echo "[run] stage 2/4 : analyst (claude -p)"
+set +e
 claude -p "$(cat "$ROOT/prompts/analyst.md")" \
   --allowedTools "Read,Write,WebFetch" \
-  --permission-mode acceptEdits \
-  || fail analyst $?
+  --permission-mode acceptEdits
+ANALYST_RC=$?
+set -e
+if [[ "$ANALYST_RC" -ne 0 ]]; then
+  # Token limit, outage, bad response. Don't lose the whole run: a deterministic
+  # fallback keeps the paid subscriber feed alive (decision=skip, no public post).
+  echo "[run] analyst exited $ANALYST_RC — deterministic fallback for subscribers"
+  python3 "$ROOT/bin/analyst_fallback.py" || echo "[run] analyst_fallback returned $? (non-fatal)"
+fi
 
 # Stage 3: paying subscribers FIRST. They are buying the lead time as much as
 # the analysis, so the people who pay hear it before it is given away publicly.

@@ -284,6 +284,10 @@ def main() -> int:
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "lookback_hours": lookback,
         "min_score": int(settings.get("scoring", {}).get("min_score", 65)),
+        # Floor for the paid subscriber feed — well below the posting threshold
+        # so subscribers see essentially everything real. Tunable via
+        # scoring.subscriber_min_score in settings.yaml.
+        "subscriber_min_score": int(settings.get("scoring", {}).get("subscriber_min_score", 15)),
         "brand": settings.get("brand", {}),
         "kev_recent_days": KEV_RECENT_DAYS,
         "counts": {
