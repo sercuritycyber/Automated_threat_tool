@@ -1,0 +1,35 @@
+# Blue Team CTI — public subscriber site
+#
+# 1. Point a DNS A/AAAA record at this box:  cti.securitycyber.uk
+# 2. Put this in /etc/caddy/Caddyfile (or `import` it), set the domain + email,
+#    then:  sudo systemctl reload caddy
+# 3. Caddy gets a Let's Encrypt cert automatically and terminates TLS.
+#
+# The Python app listens on 127.0.0.1:8080 (cti-public.service) and is never
+# exposed directly.
+
+cti.securitycyber.uk {
+	encode zstd gzip
+
+	# HSTS + a few belt-and-braces headers (the app sets CSP etc. itself)
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		-Server
+	}
+
+	# Stripe needs the raw body for signature verification — no buffering games
+	reverse_proxy 127.0.0.1:8080 {
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+	}
+
+	log {
+		output file /var/log/caddy/cti-public.log
+		format json
+	}
+}
+
+# Optional: redirect the apex or www to the app
+# securitycyber.uk, www.securitycyber.uk {
+# 	redir https://cti.securitycyber.uk{uri}
+# }

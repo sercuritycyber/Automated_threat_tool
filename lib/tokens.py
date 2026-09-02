@@ -62,12 +62,11 @@ def sign(payload: dict, ttl: int = 7 * 86400) -> str:
 
 
 def verify(token: str, expect_act: str | None = None) -> dict:
-    try:
-        p, sig = token.split(".", 1)
-    except ValueError:
+    if not isinstance(token, str) or token.count(".") != 1 or not token.isascii():
         raise BadToken("malformed token")
+    p, sig = token.split(".", 1)
     good = _b64e(hmac.new(_secret(), p.encode(), hashlib.sha256).digest())
-    if not hmac.compare_digest(sig, good):
+    if not hmac.compare_digest(sig.encode(), good.encode()):
         raise BadToken("bad signature")
     try:
         data = json.loads(_b64d(p))

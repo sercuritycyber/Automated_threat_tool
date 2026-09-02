@@ -1,0 +1,22 @@
+[Unit]
+Description=Blue Team CTI — public subscriber site
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Threatintel
+ExecStart=/usr/bin/env python3 -m uvicorn web.public_app:app --host 127.0.0.1 --port 8080 --workers 1
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=PYTHONPATH=%h/Threatintel
+# public_app reads config/env itself; keep the process lean
+Restart=on-failure
+RestartSec=3
+# light hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=%h/Threatintel/state %h/Threatintel/config %h/Threatintel/logs %h/Threatintel/drafts
+
+[Install]
+WantedBy=default.target

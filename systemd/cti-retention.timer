@@ -1,0 +1,11 @@
+[Unit]
+Description=Run the Blue Team CTI data-retention purge weekly
+
+[Timer]
+OnCalendar=Sun *-*-* 03:30:00
+Persistent=true
+RandomizedDelaySec=600
+AccuracySec=5min
+
+[Install]
+WantedBy=timers.target

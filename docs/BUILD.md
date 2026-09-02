@@ -12,12 +12,25 @@ Legend:  `[ ]` todo  `[~]` in progress  `[x]` done + tested  `[!]` blocked (see 
 ---
 
 ## RESUME HERE
-> P0 ✅ (subs 28/28) · P1 ✅ (deliver 15/15) · P2 ✅ (billing 16/16).
-> Next: **Phase 3 — public subscriber app** (`web/public_app.py`). Biggest phase.
-> Build order inside P3: security scaffold (headers, rate limit, tokens) →
-> landing + /subscribe → /webhooks/stripe → /confirm → /manage → /unsubscribe →
-> channel linking (telegram/slack) → legal pages → systemd + Caddyfile.
-> Commits: P0 `f8397f3` · P1 `8f137f9` · P2 `<pending>`.
+> P0 ✅ (28/28) · P1 ✅ (15/15) · P2 ✅ (16/16) · P3 ✅ (public 21/21).
+> Next: **Phase 4 — owner dashboard additions** (`/subscribers`, `/subscriptions`
+> in web/app.py) + wire the webhook's `notify_owner` action hints, MRR/subs tiles.
+> Then P5 (compliance polish + retention already stubbed), P6 (deploy + selftest.py),
+> P7 (docs).
+> Commits: P0 `f8397f3` · P1 `8f137f9` · P2 `5491834` · P3 `<pending>`.
+> All 4 selftests green: `for t in subs deliver billing public; do python3 bin/selftest_$t.py; done`
+
+## ⚠ OPEN BLOCKER — GitHub push auth
+Remote added: `origin = https://github.com/sercuritycyber/Automated_threat_tool.git`.
+All commits are on `master` locally. **Cannot push** — no `gh`, no
+`GITHUB_TOKEN`, no credential helper, and the local SSH keys aren't authorised
+for GitHub. User needs to either:
+- run it themselves:  `! cd ~/Threatintel && git push -u origin master`
+- or provide a fine-grained PAT (repo: contents read/write) so I can push.
+Pre-push audit done: `config/env`, `state/`, `drafts/`, `subscribers.db` are all
+gitignored and untracked. **Note:** committed `config/settings.yaml` history
+contains the user's own canarytoken `ntfy_url` — fine for a private repo, but
+rotate it if that repo's visibility ever changes.
 
 ## ⚠ OPEN BLOCKER — Turso credentials
 User wants PII in a **Turso** DB (EU region — good for UK GDPR). No `turso` CLI
@@ -136,20 +149,22 @@ SUBS_TOKEN_SECRET=            # random 32+ bytes, for signed links (auto-gen if 
 - [x] `bin/selftest_billing.py` — 16 checks, synthetic events, no network
 - [ ] owner alert wiring (notify.py) — deferred to Phase 4 (needs the action hints surfaced by the webhook route)
 
-### Phase 3 — public subscriber app
-- [ ] `web/public_app.py` — FastAPI, own styling, no cookies, security headers, rate limiting (`lib/ratelimit.py`, sqlite-backed)
-- [ ] `/` landing — pricing, tech merits (KEV xref, dedup, "do now"), links to /terms /privacy
-- [ ] `/subscribe?tier=` → Stripe Checkout redirect
-- [ ] `/welcome?session_id=` → confirm email sent, prompt to pick channel
-- [ ] `/confirm?t=` double opt-in (logs consent + IP + terms version)
-- [ ] `/manage?t=` preference centre — vendors, channels, pause/resume, "manage billing" (portal), "download my data", "delete my account"
-- [ ] `/unsubscribe?t=` one-click (GET, no confirm needed per PECR; also POST form)
-- [ ] `/channel/telegram` deep-link + `/webhooks/telegram` (bot /start → capture chat_id, link via token)
-- [ ] `/channel/slack` — paste incoming-webhook URL, validated
-- [ ] `/webhooks/stripe`
-- [ ] `/terms` `/privacy` `/legal` — rendered from `docs/legal/*.md`
-- [ ] `/healthz`
-- [ ] `systemd/cti-public.service` + `Caddyfile` + `systemd/install-public.sh`
+### Phase 3 — public subscriber app ✅
+- [x] `web/public_app.py` — FastAPI, own styling, **no cookies**, security-headers middleware (CSP/XFO/nosniff/Referrer/Permissions), `lib/ratelimit.py` in-process limiter, tiny markdown renderer for the legal pages
+- [x] `/` landing — pricing tiers, how-it-works, "already subscribed?" email-link flow
+- [x] `/subscribe?tier=` → `billing.create_checkout_session` → Stripe redirect (friendly page if not configured)
+- [x] `/welcome` post-checkout page
+- [x] `/webhooks/stripe` — verify sig → `handle_event` → on `send_confirm` send the double-opt-in email; on `notify_owner` ping owner; never 500s
+- [x] `/confirm?t=` — verifies token, activates, **logs consent with IP + UA + terms version**, redirects to /manage
+- [x] `/manage?t=` — channels (add/remove + test-ping before verify), vendor filter, score override, instant/digest toggles, test alert, billing portal, **download my data (DSAR export)**, **delete my account (erase + Stripe cancel)**
+- [x] `/unsubscribe?t=` — one-click pause + `List-Unsubscribe` header on every email
+- [x] `/channel/telegram?t=` deep-link + `/webhooks/telegram` (`/start <token>` → capture chat_id, verify, link) with optional `TELEGRAM_WEBHOOK_SECRET`
+- [x] Slack via the add-channel form (incoming-webhook URL, validated + test-pinged)
+- [x] `/privacy` `/terms` `/cookies` — rendered from `docs/legal/*.md` with config placeholders substituted
+- [x] `/healthz`, `/robots.txt`
+- [x] `systemd/cti-public.service` (hardened) + `systemd/Caddyfile` + `systemd/install-public.sh`
+- [x] `bin/selftest_public.py` — 21 checks, full lifecycle, mocked Stripe/email/channels
+- [x] `bin/retention.py` + `cti-retention.{service,timer}` (weekly purge) — early, wired here
 
 ### Phase 4 — owner dashboard additions
 - [ ] `/subscribers` — table (email, tier, status, channel, joined, last send), search, filters
