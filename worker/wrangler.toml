@@ -3,8 +3,11 @@ main = "src/index.js"
 compatibility_date = "2025-01-15"
 compatibility_flags = ["nodejs_compat"]
 workers_dev = false
-[[assets]]
-assets = web
+
+# NO [assets] / [site] block — this Worker serves everything from src/index.js.
+# `web/` at the repo root is the private owner panel (FastAPI) and must never
+# be deployed. Do not add an assets directory here.
+
 # Production route — the DNS record `cti` must exist (proxied) in the zone.
 [[routes]]
 pattern = "cti.securitycyber.uk/*"
@@ -22,21 +25,12 @@ database_id = "2d514521-9be2-4c8e-8bf0-73c68bcaeafd"
 crons = ["15 8 * * *", "30 3 * * 0"]
 
 [observability]
-enabled = false
+enabled = true
 head_sampling_rate = 1
-redact_query_string = false
 
 [observability.logs]
 enabled = true
-head_sampling_rate = 1
-persist = true
 invocation_logs = true
-
-[observability.traces]
-enabled = false
-persist = true
-head_sampling_rate = 1
-
 
 [vars]
 BRAND = "SecurityCyber"
