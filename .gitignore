@@ -26,3 +26,9 @@ worker/node_modules/
 worker/.wrangler/
 worker/.dev.vars
 worker/package-lock.json
+
+# local drop-ins — never commit
+ssh-key-*.key
+*.pem
+gemini-code-*.html
+Gemini_Generated_Image*
