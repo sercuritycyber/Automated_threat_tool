@@ -12,11 +12,12 @@ Legend:  `[ ]` todo  `[~]` in progress  `[x]` done + tested  `[!]` blocked (see 
 ---
 
 ## RESUME HERE
-> Phase 0 ✅ (`bin/selftest_subs.py` 28/28) · Phase 1 ✅ (`bin/selftest_deliver.py` 15/15).
-> Next: **Phase 2 — Stripe billing** (`lib/billing.py` + webhook handling; the
-> webhook route itself lands in Phase 3's public app, so Phase 2 = the library
-> + idempotency + recorded-payload tests).
-> Commits: P0 `f8397f3` · P1 `<pending>`.
+> P0 ✅ (subs 28/28) · P1 ✅ (deliver 15/15) · P2 ✅ (billing 16/16).
+> Next: **Phase 3 — public subscriber app** (`web/public_app.py`). Biggest phase.
+> Build order inside P3: security scaffold (headers, rate limit, tokens) →
+> landing + /subscribe → /webhooks/stripe → /confirm → /manage → /unsubscribe →
+> channel linking (telegram/slack) → legal pages → systemd + Caddyfile.
+> Commits: P0 `f8397f3` · P1 `8f137f9` · P2 `<pending>`.
 
 ## ⚠ OPEN BLOCKER — Turso credentials
 User wants PII in a **Turso** DB (EU region — good for UK GDPR). No `turso` CLI
@@ -126,12 +127,14 @@ SUBS_TOKEN_SECRET=            # random 32+ bytes, for signed links (auto-gen if 
 - [x] `CTI_DRY_RUN` / `--dry` honoured; `subscriptions.enabled` false → clean no-op
 - [x] `bin/selftest_deliver.py` — 15 checks, mocked sends, all green
 
-### Phase 2 — Stripe billing
-- [ ] `lib/billing.py` — create_checkout_session(tier, email) · verify_webhook(payload, sig) · price_id→tier map · portal_session(customer)
-- [ ] webhook events: checkout.session.completed → create/activate sub · customer.subscription.deleted → cancel · invoice.payment_failed → mark past_due + notify owner · customer.subscription.updated → sync
-- [ ] idempotency (store processed event ids)
-- [ ] test-mode path fully exercised with Stripe test fixtures / recorded payloads
-- [ ] owner alert on payment failure / new sub (via existing notify.py)
+### Phase 2 — Stripe billing ✅
+- [x] `lib/billing.py` — REST via requests (no SDK): `create_checkout_session`, `portal_session`, `get_subscription`, `cancel_subscription`, bracketed form encoder
+- [x] `verify_webhook(payload, sig_header)` — HMAC-SHA256, t.payload, 300s tolerance, constant-time compare
+- [x] `handle_event()` — checkout.session.completed → unconfirmed + `send_confirm` hint · subscription.updated → sync status/period_end · subscription.deleted → cancelled · invoice.payment_failed → past_due + `notify_owner` · invoice.paid → recover
+- [x] idempotency via `stripe_events` table
+- [x] tier from checkout metadata, else inferred from the price id
+- [x] `bin/selftest_billing.py` — 16 checks, synthetic events, no network
+- [ ] owner alert wiring (notify.py) — deferred to Phase 4 (needs the action hints surfaced by the webhook route)
 
 ### Phase 3 — public subscriber app
 - [ ] `web/public_app.py` — FastAPI, own styling, no cookies, security headers, rate limiting (`lib/ratelimit.py`, sqlite-backed)
