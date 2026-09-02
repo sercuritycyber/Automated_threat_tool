@@ -12,13 +12,21 @@ Legend:  `[ ]` todo  `[~]` in progress  `[x]` done + tested  `[!]` blocked (see 
 ---
 
 ## RESUME HERE
-> P0 ✅ (28/28) · P1 ✅ (15/15) · P2 ✅ (16/16) · P3 ✅ (public 21/21).
-> Next: **Phase 4 — owner dashboard additions** (`/subscribers`, `/subscriptions`
-> in web/app.py) + wire the webhook's `notify_owner` action hints, MRR/subs tiles.
-> Then P5 (compliance polish + retention already stubbed), P6 (deploy + selftest.py),
-> P7 (docs).
-> Commits: P0 `f8397f3` · P1 `8f137f9` · P2 `5491834` · P3 `<pending>`.
-> All 4 selftests green: `for t in subs deliver billing public; do python3 bin/selftest_$t.py; done`
+> P0 ✅ · P1 ✅ · P2 ✅ · P3 ✅ · P4 ✅ (owner console: Subscribers + Subscriptions pages).
+> Next: **Phase 5 — compliance polish** (retention DONE early; add `notify.py`
+> owner-alert wiring already in webhook; verify consent trail; data-minimisation
+> pass) → **Phase 6** `bin/selftest.py` full preflight + `bin/backup_db.py` +
+> install.sh mention → **Phase 7** README + RND + runbook + memory.
+> Commits: P0 `f8397f3` · P1 `8f137f9` · P2 `5491834` · P3 `c65f396` · P4 `<pending>`.
+> Selftests: `for t in subs deliver billing public; do python3 bin/selftest_$t.py; done` (all green)
+
+## ⚠ MISTAKE LOG
+- Ran `git checkout config/settings.yaml` to undo a test write — but that file had
+  the user's **uncommitted live config** (min_score 65, auto, dry_run false,
+  cap 5, sev 90). Reverted it to the stale committed base. Rebuilt it by hand
+  from known values + verified. **Never `git checkout` / `git stash`
+  config/settings.yaml — always cp to $CLAUDE_JOB_DIR/tmp first.** The panel
+  tests must point `SUBS_DB_PATH` at /tmp and must NOT touch config/.
 
 ## ⚠ OPEN BLOCKER — GitHub push auth
 Remote added: `origin = https://github.com/sercuritycyber/Automated_threat_tool.git`.
@@ -166,14 +174,14 @@ SUBS_TOKEN_SECRET=            # random 32+ bytes, for signed links (auto-gen if 
 - [x] `bin/selftest_public.py` — 21 checks, full lifecycle, mocked Stripe/email/channels
 - [x] `bin/retention.py` + `cti-retention.{service,timer}` (weekly purge) — early, wired here
 
-### Phase 4 — owner dashboard additions
-- [ ] `/subscribers` — table (email, tier, status, channel, joined, last send), search, filters
-- [ ] `/subscribers/{id}` — detail: consent log, delivery history, edit vendors/channel/tier, comp/manual add, **export JSON**, **erase (DSAR)** (also cancels Stripe)
-- [ ] `/subscribers/add` — manual/comp subscriber (no payment)
-- [ ] `/subscribers/export.csv`
-- [ ] `/subscriptions` settings page — the `subscriptions:` block + Stripe key status + "test checkout" button + price-id validation
-- [ ] dashboard tiles: active subs · MRR (from tier prices) · sends today · past-due count
-- [ ] nav + links
+### Phase 4 — owner dashboard additions ✅
+- [x] `/subscribers` — table + search + status filters + stat tiles (active / est. MRR / sent 24h / past-due)
+- [x] `/subscribers/{id}` — detail: edit tier/status/vendors/score/toggles, channels add/remove, consent log, deliveries, event history, test alert, **export JSON (DSAR)**, **erase (DSAR)** (cancels Stripe too)
+- [x] `/subscribers/add` — manual/comp subscriber (optionally skip email confirm)
+- [x] `/subscribers/export.csv`
+- [x] `/subscriptions` — full `subscriptions:` block editor + tier config + go-live readiness (`subsconfig.problems()`) + Stripe/Telegram key status
+- [x] dashboard shows a "Paid alert service" summary card when enabled or subs exist
+- [x] nav item "Subscribers"; web/app.py boots fine if the subs stack fails to import (`_SUBS_OK`)
 
 ### Phase 5 — compliance
 - [ ] `docs/legal/privacy-policy.md` — UK GDPR / DPA 2018: controller, lawful basis, data collected, processors (Stripe, email provider, Slack, Telegram, hosting), retention, rights, complaints→ICO, contact

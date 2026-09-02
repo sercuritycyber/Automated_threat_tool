@@ -38,7 +38,14 @@ for d in (STATE, DRAFTS, LOGS):
     d.mkdir(exist_ok=True)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "bin"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 import publishers  # noqa: E402
+try:
+    import subscribers as SUBS  # noqa: E402
+    import subsconfig           # noqa: E402
+    _SUBS_OK = True
+except Exception:  # noqa — the owner console must still boot without the subs stack
+    _SUBS_OK = False
 
 # Secrets page fields: every provider's keys, then the shared extras.
 SECRET_KEYS: list[tuple[str, str, str]] = []
@@ -297,6 +304,7 @@ NAV = [
     ("/compose", "Compose"),
     ("/candidates", "Candidates"),
     ("/drafts", "Drafts"),
+    ("/subscribers", "Subscribers"),
     ("/settings", "Settings"),
     ("/feeds", "Feeds"),
     ("/secrets", "Secrets"),
@@ -549,6 +557,23 @@ def dashboard(request: Request):
         )
 
     cand_n = counts.get("candidates", 0) or 0
+
+    subs_card = ""
+    if _SUBS_OK:
+        try:
+            scfg = subsconfig.load()
+            sst = SUBS.stats()
+            if scfg.get("enabled") or sst["by_status"]:
+                pd = sst["by_status"].get("past_due", 0)
+                on = "on" if scfg.get("enabled") else "OFF"
+                subs_card = (
+                    f'<div class=card><div class=row style="justify-content:space-between">'
+                    f'<div><b>Paid alert service: {on}</b> · {sst["total_active"]} active · '
+                    f'£{subs_mrr_pence() / 100:,.0f}/mo est · {sst["sent_24h"]} sent in 24h'
+                    + (f' · <span class="pill bad">{pd} past due</span>' if pd else '') + '</div>'
+                    f'<a class="btn ghost" href="/subscribers">Subscribers →</a></div></div>')
+        except Exception:  # noqa
+            subs_card = ""
     live_toggle = ('<button class="btn good">▶ Go live</button>' if dry
                    else '<button class="btn ghost">⏸ Pause (dry-run)</button>')
 
@@ -595,6 +620,7 @@ def dashboard(request: Request):
     </div>
   </div>
 </div>
+{subs_card}
 
 <h2>What happened last</h2>
 <div class=card style="border-color:{cbord}">{card}
@@ -1509,6 +1535,411 @@ def logs_get(request: Request):
 def log_get(name: str):
     f = LOGS / Path(name).name
     return PlainTextResponse(f.read_text() if f.exists() else "not found")
+
+
+# ----------------------------------------------------------------------------- subscribers (paid service)
+def _subs_guard() -> HTMLResponse | None:
+    if not _SUBS_OK:
+        return page("Subscribers",
+                    "<div class=card>The subscription stack isn't importable — check "
+                    "<span class=mono>lib/subscribers.py</span> and its deps.</div>", "/subscribers")
+    return None
+
+
+def _price_pence(display: str) -> int:
+    m = re.search(r"£\s*([\d.]+)", display or "")
+    if not m:
+        return 0
+    val = float(m.group(1))
+    if "week" in (display or "").lower():
+        val *= 52 / 12
+    return round(val * 100)
+
+
+def subs_mrr_pence() -> int:
+    if not _SUBS_OK:
+        return 0
+    cfg = subsconfig.load()
+    st = SUBS.stats()
+    total = 0
+    for tier, n in st.get("active_by_tier", {}).items():
+        total += n * _price_pence(cfg["tiers"].get(tier, {}).get("display_price", ""))
+    return total
+
+
+@app.get("/subscribers", response_class=HTMLResponse)
+def subscribers_list(request: Request):
+    g = _subs_guard()
+    if g:
+        return g
+    SUBS.ensure_schema()
+    q = request.query_params.get("q", "").strip()
+    status = request.query_params.get("status", "").strip()
+    rows = SUBS.list_subscribers(status=status or None, q=q or None, limit=500)
+    st = SUBS.stats()
+    cfg = subsconfig.load()
+
+    def _r(s):
+        chs = ",".join(c["kind"] for c in SUBS.channels_for(s["id"]))
+        sc = {"active": "good", "past_due": "bad", "cancelled": "dim",
+              "paused": "warn", "unconfirmed": "warn", "pending_payment": "dim"}.get(s["status"], "dim")
+        return (f"<tr><td><a href='/subscribers/{s['id']}'>#{s['id']}</a></td>"
+                f"<td>{e(s['email'])}</td><td>{e(s['tier'])}</td>"
+                f"<td><span class='pill {sc}'>{e(s['status'])}</span></td>"
+                f"<td class=dim>{e(chs)}</td>"
+                f"<td class=dim>{e(rel_time(s['created_at']))}</td></tr>")
+
+    filt = "".join(
+        f'<a class="btn ghost" style="padding:4px 10px;font-size:12px" href="/subscribers?status={k}">{k} ({v})</a> '
+        for k, v in sorted(st.get("by_status", {}).items()))
+    body = f"""
+<div class=tiles>
+  <div class=tile><div class=n>{st.get('total_active', 0)}</div><div class=l>active subscribers</div></div>
+  <div class=tile><div class=n>£{subs_mrr_pence() / 100:,.0f}</div><div class=l>est. MRR</div></div>
+  <div class=tile><div class=n>{st.get('sent_24h', 0)}</div><div class=l>alerts sent · 24h</div></div>
+  <div class="tile {'bad' if st.get('by_status', {}).get('past_due') else ''}"><div class=n>{st.get('by_status', {}).get('past_due', 0)}</div><div class=l>past due</div></div>
+</div>
+<div class=card>
+  <form class=row method=get action=/subscribers>
+    <input type=text name=q value="{e(q)}" placeholder="search email / name / notes" style="max-width:280px">
+    <button class=btn>Search</button>
+    <a class="btn ghost" href="/subscribers">clear</a>
+    <a class="btn ghost" href="/subscribers/add">+ add / comp</a>
+    <a class="btn ghost" href="/subscribers/export.csv">export CSV</a>
+    <a class="btn ghost" href="/subscriptions">settings &amp; readiness</a>
+  </form>
+  <div style="margin-top:8px">{filt or '<span class=dim>no subscribers yet</span>'}</div>
+</div>
+<div class=card style="padding:0"><table>
+<tr><th>id</th><th>email</th><th>tier</th><th>status</th><th>channels</th><th>joined</th></tr>
+{''.join(_r(s) for s in rows) or '<tr><td colspan=6 class=dim>none</td></tr>'}
+</table></div>
+{'' if subsconfig.load().get('enabled') else '<div class="flash" style="border-color:var(--warn)">subscriptions.enabled is <b>false</b> — the public site and delivery are off. <a href=/subscriptions>Set it up →</a></div>'}
+"""
+    return page("Subscribers", body, "/subscribers", flash_from(request))
+
+
+@app.get("/subscribers/add", response_class=HTMLResponse)
+def subscribers_add_form(request: Request):
+    g = _subs_guard()
+    if g:
+        return g
+    tiers = "".join(f"<option>{t}</option>" for t in subsconfig.load()["tiers"])
+    body = f"""<div class=card>Add a subscriber by hand — for a comp / test / manually-billed account.
+No payment is taken. They still confirm by email before alerts start (unless you tick “skip”).</div>
+<form method=post action=/subscribers/add>
+<label>Email</label><input type=email name=email required>
+<label>Tier</label><select name=tier>{tiers}</select>
+<label>Note <small>— why this is a manual account</small></label><input type=text name=note>
+<label class=row style="gap:8px;font-weight:400"><input type=checkbox name=skip_confirm> Skip email confirmation (activate now)</label>
+<div style="margin-top:12px"><button class=btn>Add subscriber</button></div>
+</form>"""
+    return page("Add subscriber", body, "/subscribers")
+
+
+@app.post("/subscribers/add")
+def subscribers_add(email: str = Form(""), tier: str = Form("individual"),
+                    note: str = Form(""), skip_confirm: str = Form("")):
+    if _subs_guard():
+        return RedirectResponse("/subscribers", 303)
+    email = email.strip().lower()
+    if "@" not in email:
+        return RedirectResponse("/subscribers/add?m=" + quote("Invalid email"), 303)
+    sid = SUBS.create_pending(email, tier, source="comp")
+    SUBS.db().execute("UPDATE subscribers SET notes = ? WHERE id = ?", [note or "manual add", sid])
+    if skip_confirm:
+        SUBS.set_status(sid, "active", "manual activate by operator")
+        SUBS.log_consent(sid, "signup", True, detail="operator manual add, confirmation skipped")
+    else:
+        SUBS.set_status(sid, "unconfirmed", "manual add")
+        t = None
+        try:
+            import tokens as _tok
+            t = _tok.sign({"sub": sid, "act": "confirm"}, ttl=14 * 86400)
+        except Exception:  # noqa
+            pass
+        if t:
+            site = subsconfig.load().get("site_url", "")
+            _channels_send_email(email, "Confirm your Blue Team CTI alerts",
+                                 f"An account was created for you.\n\nConfirm to start alerts:\n{site}/confirm?t={t}")
+    return RedirectResponse(f"/subscribers/{sid}?m=" + quote("Added"), 303)
+
+
+def _channels_send_email(to: str, subject: str, body: str) -> None:
+    try:
+        import channels as _ch
+        _ch.send("email", to, subject, body, creds=_env_with_config())
+    except Exception:  # noqa
+        pass
+
+
+@app.get("/subscribers/export.csv", response_class=PlainTextResponse)
+def subscribers_export_csv():
+    if _subs_guard():
+        return PlainTextResponse("subs stack unavailable", status_code=503)
+    import csv
+    import io
+    SUBS.ensure_schema()
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["id", "email", "name", "tier", "status", "source", "created_at",
+                "confirmed_at", "cancelled_at", "stripe_customer_id", "channels", "vendors"])
+    for s in SUBS.list_subscribers(limit=100000):
+        p = SUBS.get_prefs(s["id"])
+        chs = "|".join(f"{c['kind']}:{'v' if c['verified'] else 'u'}" for c in SUBS.channels_for(s["id"]))
+        w.writerow([s["id"], s["email"], s.get("name", ""), s["tier"], s["status"], s["source"],
+                    s["created_at"], s.get("confirmed_at", ""), s.get("cancelled_at", ""),
+                    s.get("stripe_customer_id", ""), chs, "|".join(p["vendors"])])
+    return PlainTextResponse(buf.getvalue(), media_type="text/csv",
+                             headers={"Content-Disposition": "attachment; filename=subscribers.csv"})
+
+
+@app.get("/subscribers/{sid}", response_class=HTMLResponse)
+def subscriber_detail(sid: int, request: Request):
+    g = _subs_guard()
+    if g:
+        return g
+    SUBS.ensure_schema()
+    s = SUBS.get(sid)
+    if not s:
+        return page("Subscriber", "<div class=card>Not found (may have been erased).</div>", "/subscribers")
+    p = s["prefs"]
+    cfg = subsconfig.load()
+    tiers = "".join(f"<option {'selected' if t == s['tier'] else ''}>{t}</option>" for t in cfg["tiers"])
+    ch_rows = "".join(
+        f"<tr><td>{e(c['kind'])}</td><td class=dim>{e(c['target'][:50])}</td>"
+        f"<td>{'✓' if c['verified'] else '<span class=dim>unverified</span>'}</td>"
+        f"<td><form method=post action=/subscribers/{sid}/channel/remove style=display:inline>"
+        f"<input type=hidden name=cid value={c['id']}><button class='btn ghost' style='padding:2px 8px;font-size:12px'>×</button></form></td></tr>"
+        for c in s["channels"])
+    cons = "".join(f"<tr><td class=dim>{e(rel_time(c['ts']))}</td><td>{e(c['kind'])}</td>"
+                   f"<td>{'granted' if c['granted'] else 'withdrawn'}</td><td class=dim>{e(c['ip'] or '')}</td>"
+                   f"<td class=dim>{e(c['terms_version'] or '')}</td></tr>"
+                   for c in SUBS.consents_for(sid))
+    devs = "".join(f"<tr><td class=dim>{e(rel_time(d['sent_at']))}</td><td>{e(d['channel_kind'])}</td>"
+                   f"<td>{e(d['mode'])}</td><td>{'ok' if d['ok'] else e(d['error'])}</td>"
+                   f"<td class=dim>{e((d['post_key'] or '')[:48])}</td></tr>"
+                   for d in SUBS.deliveries_for(sid, 30))
+    evs = "".join(f"<tr><td class=dim>{e(rel_time(ev['ts']))}</td><td>{e(ev['kind'])}</td>"
+                  f"<td class=dim>{e((ev['detail'] or '')[:70])}</td></tr>"
+                  for ev in SUBS.events_for(sid, 40))
+    m = flash_from(request)
+    body = f"""
+<div class=card>
+  <div class=row style="justify-content:space-between">
+    <div><b>{e(s['email'])}</b> · <span class="pill dim">{e(s['status'])}</span> · {e(s['tier'])}
+    · <span class=dim>joined {e(rel_time(s['created_at']))}</span></div>
+    <div class=dim>{e(s['source'])}{' · ' + e(s['stripe_customer_id']) if s.get('stripe_customer_id') else ''}</div>
+  </div>
+  {('<p class=dim>' + e(s['notes']) + '</p>') if s.get('notes') else ''}
+</div>
+
+<form method=post action=/subscribers/{sid}/edit>
+<div class=card><div class=grid>
+<div><label>Tier</label><select name=tier>{tiers}</select></div>
+<div><label>Status</label><select name=status>{''.join(f"<option {'selected' if x == s['status'] else ''}>{x}</option>" for x in SUBS.STATUSES)}</select></div>
+<div><label>Score override</label><input type=text name=min_score value="{e('' if p['min_score_override'] is None else p['min_score_override'])}"></div>
+</div>
+<label>Vendors / keywords</label><input type=text name=vendors value="{e(', '.join(p['vendors']))}">
+<label class=row style="gap:8px;font-weight:400"><input type=checkbox name=instant {'checked' if p['instant'] else ''}> instant</label>
+<label class=row style="gap:8px;font-weight:400"><input type=checkbox name=digest {'checked' if p['digest'] else ''}> digest</label>
+<div style="margin-top:10px"><button class=btn>Save</button></div>
+</div></form>
+
+<h2>Channels</h2>
+<div class=card style="padding:0"><table><tr><th>kind</th><th>target</th><th>ok</th><th></th></tr>{ch_rows or '<tr><td colspan=4 class=dim>none</td></tr>'}</table></div>
+<form method=post action=/subscribers/{sid}/channel/add class=card>
+<div class=row>
+<select name=kind style="max-width:150px">{''.join(f'<option>{k}</option>' for k in SUBS.CHANNEL_KINDS)}</select>
+<input type=text name=target placeholder="address / URL / chat id">
+<label class=row style="gap:6px;font-weight:400"><input type=checkbox name=verified checked> verified</label>
+<button class=btn>Add</button>
+</div></form>
+
+<div class=row style="margin:14px 0">
+<form method=post action=/subscribers/{sid}/test><button class="btn ghost">Send test alert</button></form>
+<a class="btn ghost" href="/subscribers/{sid}/export.json">Export (DSAR)</a>
+<form method=post action=/subscribers/{sid}/erase onsubmit="return confirm('Erase this subscriber and all their data? Cancels Stripe if linked. Irreversible.')">
+<button class="btn bad">Erase (DSAR)</button></form>
+</div>
+
+<h2>Consent log</h2><div class=card style="padding:0"><table><tr><th>when</th><th>kind</th><th></th><th>ip</th><th>terms</th></tr>{cons or '<tr><td colspan=5 class=dim>none</td></tr>'}</table></div>
+<h2>Deliveries</h2><div class=card style="padding:0"><table><tr><th>when</th><th>channel</th><th>mode</th><th>result</th><th>post</th></tr>{devs or '<tr><td colspan=5 class=dim>none</td></tr>'}</table></div>
+<details><summary class=dim>Event history</summary><div class=card style="padding:0"><table>{evs}</table></div></details>
+"""
+    return page(f"Subscriber #{sid}", body, "/subscribers", m)
+
+
+@app.post("/subscribers/{sid}/edit")
+def subscriber_edit(sid: int, tier: str = Form(""), status: str = Form(""), vendors: str = Form(""),
+                    min_score: str = Form(""), instant: str = Form(""), digest: str = Form("")):
+    if _subs_guard():
+        return RedirectResponse("/subscribers", 303)
+    if tier in subsconfig.load()["tiers"]:
+        SUBS.db().execute("UPDATE subscribers SET tier = ? WHERE id = ?", [tier, sid])
+    if status in SUBS.STATUSES and status != SUBS.get(sid, hydrate=False)["status"]:
+        SUBS.set_status(sid, status, "operator edit")
+    vlist = [v.strip() for v in re.split(r"[,\n]", vendors) if v.strip()][:60]
+    mso = int(min_score) if min_score.strip().isdigit() else None
+    SUBS.set_prefs(sid, vendors=vlist, min_score_override=mso,
+                   instant=bool(instant), digest=bool(digest))
+    return RedirectResponse(f"/subscribers/{sid}?m=" + quote("Saved"), 303)
+
+
+@app.post("/subscribers/{sid}/channel/add")
+def subscriber_channel_add(sid: int, kind: str = Form(""), target: str = Form(""), verified: str = Form("")):
+    if _subs_guard():
+        return RedirectResponse("/subscribers", 303)
+    if kind in SUBS.CHANNEL_KINDS and target.strip():
+        SUBS.add_channel(sid, kind, target.strip(), verified=bool(verified), label="operator")
+    return RedirectResponse(f"/subscribers/{sid}", 303)
+
+
+@app.post("/subscribers/{sid}/channel/remove")
+def subscriber_channel_remove(sid: int, cid: int = Form(0)):
+    if not _subs_guard():
+        SUBS.remove_channel(cid)
+    return RedirectResponse(f"/subscribers/{sid}", 303)
+
+
+@app.post("/subscribers/{sid}/test")
+def subscriber_test(sid: int):
+    if not _subs_guard():
+        subprocess.Popen([sys.executable, str(ROOT / "bin" / "deliver.py"), "--test", str(sid)],
+                         cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         env=_env_with_config())
+    return RedirectResponse(f"/subscribers/{sid}?m=" + quote("Test alert queued"), 303)
+
+
+@app.get("/subscribers/{sid}/export.json", response_class=PlainTextResponse)
+def subscriber_export(sid: int):
+    if _subs_guard():
+        return PlainTextResponse("unavailable", status_code=503)
+    data = SUBS.export_subscriber(sid)
+    SUBS.log_event("dsar_export_by_operator", sid)
+    return PlainTextResponse(json.dumps(data, indent=2, default=str), media_type="application/json",
+                             headers={"Content-Disposition": f"attachment; filename=subscriber-{sid}.json"})
+
+
+@app.post("/subscribers/{sid}/erase", response_class=HTMLResponse)
+def subscriber_erase(sid: int):
+    if _subs_guard():
+        return RedirectResponse("/subscribers", 303)
+    s = SUBS.get(sid, hydrate=False)
+    if s and s.get("stripe_subscription_id"):
+        try:
+            import billing
+            billing.cancel_subscription(s["stripe_subscription_id"])
+        except Exception:  # noqa
+            pass
+    SUBS.erase_subscriber(sid, "operator DSAR erasure")
+    return RedirectResponse("/subscribers?m=" + quote(f"Subscriber #{sid} erased"), 303)
+
+
+@app.get("/subscriptions", response_class=HTMLResponse)
+def subscriptions_settings(request: Request):
+    g = _subs_guard()
+    if g:
+        return g
+    c = subsconfig.load()
+    env = load_env()
+    probs = subsconfig.problems()
+    stripe_state = ("live sk_live_ key" if env.get("STRIPE_SECRET_KEY", "").startswith("sk_live_")
+                    else "test sk_test_ key" if env.get("STRIPE_SECRET_KEY", "").startswith("sk_test_")
+                    else "not set")
+    ready = ('<div class="flash good">Ready to accept subscribers.</div>' if not probs else
+             '<div class="card" style="border-color:var(--warn)"><b>Before this can go live:</b><ul>'
+             + "".join(f"<li>{e(x)}</li>" for x in probs) + "</ul></div>")
+
+    def ck(v):
+        return "checked" if v else ""
+
+    ti = c["tiers"]["individual"]
+    tt = c["tiers"]["team"]
+    body = f"""
+{ready}
+<form method=post action=/subscriptions>
+<h2>Service</h2><div class=card>
+<label class=row style="gap:8px;font-weight:400"><input type=checkbox name=enabled {ck(c.get('enabled'))}> Subscriptions enabled (public site + delivery on)</label>
+<label class=row style="gap:8px;font-weight:400"><input type=checkbox name=live {ck(c.get('live'))}> Live billing (unticked = Stripe test mode)</label>
+<div class=grid style="margin-top:10px">
+<div><label>Brand name</label><input type=text name=brand_name value="{e(c.get('brand_name',''))}"></div>
+<div><label>Public site URL</label><input type=text name=site_url value="{e(c.get('site_url',''))}"></div>
+<div><label>Public bind (host:port)</label><input type=text name=public_bind value="{e(c.get('public_bind',''))}"></div>
+<div><label>From email</label><input type=text name=from_email value="{e(c.get('from_email',''))}"></div>
+<div><label>Reply-to / support email</label><input type=text name=support_email value="{e(c.get('support_email',''))}"></div>
+<div><label>Contact email (privacy)</label><input type=text name=contact_email value="{e(c.get('contact_email',''))}"></div>
+<div><label>Company / sole-trader legal name</label><input type=text name=company_legal_name value="{e(c.get('company_legal_name',''))}"></div>
+<div><label>ICO registration number</label><input type=text name=ico_registration value="{e(c.get('ico_registration',''))}"></div>
+<div><label>Digest hour (UTC)</label><input type=number name=digest_hour_utc value="{e(c.get('digest_hour_utc',8))}"></div>
+<div><label>Retention: cancelled (days)</label><input type=number name=retention_days_cancelled value="{e(c.get('retention_days_cancelled',180))}"></div>
+<div><label>Retention: unconfirmed (days)</label><input type=number name=retention_days_unconfirmed value="{e(c.get('retention_days_unconfirmed',7))}"></div>
+<div><label>Rate limit / min</label><input type=number name=rate_limit_per_min value="{e(c.get('rate_limit_per_min',20))}"></div>
+</div></div>
+
+<h2>Individual tier</h2><div class=card><div class=grid>
+<div><label>Stripe price id</label><input type=text name=i_price_id value="{e(ti.get('price_id',''))}"></div>
+<div><label>Display price</label><input type=text name=i_display_price value="{e(ti.get('display_price',''))}"></div>
+<div><label>Instant min score</label><input type=number name=i_instant_min_score value="{e(ti.get('instant_min_score',90))}"></div>
+<div><label>Max channels</label><input type=number name=i_max_channels value="{e(ti.get('max_channels',2))}"></div>
+</div>
+<label>Blurb</label><input type=text name=i_blurb value="{e(ti.get('blurb',''))}"></div>
+
+<h2>Team tier</h2><div class=card><div class=grid>
+<div><label>Stripe price id</label><input type=text name=t_price_id value="{e(tt.get('price_id',''))}"></div>
+<div><label>Display price</label><input type=text name=t_display_price value="{e(tt.get('display_price',''))}"></div>
+<div><label>Instant min score</label><input type=number name=t_instant_min_score value="{e(tt.get('instant_min_score',75))}"></div>
+<div><label>Max channels</label><input type=number name=t_max_channels value="{e(tt.get('max_channels',6))}"></div>
+</div>
+<label>Blurb</label><input type=text name=t_blurb value="{e(tt.get('blurb',''))}">
+<label class=row style="gap:8px;font-weight:400"><input type=checkbox name=t_attach_json {ck(tt.get('attach_json'))}> attach machine-readable JSON</label>
+</div>
+
+<button class=btn>Save subscription settings</button>
+</form>
+
+<h2>Keys &amp; wiring</h2><div class=card>
+<p>Stripe key: <b>{e(stripe_state)}</b> · webhook secret: <b>{'set' if env.get('STRIPE_WEBHOOK_SECRET') else 'not set'}</b>
+· Telegram bot: <b>{'set' if env.get('TELEGRAM_BOT_TOKEN') else 'not set'}</b></p>
+<p class=dim>Set these on the <a href=/secrets>Secrets</a> page (Stripe/Telegram fields) — they live in config/env, not here.</p>
+<p class=dim>Deploy the public site with <span class=mono>systemd/install-public.sh</span>. Full checklist: <span class=mono>docs/legal/compliance-runbook.md</span>.</p>
+</div>
+"""
+    return page("Subscription settings", body, "/subscribers", flash_from(request))
+
+
+@app.post("/subscriptions")
+async def subscriptions_save(request: Request):
+    if _subs_guard():
+        return RedirectResponse("/subscribers", 303)
+    f = await request.form()
+    s = load_yaml(CFG / "settings.yaml")
+    sub = s.setdefault("subscriptions", {})
+    for key in ("brand_name", "site_url", "public_bind", "from_email", "support_email",
+                "contact_email", "company_legal_name", "ico_registration"):
+        sub[key] = f.get(key, "").strip()
+    sub["enabled"] = bool(f.get("enabled"))
+    sub["live"] = bool(f.get("live"))
+    for key in ("digest_hour_utc", "retention_days_cancelled", "retention_days_unconfirmed",
+                "rate_limit_per_min"):
+        try:
+            sub[key] = int(f.get(key, 0))
+        except (TypeError, ValueError):
+            pass
+    tiers = sub.setdefault("tiers", {})
+    for short, name in (("i", "individual"), ("t", "team")):
+        t = tiers.setdefault(name, {})
+        t["price_id"] = f.get(f"{short}_price_id", "").strip()
+        t["display_price"] = f.get(f"{short}_display_price", "").strip()
+        t["blurb"] = f.get(f"{short}_blurb", "").strip()
+        for nk in ("instant_min_score", "max_channels"):
+            try:
+                t[nk] = int(f.get(f"{short}_{nk}", 0))
+            except (TypeError, ValueError):
+                pass
+    tiers["team"]["attach_json"] = bool(f.get("t_attach_json"))
+    save_yaml(CFG / "settings.yaml", s)
+    return RedirectResponse("/subscriptions?m=Saved", 303)
 
 
 # ----------------------------------------------------------------------------- main
