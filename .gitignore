@@ -13,3 +13,9 @@ logs/*
 __pycache__/
 *.pyc
 .venv/
+
+# subscription service — PII, never commit
+state/subscribers.db
+state/subscribers.db-*
+state/subscribers.db.*
+config/subscribers.json
