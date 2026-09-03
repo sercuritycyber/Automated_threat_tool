@@ -503,6 +503,12 @@ async function activateSubscriber(env, cfg, request, sub, detail) {
     // rss is pull, not push — there's nothing to test-ping. Mark it good and
     // email the URL below instead.
     if (ch.kind === "rss") { await db.verifyChannel(env.DB, ch.id); continue; }
+    // discord / telegram picked at signup but not yet connected (no target):
+    // there's nothing to ping — email them the one-click connect link instead.
+    if ((ch.kind === "discord" || ch.kind === "telegram") && !ch.target) {
+      await emailConnectLink(env, cfg, await db.get(env.DB, sub.id), ch.kind).catch((e) => console.error("connect link", e));
+      continue;
+    }
     const r = await send(env, cfg, ch.kind, ch.target, "SecurityCyber CTI — you're connected",
       "This channel is now linked. Real alerts will arrive here.", { priority: "default" });
     if (r.ok) await db.verifyChannel(env.DB, ch.id);
@@ -676,7 +682,10 @@ async function discordCallback(request, env, cfg, url) {
     const me = await discord.currentUser(env, accessToken);
     await discord.addToGuild(env, me.id, accessToken);
     // Store the user id as the channel target — DMs go to it, and it's how we
-    // revoke access later if they stop paying.
+    // revoke access later if they stop paying. Drop the empty-target placeholder
+    // row left by the signup so there's exactly one discord channel.
+    const placeholder = (sub.channels || []).find((c) => c.kind === "discord" && !c.target);
+    if (placeholder) await db.removeChannel(env.DB, placeholder.id);
     await db.addChannel(env.DB, sub.id, "discord", me.id, true, `discord:${me.username}`);
     await db.logEvent(env.DB, "channel:discord_joined", sub.id, { user: me.username });
     const r = await send(env, cfg, "discord", me.id, `${cfg.brand} CTI — you're connected`,
@@ -724,6 +733,30 @@ async function emailFeedUrl(env, cfg, sub) {
     + `It updates for as long as your subscription is active.\n\n— ${cfg.brand}`,
     {});
   await db.logEvent(env.DB, r.ok ? "rss:url_emailed" : "rss:url_email_failed", sub.id, { error: r.error || "" });
+  return r;
+}
+
+// Discord / Telegram are connected after checkout — the subscriber has to do a
+// one-time OAuth (Discord) or open a bot deep-link (Telegram). Nothing pushes
+// them there on its own, so on confirmation we email a single link that starts
+// it. Without this a Discord/Telegram signup confirms and then just sits there.
+async function emailConnectLink(env, cfg, sub, kind) {
+  const ch = (sub.channels || []).find((c) => c.kind === kind);
+  if (!ch || ch.target) return null;   // already connected
+  const t = await sign(env, { sub: sub.id, act: "manage" }, 30 * 86400).catch(() => "");
+  if (!t) return null;
+  const link = `${cfg.site_url}/channel/${kind}?t=${encodeURIComponent(t)}`;
+  const label = kind === "discord" ? "Discord" : "Telegram";
+  const how = kind === "discord"
+    ? "It opens Discord, asks you to authorise once, then adds you to our subscribers server and switches on alerts."
+    : "It opens Telegram and starts a chat with our bot — send /start and alerts begin.";
+  const r = await send(env, cfg, "email", sub.email, `Connect your ${label} — one click`,
+    `Your ${cfg.brand} CTI subscription is live. One thing left: connect ${label} so alerts can reach you.\n\n`
+    + `${link}\n\n${how}\n\n`
+    + `The link is tied to your account and works for 30 days. `
+    + `You can also do this any time from your preferences page.\n\n— ${cfg.brand}`,
+    {});
+  await db.logEvent(env.DB, r.ok ? `${kind}:connect_link_emailed` : `${kind}:connect_link_failed`, sub.id, { error: r.error || "" });
   return r;
 }
 
