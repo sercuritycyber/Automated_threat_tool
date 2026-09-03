@@ -70,17 +70,52 @@ if [[ "$USED" -ge "$MAXDAY" ]]; then
 fi
 echo "[run] $CAND_COUNT candidates queued for the analyst  ($USED/$MAXDAY posts used today)"
 
-echo "[run] stage 2/4 : analyst (claude -p)"
+# Analyst engine (config/settings.yaml -> analyst.engine):
+#   ollama  — local model only; deterministic fallback if it's down. 0 Claude tokens.
+#   claude  — claude -p (the full verified analyst); deterministic fallback.
+#   auto    — ollama for triage, then a NARROW claude -p deep pass on just the
+#             KEV/high-score items (state/escalate.json), if analyst.deep_pass.
+ENGINE="$(python3 - <<'PYEOF'
+import pathlib
+try:
+    import yaml; s=yaml.safe_load(pathlib.Path("config/settings.yaml").read_text()) or {}
+    a=s.get("analyst") or {}
+    print((a.get("engine") or "claude").strip().lower(),
+          "1" if a.get("deep_pass") else "0")
+except Exception:
+    print("claude 0")
+PYEOF
+)"
+DEEP="${ENGINE##* }"; ENGINE="${ENGINE%% *}"
+echo "[run] stage 2/4 : analyst (engine=$ENGINE)"
 set +e
-claude -p "$(cat "$ROOT/prompts/analyst.md")" \
-  --allowedTools "Read,Write,WebFetch" \
-  --permission-mode acceptEdits
-ANALYST_RC=$?
+ANALYST_RC=1
+if [[ "$ENGINE" == "ollama" || "$ENGINE" == "auto" ]]; then
+  python3 "$ROOT/bin/analyst_ollama.py"; ANALYST_RC=$?
+  if [[ "$ANALYST_RC" -eq 0 && "$ENGINE" == "auto" && "$DEEP" == "1" && -s "$ROOT/state/escalate.json" ]]; then
+    HOT=$(python3 -c 'import json;print(len(json.load(open("state/escalate.json")).get("candidates",[])))' 2>/dev/null || echo 0)
+    if [[ "${HOT:-0}" -gt 0 ]]; then
+      echo "[run] auto: $HOT high-impact item(s) -> claude -p deep pass"
+      claude -p "$(cat "$ROOT/prompts/analyst.md")
+
+DEEP-PASS MODE: state/escalate.json lists the only stories to work this run.
+WebFetch and write a full verified brief for each, MERGE them into the existing
+state/decision.json (keep the ollama alerts for everything else, replace or add
+the escalated ones with your verified version, and you MAY set decision=post
+for any that clearly warrant it). Leave all other fields intact." \
+        --allowedTools "Read,Write,WebFetch" --permission-mode acceptEdits || echo "[run] deep pass returned $? (kept the ollama triage)"
+    fi
+  fi
+fi
+if [[ "$ANALYST_RC" -ne 0 && ( "$ENGINE" == "claude" || "$ENGINE" == "auto" ) ]]; then
+  echo "[run] running the full claude -p analyst"
+  claude -p "$(cat "$ROOT/prompts/analyst.md")" \
+    --allowedTools "Read,Write,WebFetch" --permission-mode acceptEdits
+  ANALYST_RC=$?
+fi
 set -e
 if [[ "$ANALYST_RC" -ne 0 ]]; then
-  # Token limit, outage, bad response. Don't lose the whole run: a deterministic
-  # fallback keeps the paid subscriber feed alive (decision=skip, no public post).
-  echo "[run] analyst exited $ANALYST_RC — deterministic fallback for subscribers"
+  echo "[run] analyst engine failed ($ANALYST_RC) — deterministic fallback for subscribers"
   python3 "$ROOT/bin/analyst_fallback.py" || echo "[run] analyst_fallback returned $? (non-fatal)"
 fi
 
