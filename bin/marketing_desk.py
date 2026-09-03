@@ -371,6 +371,13 @@ def handoff(root: Path, *, title: str, body: str, url: str = "", short_text: str
             d = store_load(root)
             d["posts"].setdefault(pid, {})["status"] = "posted"
             store_save(root, d)
+            # fan the same post out to subscribers so RSS/email/Discord aren't
+            # left behind the social feed
+            try:
+                import admin_center as _ac
+                out["fanout"] = _ac.push_alert(post, creds or {})
+            except Exception:  # noqa: BLE001
+                pass
     else:
         _queue_append(root, post)
         out["queued"] = True

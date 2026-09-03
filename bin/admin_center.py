@@ -90,6 +90,30 @@ def _li_token_days(root: Path, creds: dict) -> dict:
     return {"days": days, "expires": datetime.fromtimestamp(exp, timezone.utc).date().isoformat()}
 
 
+def push_alert(post: dict, creds: dict) -> dict:
+    """Fan a single operator-published post out to subscribers (RSS / email /
+    Discord) via the Worker, so a manual publish never leaves subscribers behind
+    the social feed. Non-fatal."""
+    wu = (creds.get("CTI_WORKER_URL") or "").rstrip("/")
+    sec = creds.get("CTI_INGEST_SECRET")
+    if not (wu and sec):
+        return {"ok": False, "error": "worker URL / ingest secret not set"}
+    body = {"posts": [{k: post.get(k) for k in
+                       ("title", "url", "source", "score", "cve_ids",
+                        "subscriber_text", "action", "post_text", "short_text")
+                       if post.get(k) not in (None, "")}]}
+    try:
+        req = urllib.request.Request(wu + "/internal/ingest",
+                                     data=json.dumps(body).encode(),
+                                     headers={"Authorization": f"Bearer {sec}",
+                                              "Content-Type": "application/json",
+                                              "User-Agent": "Mozilla/5.0 (admin-center)"})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return {"ok": True, "resp": r.read().decode()[:120]}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": str(e)[:150]}
+
+
 def _worker(creds: dict, path: str):
     if not requests:
         return None

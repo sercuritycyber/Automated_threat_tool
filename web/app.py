@@ -2486,7 +2486,9 @@ def action_approve_next():
                 "post_id": r.get("id"), "post_url": r.get("url"),
                 "targets": ["linkedin"], "author": "organization", "source": "approve",
             }) + "\n")
-        return {"message": f"Posted “{(p.get('title') or '')[:48]}” — {r.get('url', '')}"}
+        fan = AC.push_alert(p, load_env())
+        tail = " (also sent to subscribers)" if fan.get("ok") else " (subscriber fan-out failed)"
+        return {"message": f"Posted “{(p.get('title') or '')[:44]}”{tail}"}
     return {"message": f"Post failed — {str(r.get('error'))[:140]}"}
 
 
