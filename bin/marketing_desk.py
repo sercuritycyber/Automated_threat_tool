@@ -306,6 +306,80 @@ def posts_payload(root: Path) -> dict:
     return {"posts": rows, "platforms": {k: v[0] for k, v in PLATFORMS.items()}, "statuses": STATUSES}
 
 
+def _queue_append(root: Path, post: dict) -> None:
+    """Append an operator-composed post to the pipeline's hold queue
+    (state/pending.json) — the same queue the Review page and
+    publish_linkedin.py --approve read."""
+    p = root / "state" / "pending.json"
+    q: dict = {}
+    if p.exists():
+        try:
+            q = json.loads(p.read_text())
+        except Exception:
+            q = {}
+    q.setdefault("queue", [])
+    q.setdefault("considered", [])
+    urls = {x.get("url") for x in q["queue"] if x.get("url")}
+    if not post.get("url") or post["url"] not in urls:
+        q["queue"].append(post)
+    q["manual"] = True
+    q["held_at"] = datetime.now(timezone.utc).isoformat()
+    p.write_text(json.dumps(q, indent=2))
+
+
+def handoff(root: Path, *, title: str, body: str, url: str = "", short_text: str = "",
+            schedule: str = "", publish_now: bool = False, creds: dict | None = None) -> dict:
+    """Operator-composed post -> either queued for the system or published now."""
+    body = (body or "").strip()
+    post = {
+        "title": (title or "").strip() or "Untitled",
+        "url": (url or "").strip(),
+        "post_text": body,
+        "short_text": (short_text or "").strip(),
+        "score": 100, "confidence": "operator",
+        "cve_ids": sorted(set(re.findall(r"CVE-\d{4}-\d{3,7}", body))),
+        "held_because": "manual",
+        "composed_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if not body:
+        return {"error": "empty body"}
+    pid = _pid(post["url"], post["title"])
+    d = store_load(root)
+    d.setdefault("composed", []).append(post)
+    if schedule:
+        d["posts"].setdefault(pid, {}).update({"scheduled_for": schedule, "status": "scheduled"})
+    store_save(root, d)
+
+    out: dict = {"id": pid, "queued": False, "posted": None}
+    if publish_now:
+        try:
+            import yaml as _yaml
+            import publishers  # noqa
+            settings = _yaml.safe_load((root / "config" / "settings.yaml").read_text()) or {}
+            r = publishers.post_linkedin(body, creds or {}, settings, short_text=post["short_text"])
+        except Exception as e:  # noqa: BLE001
+            r = {"ok": False, "error": f"{type(e).__name__}: {e}"}
+        out["posted"] = r
+        if r.get("ok"):
+            with (root / "state" / "history.jsonl").open("a") as fh:
+                fh.write(json.dumps({
+                    "posted_at": datetime.now(timezone.utc).isoformat(),
+                    "title": post["title"], "url": post["url"], "score": 100,
+                    "post_id": r.get("id"), "post_url": r.get("url"),
+                    "targets": ["linkedin"], "author": "organization", "source": "compose",
+                }) + "\n")
+            d = store_load(root)
+            d["posts"].setdefault(pid, {})["status"] = "posted"
+            store_save(root, d)
+    else:
+        _queue_append(root, post)
+        out["queued"] = True
+        d = store_load(root)
+        d["posts"].setdefault(pid, {})["status"] = "queued"
+        store_save(root, d)
+    return out
+
+
 def export_bundle(root: Path) -> dict:
     posts = scan_posts(root)
     store = store_load(root)
@@ -355,6 +429,23 @@ _PAGE_HTML = r"""
       <button class=ghost onclick="loadAll()">↻ Refresh</button>
       <button class=act onclick="exportBundle()">⬇ Export upload pack</button>
     </div>
+  </div>
+
+  <h2>Compose</h2>
+  <div class=k style="padding:14px">
+    <input id=cTitle placeholder="Headline" style="width:100%;margin-bottom:6px">
+    <textarea id=cBody placeholder="Write the post the way it should read. CVE ids are picked up automatically."></textarea>
+    <div class=row style="margin:6px 0">
+      <input id=cUrl placeholder="Source URL (optional)" style="flex:1;min-width:180px">
+      <input id=cShort placeholder="Short version for X / Bluesky (optional)" style="flex:1;min-width:180px">
+    </div>
+    <div class=row>
+      <label class=mini>schedule</label><input type=datetime-local id=cSched>
+      <button class=ghost onclick="compose(false)">Hand to the system →</button>
+      <button class=act onclick="compose(true)">Publish to LinkedIn now</button>
+      <span class=mini id=cMsg></span>
+    </div>
+    <div class=mini style="margin-top:6px">“Hand to the system” drops it in the pipeline hold queue (Review page / next publish run). “Publish now” posts straight to the company page.</div>
   </div>
 
   <h2>Performance</h2>
@@ -465,6 +556,17 @@ async function save(id,f){await post('/marketing/api/post/'+id,f);const p=DATA.p
 function flash(id,m){const el=$('#msg-'+id);if(el){el.textContent=m;setTimeout(()=>el.textContent='',2000);}}
 async function post(u,o){const b=new URLSearchParams();for(const k in o)b.append(k,o[k]);
   return fetch(u,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:b});}
+async function compose(now){
+  const b={title:cTitle.value,body:cBody.value,url:cUrl.value,short_text:cShort.value,
+           schedule:cSched.value,publish_now:now?'1':''};
+  if(!b.body.trim()){cMsg.textContent='write something first';return;}
+  cMsg.textContent='working…';
+  const r=await (await post('/marketing/api/compose',b)).json();
+  if(r.posted&&r.posted.ok) cMsg.textContent='posted to LinkedIn ✓';
+  else if(r.queued) cMsg.textContent='queued for the system ✓';
+  else cMsg.textContent='error: '+((r.posted&&r.posted.error)||r.error||'unknown');
+  if((r.posted&&r.posted.ok)||r.queued){cTitle.value=cBody.value=cUrl.value=cShort.value=cSched.value='';loadAll();}
+}
 async function exportBundle(){
   const d=await (await fetch('/marketing/api/bundle')).json();
   const blob=new Blob([JSON.stringify(d,null,2)],{type:'application/json'});

@@ -327,9 +327,9 @@ def page(title: str, body: str, active: str = "", flash: str = "") -> HTMLRespon
     fl = f'<div class="flash">{e(flash)}</div>' if flash else ""
     return HTMLResponse(f"""<!doctype html><html><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1">
-<title>{e(title)} · Blue Team CTI</title><style>{CSS}</style></head><body>
+<title>{e(title)} · SecurityCyber Admin Center</title><style>{CSS}</style></head><body>
 <div class=wrap><div class=side>
-<div class=brand>Blue Team CTI<small>securitycyber.uk</small></div>
+<div class=brand>SecurityCyber<small>Admin Center · securitycyber.uk</small></div>
 <div class=nav>{nav}</div></div>
 <div class=main><h1>{e(title)}</h1>{fl}{body}</div></div></body></html>""")
 
@@ -2477,9 +2477,28 @@ async def marketing_kpis_save(request: Request):
 
 
 
+
+@app.post("/marketing/api/compose")
+async def marketing_compose(request: Request):
+    f = await request.form()
+    sched = f.get("schedule") or ""
+    if sched and "T" in sched and len(sched) == 16:
+        sched = sched + ":00Z"
+    return MKT.handoff(
+        ROOT,
+        title=f.get("title") or "",
+        body=f.get("body") or "",
+        url=f.get("url") or "",
+        short_text=f.get("short_text") or "",
+        schedule=sched,
+        publish_now=(f.get("publish_now") in ("1", "true", "on", "yes")),
+        creds=load_env(),
+    )
+
+
 # ----------------------------------------------------------------------------- main
 if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("CTI_UI_PORT", "8799"))
-    print(f"Blue Team CTI panel → http://127.0.0.1:{port}")
+    print(f"SecurityCyber Admin Center → http://127.0.0.1:{port}")
     uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
