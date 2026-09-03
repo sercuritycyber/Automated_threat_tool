@@ -170,6 +170,7 @@ set -e
 case "$PUB_RC" in
   0) echo "[run] publish OK" ;;
   3|4) echo "[run] publish skipped (rc $PUB_RC — no fresh decision)" ;;
+  5) echo "[run] publish: delivery failed — approved post(s) queued for manual (state/manual_post.md), operator notified — non-fatal" ;;
   *) fail publish "$PUB_RC" ;;
 esac
 

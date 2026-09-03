@@ -58,6 +58,29 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def queue_manual(posts: list[dict], decision: dict, reason: str = "") -> None:
+    """Delivery failed — stash the approved post(s) so a human can paste them
+    onto the company page, and leave a paste-ready state/manual_post.md."""
+    pj = STATE / "pending.json"
+    existing = []
+    if pj.exists():
+        try:
+            existing = json.loads(pj.read_text()).get("queue", [])
+        except (json.JSONDecodeError, OSError):
+            existing = []
+    tagged = [{**p, "held_because": "delivery_failed", "held_at": now_iso(),
+               "delivery_error": reason} for p in posts]
+    pj.write_text(json.dumps({"held_at": now_iso(), "manual": True,
+                              "queue": existing + tagged,
+                              "considered": decision.get("considered", [])}, indent=2))
+    lines = [f"# {len(posts)} post(s) awaiting manual publishing to the company page",
+             f"# reason: {reason}", f"# generated: {now_iso()}", ""]
+    for p in posts:
+        lines += [f"## {p.get('title', '(untitled)')}  (score {p.get('score')})", "",
+                  (p.get("post_text") or "").strip(), "", "-" * 60, ""]
+    (STATE / "manual_post.md").write_text("\n".join(lines))
+
+
 def truthy(v) -> bool:
     return str(v).strip().lower() in {"1", "true", "yes", "on"}
 
@@ -363,9 +386,22 @@ def main() -> int:
 
     err = " | ".join(failures) or "no posts succeeded"
     log(f"POST FAILED: {err}")
+    # Delivery failed (e.g. LinkedIn rejecting an org post for lack of
+    # w_organization_social). Subscribers were already served in stage 3, so this
+    # is a warning, not a service failure: queue the approved post(s) for manual
+    # publishing, ping the operator, and exit non-fatally (5).
+    queue_manual(to_post, decision, reason=err[:600])
     write_last_run(decision="post", published=False, error=err[:600],
-                   title=to_post[0].get("title"))
-    return 7
+                   pending_manual=len(to_post), title=to_post[0].get("title"))
+    try:
+        import subprocess
+        subprocess.run(["python3", str(ROOT / "bin" / "notify.py"),
+                        f"CTI: {len(to_post)} approved post(s) not delivered ({err[:120]}). "
+                        f"Queued for manual posting — see state/manual_post.md", "high"],
+                       timeout=20, check=False)
+    except Exception:
+        pass
+    return 5
 
 
 if __name__ == "__main__":
