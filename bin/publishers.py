@@ -123,8 +123,8 @@ def _li_refresh(creds: dict, log):
 # w_organization_social — so every post plugs the company page explicitly.
 LI_COMPANY_PLUG = (
     "\n\n\u2014\u2014\u2014\n"
-    "Published by SecurityCyber \u00b7 UK threat intelligence for small teams.\n"
-    "Follow the company page: https://www.linkedin.com/company/security-cyber-uk"
+    "SecurityCyber \u00b7 UK threat intelligence for small teams \u00b7 #SECURITYCYBERUK\n"
+    "https://www.linkedin.com/company/security-cyber-uk"
 )
 
 
