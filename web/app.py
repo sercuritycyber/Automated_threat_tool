@@ -42,6 +42,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 import publishers  # noqa: E402
 import marketing_desk as MKT  # noqa: E402
 import admin_center as AC  # noqa: E402
+import cve_desk as CVE  # noqa: E402
 try:
     import subscribers as SUBS  # noqa: E402
     import subsconfig           # noqa: E402
@@ -307,6 +308,7 @@ NAV = [
     ("/review", "Review queue"),
     ("/compose", "Compose"),
     ("/candidates", "Candidates"),
+    ("/intel", "Intel Desk"),
     ("/drafts", "Drafts"),
     ("/marketing", "Marketing"),
     ("/service", "CTI service"),
@@ -2419,6 +2421,35 @@ async def subscriptions_save(request: Request):
     save_yaml(CFG / "settings.yaml", s)
     return RedirectResponse("/subscriptions?m=Saved", 303)
 
+
+
+
+# ----------------------------------------------------------------------------- intel desk
+@app.get("/intel", response_class=HTMLResponse)
+def intel_page(request: Request):
+    return page("Intel Desk", CVE.render_page(), "/intel", flash_from(request))
+
+
+@app.get("/intel/api/search")
+def intel_search(q: str = ""):
+    return CVE.search(q, load_env().get("CVEFEED_API_KEY", ""))
+
+
+@app.get("/intel/api/cve/{cve_id}")
+def intel_cve(cve_id: str):
+    return CVE.detail(cve_id, load_env().get("CVEFEED_API_KEY", ""))
+
+
+@app.post("/intel/api/draft")
+async def intel_draft(request: Request):
+    b = await request.json()
+    key = load_env().get("CVEFEED_API_KEY", "")
+    row = CVE.detail(str(b.get("id", "")), key)
+    if row.get("error"):
+        return {"error": row["error"]}
+    d = CVE.draft_text(row)
+    return MKT.handoff(ROOT, title=d["title"], body=d["body"], url=d["url"],
+                       short_text=d["short_text"], publish_now=False, creds=load_env())
 
 
 # ----------------------------------------------------------------------------- admin center
