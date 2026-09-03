@@ -101,8 +101,8 @@ def call_gemini(api_key: str, model: str, user_msg: str) -> str:
     resp = requests.post(url, json=payload, timeout=TIMEOUT)
     if resp.status_code == 429:
         raise RuntimeError(f"quota: {resp.text[:200]}")
-    if resp.status_code >= 500:
-        raise RuntimeError(f"server error {resp.status_code}: {resp.text[:200]}")
+    if resp.status_code >= 400:
+        raise RuntimeError(f"API error {resp.status_code}: {resp.text[:200]}")
     resp.raise_for_status()
     data = resp.json()
     try:
