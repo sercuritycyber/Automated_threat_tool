@@ -105,3 +105,42 @@ connect email, `1ae5ee8` interim personal-profile LinkedIn.)
 4. Rotate the exposed credentials in this session's transcript once stable.
 5. Marketing Desk: add an outbound scheduler that auto-publishes scheduled
    posts at their slot (currently schedule is advisory — the operator publishes).
+
+---
+
+## Revision 2 — Operations Console (2026-09-03, later)
+
+**Change:** the dashboard home (`/`) is now **Operations** — a live command
+surface, not a static render.
+
+| Added | Detail |
+|---|---|
+| **Command bar** | Run pipeline · Arm/Pause posting · Approve next queued (posts the top hold-queue item) · Sync Stripe links (calls the worker endpoint) · Marketing desk · Review queue — each fires inline with a toast, no page navigation. |
+| **Live status strip** | Polls `GET /api/pulse` every 20 s: pipeline state + last/next run, LinkedIn (posts today / this week, target profile, **access-token days remaining**), subscribers (active / pending), alerts sent 24 h, hold-queue depth. Cells colour by health. |
+| **Needs-attention panel** | Surfaces: last run errored, LinkedIn token expiring < 14 d, no network configured, paid subscriber never confirmed, posts waiting in the hold queue, delivery-failed posts queued for manual. Shows "✓ Nothing needs your attention" when clear. |
+| New module | `bin/admin_center.py` — `pulse()` aggregator (5-min cached LinkedIn token introspection) + `console_head()` renderer. |
+| New routes | `GET /api/pulse`, `POST /action/approve-next`, `POST /action/sync-stripe-links`. |
+
+### Incident during deploy (resolved)
+- First attempt placed `admin_center.py` in `web/` (not on `sys.path`) → panel
+  crash-looped `ModuleNotFoundError`. Moved to `bin/` (same as
+  `marketing_desk.py`).
+- Port `8799` was then held by an **orphaned `pasta` network helper** (leftover
+  from an earlier container port-forward test), so uvicorn could not bind and
+  systemd hit its restart limit. Killed the orphan (pid 261319), reset the
+  failed unit, restarted clean.
+- **No data affected.** Cleared one stale `state/manual_post.md` (the Elementor
+  advisory whose delivery failed before the org token existed — since posted).
+
+### Verification (Rev 2)
+| Check | Result |
+|---|---|
+| `ast.parse` `bin/admin_center.py`, `py_compile` `web/app.py` | ✅ pass |
+| Panel service | ✅ `active`, `Application startup complete`, 0 errors post-restart |
+| `GET /` , `/api/pulse` , `/marketing` | ✅ `200` |
+| `/api/pulse` payload | ✅ pipeline=live, LinkedIn=6 posts/24h · token 59 d left · target "company page", 1 active subscriber, queue 0 |
+| Console head rendered into `/` | ✅ command bar + strip + attention panel present |
+| Backlog (4 advisories) | ✅ all live on the company page: SonicWall, JFrog, IT-support, Switchvox |
+
+**Sign-off (Rev 2):** Operations Console live on the production VM, all checks
+pass, no known errors. Commits `01986ca` → `eb253f8`.
