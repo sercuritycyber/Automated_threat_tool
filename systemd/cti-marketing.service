@@ -1,0 +1,9 @@
+[Unit]
+Description=SecurityCyber marketing autoposter — one promo post to socials
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/Threatintel
+ExecStart=/usr/bin/env bash %h/Threatintel/bin/marketing_run.sh
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin

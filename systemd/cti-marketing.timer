@@ -1,0 +1,10 @@
+[Unit]
+Description=SecurityCyber marketing autoposter — 4x/day
+
+[Timer]
+OnCalendar=*-*-* 09,13,17,21:00:00
+Persistent=true
+RandomizedDelaySec=900
+
+[Install]
+WantedBy=timers.target
