@@ -185,8 +185,18 @@ export async function handleEvent(env, cfg, event) {
 
   let result = { action: "ignored", type: etype };
 
+  // The signup intent (if any) rides on client_reference_id. Resolve it once,
+  // up front: a £0 free-plan Payment Link completes in `payment` mode too, so
+  // "mode === payment" alone can't tell a brief from a free subscription — the
+  // intent naming a tier is what does.
+  const checkoutRef = obj.client_reference_id;
+  const checkoutIntent = (etype === "checkout.session.completed" && checkoutRef)
+    ? await db.getIntent(D, checkoutRef) : null;
+
   // ---- one-off purchase (Checkout `payment` mode) ----
-  if (etype === "checkout.session.completed" && (obj.mode === "payment" || obj.metadata?.item === "brief")) {
+  if (etype === "checkout.session.completed"
+      && (obj.metadata?.item === "brief"
+          || (obj.mode === "payment" && !checkoutIntent?.tier))) {
     const email = obj.customer_details?.email || obj.customer_email || null;
     let subId = null;
     if (email) { const s = await db.getByEmail(D, email); if (s) subId = s.id; }
@@ -208,8 +218,8 @@ export async function handleEvent(env, cfg, event) {
     let email = obj.customer_details?.email || obj.customer_email;
     const customer = obj.customer, subscription = obj.subscription;
     let tier = obj.metadata?.tier, cadence = obj.metadata?.cadence;
-    const clientRef = obj.client_reference_id;
-    const intent = clientRef ? await db.getIntent(D, clientRef) : null;
+    const clientRef = checkoutRef;
+    const intent = checkoutIntent;
     if (intent) { tier = tier || intent.tier; cadence = cadence || intent.cadence; email = email || intent.email; }
     if ((!tier || !cadence) && subscription) {
       try {
