@@ -39,7 +39,26 @@ Two things that share a codebase:
 | Python | 3.14 system; pipeline uses `~/Threatintel/.venv` |
 | claude CLI | `~/.local/bin/claude` (2.1.259), OAuth-authed (`~/.claude.json`) |
 
-### 2026-09-03: VM RECOVERED — now on the 100 GB disk
+### 2026-09-03: MIGRATION COMPLETE — VM is sole production
+
+- Verified harvest run on the VM: `decision=post`, real analyst
+  (`fallback=None`), 12 min. Correctly skipped SonicWall/Switchvox/JFrog
+  (already in `history.jsonl`), found 1 genuinely-new post-worthy item, 25
+  subscriber alerts.
+- **`push_to_worker` → 200 `{"received":25}`** — Charlie fixed the
+  INGEST_SECRET. Worker `posts_log` now has the alerts with full
+  `subscriber_text`. **Subscriber delivery works end to end.**
+- **Laptop `cti-harvester.timer` + `cti-panel.service`: STOPPED and disabled.**
+  Laptop repo stays as cold backup.
+- Timer on the VM: next run 08:02 UTC, every 4h, linger on.
+
+**LinkedIn caveat:** that run posted ONE item to Charlie's **personal**
+LinkedIn (`urn:li:share:7501177104982704128`) — `publish.dry_run` was `false`
+and `LINKEDIN_AUTHOR_URN` in `config/env` is still the person URN. Re-set
+`dry_run: true` on the VM. Un-pause only after the org URN + Community
+Management API scope (§4.6).
+
+### 2026-09-03: VM RECOVERED — moved onto the 100 GB disk
 
 Charlie rebooted the VM (cleared the read-only — the btrfs I/O error was
 transient; `write_io_errs` stopped climbing, no new errors since boot) and
