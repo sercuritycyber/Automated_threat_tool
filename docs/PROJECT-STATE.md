@@ -39,7 +39,28 @@ Two things that share a codebase:
 | Python | 3.14 system; pipeline uses `~/Threatintel/.venv` |
 | claude CLI | `~/.local/bin/claude` (2.1.259), OAuth-authed (`~/.claude.json`) |
 
-### 2026-09-03: VM ROOT FS FAILED — laptop re-enabled as fallback
+### 2026-09-03: VM RECOVERED — now on the 100 GB disk
+
+Charlie rebooted the VM (cleared the read-only — the btrfs I/O error was
+transient; `write_io_errs` stopped climbing, no new errors since boot) and
+added a **100 GB disk `/dev/sdb`, ext4, mounted `/mnt/data`**.
+
+Moved onto `/mnt/data` so the 5 GB root can't fill or take the pipeline down
+again (all via rsync + symlink, verified):
+  - `~/.local` (claude CLI, ~1 GB) → `/mnt/data/home/.local`
+  - `~/.claude` + `~/.claude.json` → `/mnt/data/home/`
+  - `~/Threatintel/{state,logs,drafts}` → `/mnt/data/threatintel/`
+  - podman storage graphroot → `/mnt/data/containers/storage`
+    (`~/.config/containers/storage.conf`)
+Root is back to ~2.3 GB used / 2.3 GB free. `history.jsonl` (8 lines) intact.
+
+Harvester timer + panel **re-enabled on the VM**, linger on, folder-trust
+re-asserted. A verification harvest is running.
+
+**Container build now has room** — retry once this run confirms clean
+(still needs the SELinux fix, PROJECT.md §3).
+
+### 2026-09-03: VM ROOT FS FAILED (resolved above)
 
 Minutes after cutover the VM's btrfs root went **read-only** from disk I/O
 errors:
