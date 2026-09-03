@@ -73,33 +73,60 @@ CONFIG = """
   "brief": {
     "link": "https://buy.stripe.com/bJe4gy5dRa9z8IX3Pf3ks02",
     "price_id": "",
-    "name": "SecurityCyber — on-demand threat brief",
+    "name": "SecurityCyber \u2014 on-demand threat brief",
     "currency": "gbp",
     "unit_amount": 4900,
-    "display": "£49"
+    "display": "\u00a349"
   },
   "tiers": {
     "individual": {
       "monthly_link": "https://buy.stripe.com/aFa3cu6hVdlLf7lbhH3ks01",
       "weekly_link": "https://buy.stripe.com/28EdR8dKn5Tj1gv0D33ks00",
-      "monthly_price_id": "", "weekly_price_id": "",
-      "monthly_display": "£8 / month", "weekly_display": "£2 / week",
-      "monthly_pence": 800, "weekly_pence": 200,
+      "monthly_price_id": "",
+      "weekly_price_id": "",
+      "monthly_display": "\u00a38 / month",
+      "weekly_display": "\u00a32 / week",
+      "monthly_pence": 800,
+      "weekly_pence": 200,
       "blurb": "Instant alerts for anything scoring 90+, plus a daily digest.",
-      "instant_min_score": 70, "min_score": 15, "attach_json": false,
-      "channels": ["email", "rss", "discord", "telegram", "ntfy"], "max_channels": 3
+      "instant_min_score": 70,
+      "min_score": 15,
+      "attach_json": false,
+      "channels": [
+        "email",
+        "rss",
+        "discord",
+        "telegram",
+        "ntfy"
+      ],
+      "max_channels": 3
     },
     "team": {
       "monthly_link": "https://buy.stripe.com/bJe5kC8q32H77ETdpP3ks03",
       "weekly_link": "",
-      "monthly_price_id": "", "weekly_price_id": "",
-      "monthly_display": "£18 / month", "weekly_display": "",
-      "monthly_pence": 1800, "weekly_pence": 0,
+      "monthly_price_id": "",
+      "weekly_price_id": "",
+      "monthly_display": "\u00a318 / month",
+      "weekly_display": "",
+      "monthly_pence": 1800,
+      "weekly_pence": 0,
       "blurb": "Everything scoring 75+ instantly, a daily digest, machine-readable JSON, Slack and Discord.",
-      "instant_min_score": 55, "min_score": 10, "attach_json": true,
-      "channels": ["email", "rss", "discord", "slack", "telegram", "webhook", "ntfy"], "max_channels": 7
+      "instant_min_score": 55,
+      "min_score": 10,
+      "attach_json": true,
+      "channels": [
+        "email",
+        "rss",
+        "discord",
+        "slack",
+        "telegram",
+        "webhook",
+        "ntfy"
+      ],
+      "max_channels": 7
     }
-  }
+  },
+  "discord_channel_min_score": 0
 }
 """
 
