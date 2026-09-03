@@ -1,7 +1,7 @@
 // Pure-logic unit checks — run with plain Node (has global Web Crypto).
 //   node worker/test/run.mjs
 import { sign, verify, newId, BadToken, timingSafeEqual } from "../src/tokens.js";
-import { config, priceToTier, priceId, monthlyPence, problems } from "../src/config.js";
+import { config, priceToTier, priceId, monthlyPence, problems, paymentLink } from "../src/config.js";
 import { verifyTarget, teaser, channelAvailability } from "../src/channels.js";
 import { landing, subscribeForm, feedXml } from "../src/pages.js";
 import { alertEmailHtml, alertEmailText } from "../src/emailtpl.js";
@@ -72,6 +72,14 @@ const cNoPrice = config({ ...cenv, CONFIG: JSON.stringify({ tiers: {} }) });
 const landHtml = landing(cNoPrice);
 ok("landing shows monthly AND weekly price", landHtml.includes("£8 / month") && landHtml.includes("£2 / week"));
 ok("landing shows the team tier + one-off brief", landHtml.includes("£18 / month") && landHtml.includes("£49"));
+// ---- free plan ----
+ok("free tier is in config with the £0 payment link",
+  cNoPrice.tiers.free && cNoPrice.tiers.free.free === true
+  && paymentLink(cNoPrice, "free", "monthly").startsWith("https://buy.stripe.com/"));
+ok("landing renders the free card", landHtml.includes("Start free") && landHtml.includes(">Free<"));
+const freeSub = subscribeForm(cNoPrice, "free", "", "", channelAvailability({ RESEND_API_KEY: "re_x" }, cNoPrice));
+ok("free subscribe form: no cadence radios, posts tier=free",
+  !/name=cadence/.test(freeSub) && /value="free"/.test(freeSub) && freeSub.includes('action="/subscribe"'));
 const subHtml = subscribeForm(cNoPrice, "individual", "", "", channelAvailability({ RESEND_API_KEY: "re_x" }, cNoPrice));
 ok("subscribe form offers both cadences", /value="monthly"/.test(subHtml) && /value="weekly"/.test(subHtml));
 ok("subscribe form has a submit path", subHtml.includes('action="/subscribe"'));

@@ -79,6 +79,18 @@ CONFIG = """
     "display": "\u00a349"
   },
   "tiers": {
+    "free": {
+      "monthly_link": "https://buy.stripe.com/eVqbJ07lZ4Pf8IXfxX3ks04",
+      "free": true,
+      "monthly_pence": 0,
+      "weekly_pence": 0,
+      "monthly_display": "Free",
+      "blurb": "The urgent ones only — anything scoring 90+ the moment it's confirmed, plus the once-a-day digest. Email, private RSS or Discord.",
+      "instant_min_score": 90,
+      "min_score": 40,
+      "channels": ["email", "rss", "discord"],
+      "max_channels": 2
+    },
     "individual": {
       "monthly_link": "https://buy.stripe.com/aFa3cu6hVdlLf7lbhH3ks01",
       "weekly_link": "https://buy.stripe.com/28EdR8dKn5Tj1gv0D33ks00",
