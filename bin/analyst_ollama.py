@@ -60,13 +60,42 @@ def _sentences(text: str, n: int) -> str:
     return " ".join(parts[:n]).strip()
 
 
+def _warm(url: str, model: str) -> None:
+    try:
+        req = urllib.request.Request(url.rstrip("/") + "/api/generate",
+            data=json.dumps({"model": model, "prompt": "ok", "stream": False,
+                             "options": {"num_predict": 1}}).encode(),
+            headers={"Content-Type": "application/json"})
+        urllib.request.urlopen(req, timeout=90)
+    except Exception:
+        pass
+
+
 def ask_ollama(url: str, model: str, candidates: dict, timeout: int) -> str:
+    _warm(url, model)
+    # A 3B model cannot chew 49 fat candidates. Send only the fields it needs,
+    # capped, summaries clipped.
+    slim = {
+        "min_score": candidates.get("min_score", 60),
+        "subscriber_min_score": candidates.get("subscriber_min_score", 15),
+        "candidates": [
+            {
+                "title": c.get("title"), "url": c.get("url"), "source": c.get("source"),
+                "cve_ids": c.get("cve_ids") or [],
+                "kev_recent_cves": c.get("kev_recent_cves") or [],
+                "pre_score": round(float(c.get("pre_score") or 0)),
+                "summary": (c.get("summary") or "")[:400],
+            }
+            for c in sorted(candidates.get("candidates", []),
+                            key=lambda x: -(x.get("pre_score") or 0))[:35]
+        ],
+    }
     payload = {
         "model": model,
-        "prompt": PROMPT + "\n\n## INPUT\n" + json.dumps(candidates, default=str),
+        "prompt": PROMPT + "\n\n## INPUT\n" + json.dumps(slim, default=str),
         "stream": False,
         "format": "json",
-        "options": {"temperature": 0.1, "num_ctx": 8192},
+        "options": {"temperature": 0.1, "num_ctx": 16384, "num_predict": 6144},
     }
     req = urllib.request.Request(
         url.rstrip("/") + "/api/generate",
@@ -170,7 +199,7 @@ def main() -> int:
     st = _settings().get("analyst", {}) if isinstance(_settings().get("analyst"), dict) else {}
     url = os.getenv("OLLAMA_URL") or st.get("ollama_url") or "http://100.112.208.108:11434"
     model = os.getenv("OLLAMA_MODEL") or st.get("ollama_model") or "granite3.1-moe:3b"
-    timeout = int(st.get("ollama_timeout_s", 180))
+    timeout = max(240, int(st.get("ollama_timeout_s", 300)))
     esc_score = int(st.get("escalate_score", 75))
 
     try:
