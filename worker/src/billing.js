@@ -256,6 +256,12 @@ export async function handleEvent(env, cfg, event) {
         await db.addChannel(D, sid, "email", email, alreadyLive, "signup");
       } else if (channel.target) {
         await db.addChannel(D, sid, channel.kind, channel.target, alreadyLive, "signup");
+      } else if (channel.kind === "discord" || channel.kind === "telegram") {
+        // Connected after checkout via OAuth / a bot deep-link, so there's no
+        // target to store yet — but record the CHOICE as an unverified,
+        // empty-target row so activateSubscriber knows to email them the
+        // one-click connect link instead of silently doing nothing.
+        await db.addChannel(D, sid, channel.kind, "", alreadyLive, "signup");
       }
       if (intent) await db.consumeIntent(D, clientRef);
       if (alreadyLive) {
