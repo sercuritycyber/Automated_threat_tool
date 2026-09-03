@@ -40,6 +40,7 @@ for d in (STATE, DRAFTS, LOGS):
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "bin"))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 import publishers  # noqa: E402
+import marketing_desk as MKT  # noqa: E402
 try:
     import subscribers as SUBS  # noqa: E402
     import subsconfig           # noqa: E402
@@ -306,6 +307,7 @@ NAV = [
     ("/compose", "Compose"),
     ("/candidates", "Candidates"),
     ("/drafts", "Drafts"),
+    ("/marketing", "Marketing"),
     ("/service", "CTI service"),
     ("/subscribers", "Subscribers"),
     ("/purchases", "Purchases"),
@@ -2415,6 +2417,64 @@ async def subscriptions_save(request: Request):
     tiers["team"]["attach_json"] = bool(f.get("t_attach_json"))
     save_yaml(CFG / "settings.yaml", s)
     return RedirectResponse("/subscriptions?m=Saved", 303)
+
+
+# ----------------------------------------------------------------------------- marketing desk
+@app.get("/marketing", response_class=HTMLResponse)
+def marketing_page(request: Request):
+    return page("Marketing Desk", MKT.render_page(ROOT, load_env()), "/marketing", flash_from(request))
+
+
+@app.get("/marketing/api/posts")
+def marketing_posts():
+    return MKT.posts_payload(ROOT)
+
+
+@app.get("/marketing/api/kpis")
+def marketing_kpis():
+    return MKT.kpis(ROOT, load_env())
+
+
+@app.get("/marketing/api/bundle")
+def marketing_bundle():
+    return MKT.export_bundle(ROOT)
+
+
+@app.post("/marketing/api/post/{pid}")
+async def marketing_update(pid: str, request: Request):
+    f = await request.form()
+    fields = {}
+    for k in ("status", "scheduled_for", "notes", "edited"):
+        if k in f and f.get(k) != "":
+            v = f.get(k)
+            if k == "scheduled_for" and v and "T" in v and len(v) == 16:
+                v = v + ":00Z"
+            fields[k] = v
+    return MKT.update_post(ROOT, pid, **fields)
+
+
+@app.post("/marketing/api/kpis")
+async def marketing_kpis_save(request: Request):
+    f = await request.form()
+    d = MKT.store_load(ROOT)
+    if f.get("monthly"):
+        try:
+            d["budget"]["monthly"] = float(f["monthly"])
+        except (TypeError, ValueError):
+            pass
+    if f.get("spend_item") and f.get("spend_amount"):
+        try:
+            d["budget"]["entries"].append({
+                "item": str(f["spend_item"])[:80], "amount": float(f["spend_amount"]),
+                "at": datetime.now(timezone.utc).isoformat()})
+        except (TypeError, ValueError):
+            pass
+    for k in ("followers", "impressions_30d", "leads_30d", "cac", "mrr"):
+        if f.get(k) not in (None, ""):
+            d["kpis"][k] = str(f[k])
+    MKT.store_save(ROOT, d)
+    return {"ok": True}
+
 
 
 # ----------------------------------------------------------------------------- main
