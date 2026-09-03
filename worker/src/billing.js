@@ -150,6 +150,12 @@ export async function createBriefCheckout(env, cfg, { email, successUrl, cancelU
   return { id: s.id, url: s.url };
 }
 export const getSubscription = (env, id) => req(env, "GET", `/subscriptions/${id}`);
+export const listPaymentLinks = (env) => req(env, "GET", "/payment_links?limit=100");
+export const setPaymentLinkRedirect = (env, id, url) =>
+  req(env, "POST", `/payment_links/${id}`, {
+    after_completion: { type: "redirect", redirect: { url } },
+  });
+
 export const cancelSubscription = (env, id) => req(env, "DELETE", `/subscriptions/${id}`);
 
 // ---- webhook signature (t=…,v1=…) --------------------------------

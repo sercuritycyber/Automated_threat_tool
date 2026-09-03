@@ -1270,6 +1270,32 @@ async function adminApi(request, env, cfg, url, path) {
     const total = (await D.prepare(`SELECT COUNT(*) n FROM "${seg[2]}"`).first())?.n ?? null;
     return json({ table: seg[2], columns: cols.map((c) => c.name), rows, total, limit, offset });
   }
+  // POST /admin/stripe/links — set every Payment Link's after-payment redirect
+  // (buyers otherwise land on Stripe's receipt and miss /welcome). Re-runnable.
+  if (seg[1] === "stripe" && seg[2] === "links" && request.method === "POST") {
+    const welcome = `${cfg.site_url}/welcome`;
+    const thanks = `${cfg.site_url}/brief/thanks`;
+    const briefUrl = (cfg.brief && cfg.brief.link) || "";
+    let links;
+    try { links = (await billing.listPaymentLinks(env)).data || []; }
+    catch (e) {
+      return json({ error: String(e).includes("STRIPE_SECRET_KEY")
+        ? "STRIPE_SECRET_KEY is not set on the Worker — set it (wrangler secret put) or configure the redirects in the Stripe dashboard."
+        : `stripe: ${e}` }, 502);
+    }
+    const out = [];
+    for (const l of links) {
+      const want = (briefUrl && l.url === briefUrl) ? thanks : welcome;
+      const cur = l.after_completion?.type === "redirect" ? (l.after_completion.redirect?.url || null) : null;
+      if (cur === want) { out.push({ url: l.url, redirect: cur, changed: false }); continue; }
+      try {
+        await billing.setPaymentLinkRedirect(env, l.id, want);
+        out.push({ url: l.url, redirect: want, changed: true, was: cur || "(stripe receipt page)" });
+      } catch (e) { out.push({ url: l.url, error: String(e).slice(0, 150) }); }
+    }
+    return json({ updated: out.filter((x) => x.changed).length, links: out });
+  }
+
   if (seg[1] === "add" && request.method === "POST") {
     const b = await request.json().catch(() => ({}));
     if (!/@/.test(b.email || "")) return json({ error: "bad email" }, 400);
