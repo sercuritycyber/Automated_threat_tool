@@ -78,10 +78,18 @@ claude -p "$(cat "$ROOT/prompts/analyst.md")" \
 ANALYST_RC=$?
 set -e
 if [[ "$ANALYST_RC" -ne 0 ]]; then
-  # Token limit, outage, bad response. Don't lose the whole run: a deterministic
-  # fallback keeps the paid subscriber feed alive (decision=skip, no public post).
-  echo "[run] analyst exited $ANALYST_RC — deterministic fallback for subscribers"
-  python3 "$ROOT/bin/analyst_fallback.py" || echo "[run] analyst_fallback returned $? (non-fatal)"
+  # Token limit, outage, bad response.
+  # First try Antigravity (Gemini) — a real analyst that can still decide to post.
+  echo "[run] analyst exited $ANALYST_RC — trying Antigravity (Gemini) backup analyst"
+  set +e
+  python3 "$ROOT/bin/analyst_antigravity.py"
+  AGY_RC=$?
+  set -e
+  if [[ "$AGY_RC" -ne 0 ]]; then
+    # Antigravity also unavailable (no key, quota, etc.) — deterministic fallback.
+    echo "[run] Antigravity unavailable (rc $AGY_RC) — deterministic fallback for subscribers"
+    python3 "$ROOT/bin/analyst_fallback.py" || echo "[run] analyst_fallback returned $? (non-fatal)"
+  fi
 fi
 
 # Stage 3: paying subscribers FIRST. They are buying the lead time as much as
