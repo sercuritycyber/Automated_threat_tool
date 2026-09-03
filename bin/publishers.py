@@ -123,15 +123,25 @@ def _li_refresh(creds: dict, log):
 # w_organization_social — so every post plugs the company page explicitly.
 LI_COMPANY_PLUG = (
     "\n\n\u2014\u2014\u2014\n"
-    "SecurityCyber \u00b7 UK threat intelligence for small teams \u00b7 #SECURITYCYBERUK\n"
-    "https://www.linkedin.com/company/security-cyber-uk"
+    "SecurityCyber \u00b7 UK threat intelligence for small teams \u00b7 #SECURITYCYBERUK"
 )
+
+
+
+LI_CARD = {
+    "article": {
+        "source": "https://securitycyber.uk/cti",
+        "title": "SecurityCyber CTI \u2014 threat intelligence alerts for defenders",
+        "description": ("Public advisories cross-referenced against CISA KEV, a plain-English "
+                        "brief and an impact score on each one. Free plan, no card."),
+    }
+}
 
 
 def _li_with_plug(text: str) -> str:
     """Append the company-page plug once, staying under LinkedIn's hard cap."""
     t = (text or "").rstrip()
-    if "company/security-cyber-uk" in t:
+    if "#SECURITYCYBERUK" in t:
         return t
     combined = t + LI_COMPANY_PLUG
     return combined if len(combined) <= 2950 else t
@@ -151,6 +161,7 @@ def post_linkedin(text: str, creds: dict, settings: dict, short_text=None, log=p
             "distribution": {"feedDistribution": "MAIN_FEED", "targetEntities": [],
                              "thirdPartyDistributionChannels": []},
             "lifecycleState": "PUBLISHED", "isReshareDisabledByAuthor": False,
+            "content": LI_CARD,
         }
         return requests.post(_LI_POSTS, headers={
             "Authorization": f"Bearer {tok}", "Content-Type": "application/json",

@@ -1013,6 +1013,7 @@ function discordChannelPost(cfg, p) {
     (p.subscriber_text || p.post_text || "").trim(),
     cves ? `CVE: ${cves}` : "",
     p.url ? `<${p.url}>` : "",
+    "https://securitycyber.uk/cti",
   ].filter(Boolean);
   return parts.join("\n\n");
 }

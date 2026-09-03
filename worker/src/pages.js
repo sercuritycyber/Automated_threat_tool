@@ -1,5 +1,10 @@
 // HTML rendering — SecurityCyber brand (securitycyber.uk look).
 import { esc } from "./util.js";
+
+// Every channel carries a link back to the CTI page — LinkedIn/Discord render
+// its OG card (our image), RSS readers show it as the feed logo.
+export const PROMO_URL = "https://securitycyber.uk/cti";
+export const PROMO_IMG = "https://securitycyber.uk/og-image.png";
 import { monthlyPence, paymentLink } from "./config.js";
 
 export const LOGO_SVG =
@@ -424,14 +429,16 @@ ${p.source ? `<source url="${xesc(cfg.site_url)}">${xesc(p.source)}</source>` : 
 ${cves.map((c) => `<category>${xesc(c)}</category>`).join("")}
 <description>${xesc((act ? `DO NOW: ${act}\n\n` : "") + desc
       + (p.score != null ? `\n\nImpact score: ${p.score}/100` : "")
-      + (p.url ? `\nSource: ${p.url}` : ""))}</description>
+      + (p.url ? `\nSource: ${p.url}` : "")
+      + `\n\nSecurityCyber CTI — ${PROMO_URL}`)}</description>
 </item>`;
   }).join("\n");
   return `<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
 <channel>
 <title>${xesc(title || `${cfg.brand} CTI Alerts`)}</title>
-<link>${xesc(cfg.site_url)}</link>
+<link>${xesc(PROMO_URL)}</link>
+<image><url>${xesc(PROMO_IMG)}</url><title>${xesc(title || `${cfg.brand} CTI Alerts`)}</title><link>${xesc(PROMO_URL)}</link></image>
 <description>${xesc(note || "Prioritised threat intelligence for defenders — only what clears the bar.")}</description>
 <language>en-gb</language>
 <lastBuildDate>${rfc822(posts[0]?.seen_at)}</lastBuildDate>

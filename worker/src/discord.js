@@ -159,7 +159,9 @@ export async function postToChannel(env, content) {
       method: "POST",
       headers: { "Content-Type": "application/json", "User-Agent": UA },
       // suppress embeds and never let alert text ping anyone
-      body: JSON.stringify({ content: body, flags: 4, allowed_mentions: { parse: [] } }),
+      // no flags:4 — the trailing securitycyber.uk/cti link is allowed to render its
+      // card (our OG image); the source URL stays wrapped in <> so only ours embeds
+      body: JSON.stringify({ content: body, allowed_mentions: { parse: [] } }),
     });
     return r.ok ? { ok: true } : { ok: false, error: `HTTP ${r.status}: ${(await r.text()).slice(0, 150)}` };
   } catch (e) { return { ok: false, error: String(e).slice(0, 200) }; }
