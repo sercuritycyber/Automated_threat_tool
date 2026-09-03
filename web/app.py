@@ -41,6 +41,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "bin"))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 import publishers  # noqa: E402
 import marketing_desk as MKT  # noqa: E402
+import admin_center as AC  # noqa: E402
 try:
     import subscribers as SUBS  # noqa: E402
     import subsconfig           # noqa: E402
@@ -302,7 +303,7 @@ animation:pulse 2.4s infinite}
 """
 
 NAV = [
-    ("/", "Dashboard"),
+    ("/", "Operations"),
     ("/review", "Review queue"),
     ("/compose", "Compose"),
     ("/candidates", "Candidates"),
@@ -665,7 +666,7 @@ def dashboard(request: Request):
 </div>
 {script}
 """
-    return page("Dashboard", body, "/", flash_from(request))
+    return page("Operations", AC.console_head() + body, "/", flash_from(request))
 
 
 @app.post("/reset-test")
@@ -2417,6 +2418,65 @@ async def subscriptions_save(request: Request):
     tiers["team"]["attach_json"] = bool(f.get("t_attach_json"))
     save_yaml(CFG / "settings.yaml", s)
     return RedirectResponse("/subscriptions?m=Saved", 303)
+
+
+
+# ----------------------------------------------------------------------------- admin center
+@app.get("/api/pulse")
+def api_pulse():
+    return AC.pulse(
+        ROOT, load_env(),
+        settings=load_yaml(CFG / "settings.yaml"),
+        next_run=next_run_iso(),
+        targets_ready=bool(configured_targets()),
+    )
+
+
+@app.post("/action/approve-next")
+def action_approve_next():
+    q = queue_load() or {}
+    items = q.get("queue", []) if isinstance(q.get("queue"), list) else []
+    if not items:
+        return {"message": "Hold queue is empty."}
+    p = items[0]
+    settings = load_yaml(CFG / "settings.yaml")
+    try:
+        r = publishers.post_linkedin(p.get("post_text", ""), load_env(), settings,
+                                     short_text=p.get("short_text"))
+    except Exception as ex:  # noqa: BLE001
+        r = {"ok": False, "error": f"{type(ex).__name__}: {ex}"}
+    if r.get("ok"):
+        q["queue"] = items[1:]
+        queue_save(q)
+        with (STATE / "history.jsonl").open("a") as fh:
+            fh.write(json.dumps({
+                "posted_at": datetime.now(timezone.utc).isoformat(),
+                "title": p.get("title"), "url": p.get("url"), "score": p.get("score"),
+                "post_id": r.get("id"), "post_url": r.get("url"),
+                "targets": ["linkedin"], "author": "organization", "source": "approve",
+            }) + "\n")
+        return {"message": f"Posted “{(p.get('title') or '')[:48]}” — {r.get('url', '')}"}
+    return {"message": f"Post failed — {str(r.get('error'))[:140]}"}
+
+
+@app.post("/action/sync-stripe-links")
+def action_sync_stripe_links():
+    env = load_env()
+    wu = (env.get("CTI_WORKER_URL") or "").rstrip("/")
+    tok = env.get("CTI_ADMIN_TOKEN")
+    if not (wu and tok):
+        return {"message": "CTI_WORKER_URL / CTI_ADMIN_TOKEN not set in config/env."}
+    try:
+        r = requests.post(f"{wu}/admin/stripe/links",
+                          headers={"Authorization": f"Bearer {tok}",
+                                   "User-Agent": "Mozilla/5.0 (admin-center)"}, timeout=25)
+        j = r.json()
+    except Exception as ex:  # noqa: BLE001
+        return {"message": f"error: {ex}"}
+    if isinstance(j, dict) and j.get("error"):
+        return {"message": j["error"]}
+    n = j.get("updated", 0) if isinstance(j, dict) else 0
+    return {"message": f"Stripe links synced — {n} redirect(s) updated to /welcome."}
 
 
 # ----------------------------------------------------------------------------- marketing desk
