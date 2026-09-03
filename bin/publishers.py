@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import hmac
 import re
 import secrets
@@ -334,16 +335,46 @@ def post_email(text: str, creds: dict, settings: dict, short_text=None, log=prin
 
 
 # ---------------------------------------------------------------- registry
+
+# ---------------------------------------------------------------- Telegram (channel)
+def post_telegram(text: str, creds: dict, settings: dict, short_text=None, log=print) -> dict:
+    token = creds.get("TELEGRAM_BOT_TOKEN")
+    chat = creds.get("TELEGRAM_CHANNEL") or creds.get("TELEGRAM_CHAT_ID")
+    if not (token and chat):
+        return _res("telegram", False, error="need TELEGRAM_BOT_TOKEN + TELEGRAM_CHANNEL")
+    body = text if len(text) <= 4096 else teaser(text, 4000, short_text)
+    payload = {
+        "chat_id": chat, "text": body,
+        # force our link-preview card (our OG image) rather than the source URL's
+        "link_preview_options": json.dumps({"url": "https://securitycyber.uk/cti",
+                                            "prefer_large_media": True}),
+    }
+    try:
+        r = requests.post(f"https://api.telegram.org/bot{token}/sendMessage",
+                          data=payload, headers={"User-Agent": UA}, timeout=30)
+    except requests.RequestException as e:
+        return _res("telegram", False, error=str(e)[:300])
+    j = r.json() if r.content else {}
+    if not j.get("ok"):
+        return _res("telegram", False, error=f"HTTP {r.status_code}: {j.get('description') or r.text[:200]}")
+    res = j.get("result", {})
+    mid = res.get("message_id", "")
+    cu = str(chat).lstrip("@")
+    url = f"https://t.me/{cu}/{mid}" if cu and not cu.startswith("-") else ""
+    return _res("telegram", True, id=str(mid), url=url)
+
+
 PROVIDERS = {
     "linkedin": post_linkedin,
     "mastodon": post_mastodon,
     "bluesky": post_bluesky,
     "x": post_x,
     "email": post_email,
+    "telegram": post_telegram,
 }
 
 PROVIDER_LABELS = {"linkedin": "LinkedIn", "mastodon": "Mastodon", "bluesky": "Bluesky",
-                   "x": "X / Twitter", "email": "Email"}
+                   "x": "X / Twitter", "email": "Email", "telegram": "Telegram"}
 
 # (env key, label, hint) — drives the Secrets page and the credential check
 PROVIDER_KEYS: dict[str, list[tuple[str, str, str]]] = {
@@ -369,6 +400,10 @@ PROVIDER_KEYS: dict[str, list[tuple[str, str, str]]] = {
         ("X_ACCESS_TOKEN", "Access token", "must have Read and write permission"),
         ("X_ACCESS_SECRET", "Access token secret", ""),
     ],
+    "telegram": [
+        ("TELEGRAM_BOT_TOKEN", "Bot token", "from @BotFather"),
+        ("TELEGRAM_CHANNEL", "Channel", "@username or numeric id — the bot must be a channel admin"),
+    ],
     "email": [
         ("EMAIL_SMTP_HOST", "SMTP host", "e.g. smtp.gmail.com"),
         ("EMAIL_SMTP_PORT", "SMTP port", "587 STARTTLS (default) or 465 SSL"),
@@ -386,6 +421,7 @@ _REQUIRED = {
     "bluesky": ["BLUESKY_HANDLE", "BLUESKY_APP_PASSWORD"],
     "x": ["X_API_KEY", "X_API_SECRET", "X_ACCESS_TOKEN", "X_ACCESS_SECRET"],
     "email": ["EMAIL_SMTP_HOST", "EMAIL_TO"],
+    "telegram": ["TELEGRAM_BOT_TOKEN", "TELEGRAM_CHANNEL"],
 }
 
 
