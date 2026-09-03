@@ -38,6 +38,25 @@ const DEFAULTS = {
     blurb: "A one-off, analyst-written deep dive on a vulnerability or incident of your choosing — impact, exposure, detection and response — delivered by email within two working days.",
   },
   tiers: {
+    // Free plan. £0 Stripe Payment Link — Stripe still runs the sign-up page
+    // (collects the email, no card, no charge) and fires
+    // checkout.session.completed, so the same webhook path provisions it. The
+    // signup intent carries tier=free; there is no recurring price and nothing
+    // ever lapses. A capped Individual: only the genuinely urgent items
+    // interrupt (instant_min_score 90), everything above the floor still lands
+    // in the daily digest and private feed.
+    free: {
+      monthly_link: "https://buy.stripe.com/eVqbJ07lZ4Pf8IXfxX3ks04",
+      weekly_link: "",
+      monthly_price_id: "", weekly_price_id: "",
+      monthly_display: "Free", weekly_display: "",
+      monthly_pence: 0, weekly_pence: 0,
+      free: true,
+      blurb: "The urgent ones only — anything scoring 90+ the moment it's confirmed, plus the once-a-day digest. Email, private RSS or Discord.",
+      instant_min_score: 90, attach_json: false,
+      min_score: 40,
+      channels: ["email", "rss", "discord"], max_channels: 2,
+    },
     individual: {
       // Stripe Payment Links — preferred. When set, "Continue to payment"
       // redirects straight here with ?client_reference_id=<signup intent>, so

@@ -7,11 +7,24 @@
 
 import { esc } from "./util.js";
 
+// Brand: blue (#3b82f6) is the UI accent everywhere on securitycyber.uk; red is
+// reserved for the "Cyber" wordmark and a genuine severity warning. Section
+// labels, rules and the CTA use the accent so this email matches the site and
+// cti.securitycyber.uk. Severity badges stay semantic.
 const C = {
   bg: "#0b1120", card: "#151f32", border: "#24344d",
-  text: "#f1f5f9", muted: "#94a3b8", red: "#ef4444",
-  badgeCritBg: "#7f1d1d", badgeCritTx: "#fca5a5",
+  text: "#f1f5f9", muted: "#94a3b8", red: "#dc2626",
+  accent: "#3b82f6", accentDark: "#2563eb", accentTint: "rgba(59,130,246,.10)",
   badgeKevBg: "#991b1b", badgeKevTx: "#fecaca",
+};
+
+// Severity → badge colours. Critical/High read as a warning (red/amber),
+// Moderate amber-soft, Advisory sits on the accent.
+const SEV_BADGE = {
+  CRITICAL: ["#7f1d1d", "#fca5a5"],
+  HIGH:     ["#7c2d12", "#fdba74"],
+  MODERATE: ["#78350f", "#fcd34d"],
+  ADVISORY: ["#1e3a8a", "#93c5fd"],
 };
 
 // splits "line one\nline two" into <p> paragraphs, escaped
@@ -31,7 +44,7 @@ function badge(text, bg, tx) {
 export function alertEmailHtml(cfg, alert, links = {}) {
   const score = Number(alert.score ?? 0);
   const sev = score >= 90 ? "CRITICAL" : score >= 70 ? "HIGH" : score >= 40 ? "MODERATE" : "ADVISORY";
-  const badges = [badge(sev, C.badgeCritBg, C.badgeCritTx)];
+  const badges = [badge(sev, ...(SEV_BADGE[sev] || SEV_BADGE.ADVISORY))];
   if (alert.kev || /\bKEV\b/i.test(alert.source || "")) badges.push(badge("CISA KEV", C.badgeKevBg, C.badgeKevTx));
   const cves = (alert.cve_ids || []).filter(Boolean);
 
@@ -63,7 +76,7 @@ export function alertEmailHtml(cfg, alert, links = {}) {
   font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:${C.text}">
 <table width="100%" cellpadding="0" cellspacing="0" style="max-width:680px;margin:0 auto;background:${C.bg};
   border:1px solid ${C.border};border-radius:8px">
-  <tr><td style="padding:24px 32px;background:#080d18;border-bottom:2px solid ${C.red}">
+  <tr><td style="padding:24px 32px;background:#080d18;border-bottom:2px solid ${C.accent}">
     <table width="100%"><tr>
       <td style="font-size:24px;font-weight:800;color:#fff">Security<span style="color:${C.red}">Cyber</span></td>
       <td align="right" style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:${C.muted};font-weight:600">
@@ -72,7 +85,7 @@ export function alertEmailHtml(cfg, alert, links = {}) {
   </td></tr>
 
   <tr><td style="padding:22px 32px;border-bottom:1px solid ${C.border};
-    background:linear-gradient(180deg,rgba(239,68,68,.10) 0%,rgba(21,31,50,0) 100%)">
+    background:linear-gradient(180deg,${C.accentTint} 0%,rgba(21,31,50,0) 100%)">
     <div style="margin-bottom:12px">${badges.join("")}</div>
     <h1 style="font-size:20px;font-weight:700;margin:0 0 8px;line-height:1.3;color:#fff">${esc(alert.title || "Threat alert")}</h1>
     ${meta ? `<p style="font-size:13px;color:${C.muted};margin:0">${esc(meta)}</p>` : ""}
@@ -81,18 +94,18 @@ export function alertEmailHtml(cfg, alert, links = {}) {
   <tr><td style="padding:24px 32px">
     <table width="100%" cellpadding="0" cellspacing="0" style="margin:0 -6px 12px">${gridRows}</table>
 
-    ${action ? `<div style="font-size:13px;text-transform:uppercase;letter-spacing:1px;color:${C.red};
+    ${action ? `<div style="font-size:13px;text-transform:uppercase;letter-spacing:1px;color:${C.accent};
       font-weight:700;margin:16px 0 8px">Do this now</div>
-      <div style="background:${C.card};border-left:3px solid ${C.red};padding:14px 16px;border-radius:0 6px 6px 0;
+      <div style="background:${C.card};border-left:3px solid ${C.accent};padding:14px 16px;border-radius:0 6px 6px 0;
       font-size:14px;line-height:1.6;color:#cbd5e1;margin-bottom:20px">${esc(action)}</div>` : ""}
 
-    <div style="font-size:13px;text-transform:uppercase;letter-spacing:1px;color:${C.red};
+    <div style="font-size:13px;text-transform:uppercase;letter-spacing:1px;color:${C.accent};
       font-weight:700;margin:16px 0 8px">Analyst brief</div>
-    <div style="background:${C.card};border-left:3px solid ${C.red};padding:16px;border-radius:0 6px 6px 0;
+    <div style="background:${C.card};border-left:3px solid ${C.accent};padding:16px;border-radius:0 6px 6px 0;
       font-size:14px;line-height:1.6;color:#cbd5e1;margin-bottom:20px">${paras(body)}</div>
 
     ${alert.url ? `<div style="margin-top:20px"><a href="${esc(alert.url)}" style="display:inline-block;
-      background:${C.red};color:#fff;text-decoration:none;font-weight:600;font-size:14px;padding:12px 24px;
+      background:${C.accent};color:#fff;text-decoration:none;font-weight:600;font-size:14px;padding:12px 24px;
       border-radius:6px">Read the source →</a></div>` : ""}
   </td></tr>
 

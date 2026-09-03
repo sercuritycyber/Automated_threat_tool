@@ -112,8 +112,13 @@ async function route(request, env, ctx, url, path, cfg) {
     // Checkout is live when the tier has a price in pence AND there's some way
     // to take the money — a Payment Link for either cadence, or a secret key
     // for an API session. Blank Stripe price ids must NOT hide the form.
-    const priced = Number(t.monthly_pence) > 0 || Number(t.weekly_pence) > 0;
-    const payable = canCheckout(cfg, env, tier, "monthly") || canCheckout(cfg, env, tier, "weekly");
+    // The free plan has no price in pence — it's gated purely on having a
+    // (£0) Payment Link, so it must not be hidden by the "priced" check.
+    const isFree = !!t.free;
+    const priced = isFree || Number(t.monthly_pence) > 0 || Number(t.weekly_pence) > 0;
+    const payable = isFree
+      ? !!paymentLink(cfg, tier, "monthly")
+      : canCheckout(cfg, env, tier, "monthly") || canCheckout(cfg, env, tier, "weekly");
     if (!priced || !payable)
       return html(simple(cfg, "Almost there", "Checkout isn't switched on yet",
         "Billing for this plan is being finalised — check back shortly."));
@@ -436,7 +441,7 @@ async function stripeWebhook(request, env, cfg) {
     const t = await sign(env, { sub: res.subscriber_id, act: "confirm" }, 14 * 86400);
     const where = res.channel ? chanLabel(res.channel.kind) : "email";
     await send(env, cfg, "email", res.email, "Confirm your SecurityCyber CTI alerts",
-      `Thanks for subscribing — ${res.tier} plan, billed ${res.cadence}.\n\n` +
+      `Thanks for subscribing — ${cfg.tiers[res.tier]?.free ? "the free plan" : `${res.tier} plan, billed ${res.cadence}`}.\n\n` +
       `Confirm your email to switch your alerts on:\n\n${cfg.site_url}/confirm?t=${t}\n\n` +
       `Your alerts will go to: ${where}.\nThis link works for 14 days. If you didn't subscribe, ignore this and email ${cfg.contact_email}.`);
     await db.logEvent(env.DB, "confirm_email_sent", res.subscriber_id, { cadence: res.cadence });

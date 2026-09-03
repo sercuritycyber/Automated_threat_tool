@@ -1,6 +1,6 @@
 // HTML rendering — SecurityCyber brand (securitycyber.uk look).
 import { esc } from "./util.js";
-import { monthlyPence } from "./config.js";
+import { monthlyPence, paymentLink } from "./config.js";
 
 export const LOGO_SVG =
   '<svg viewBox="0 0 48 46" width="26" height="26" fill="none" aria-hidden="true">' +
@@ -151,9 +151,25 @@ export const chanLabel = (k) => (CHAN_META[k] || [k])[0];
 export function landing(cfg, flash = "", flashKind = "", buyable = null) {
   const cap = (s) => s[0].toUpperCase() + s.slice(1);
   let tiers = "";
-  for (const name of ["individual", "team"]) {
+  for (const name of ["free", "individual", "team"]) {
     const t = cfg.tiers[name]; if (!t) continue;
     const chans = (t.channels || []).map(chanLabel).join(" · ");
+    // Free plan: no cadence toggle, no price to swap — one static card that the
+    // billing toggle never hides (data-cads covers both periods).
+    if (t.free) {
+      if (!paymentLink(cfg, name, "monthly")) continue;
+      tiers += `<div class=tier data-cads="monthly weekly"><h3>Free</h3>
+<div class=p1>£0 <span class=p2>no card</span></div>
+<p class=muted style="margin-top:8px">${esc(t.blurb || "")}</p>
+<ul>
+<li>The genuinely urgent items — scoring ${Number(t.instant_min_score) || 90}+ — the moment they're confirmed</li>
+<li>The once-a-day digest of everything above the line</li>
+<li>Goes to ${esc(chans)}</li>
+<li>Upgrade any time for a lower threshold, more channels and instant JSON</li>
+</ul>
+<a class="btn ghost" href="/subscribe?tier=free">Start free →</a></div>`;
+      continue;
+    }
     // Only advertise a cadence we can actually take money for, so the pricing
     // page and the signup form never disagree about what's on sale.
     const b = buyable ? (buyable[name] || {}) : { monthly: true, weekly: true };
@@ -304,7 +320,8 @@ bad week, you get the full picture — fast.</p></div>
 <button type=button class=bt data-cad=weekly aria-pressed=false>Weekly</button>
 </div>
 <div class=tiers>${tiers}${briefCard}</div>
-<p class=muted style="margin-top:12px">Weekly or monthly, cancel anytime, no contract.
+<p class=muted style="margin-top:12px">Start on the free plan and upgrade when you want a lower threshold —
+no card for that one. Paid plans: weekly or monthly, cancel anytime, no contract.
 Card handled by Stripe — it never touches our servers. Prices in GBP, no VAT.</p>
 </div>
 <script>(function(){
@@ -449,12 +466,13 @@ export function subscribeForm(cfg, tier, flash = "", flashKind = "", avail = nul
       + `data-ph="${esc(CHAN_META[p][2])}">${esc(label)}</option>`;
   }).join("");
   const contact = cfg.contact_email || "securitycyber_cti@securitycyber.uk";
+  const isFree = !!t.free;
   const body = `
-<h1>Subscribe — ${tier[0].toUpperCase() + tier.slice(1)}</h1>
+<h1>${isFree ? "Start free" : `Subscribe — ${tier[0].toUpperCase() + tier.slice(1)}`}</h1>
 <p class=lede>${esc(t.blurb || "")}</p>
 <form method=post action="/subscribe" id=sf>
 <input type=hidden name=tier value="${tier}">
-<label>Billing</label><div class=seg>${cadOpts}</div>
+${cadOpts ? `<label>Billing</label><div class=seg>${cadOpts}</div>` : ""}
 <label>Your email <small>— your account + where the confirmation goes</small></label>
 <input type=email name=email required placeholder="you@example.com">
 <label>Send alerts to</label>
@@ -465,9 +483,11 @@ export function subscribeForm(cfg, tier, flash = "", flashKind = "", avail = nul
 <input type=checkbox name=agree required style="width:auto">&nbsp;I agree to the
 <a href="/terms" target=_blank>Terms</a> and <a href="/privacy" target=_blank>Privacy Policy</a>,
 and I want alerts to start straight away.</label>
-<div class=row style="margin-top:16px"><button class=btn>Continue to payment →</button>
+<div class=row style="margin-top:16px"><button class=btn>${isFree ? "Start free →" : "Continue to payment →"}</button>
 <a class="btn ghost" href="/">Back</a></div>
-<p class=muted style="margin-top:10px">Card details are handled by Stripe — they never touch our servers.
+<p class=muted style="margin-top:10px">${isFree
+    ? "No card and no charge — the free plan uses the same secure sign-up, then confirm your email and alerts start."
+    : "Card details are handled by Stripe — they never touch our servers."}
 Questions: <a href="mailto:${esc(contact)}">${esc(contact)}</a>.</p>
 </form>
 <script>(function(){var s=document.getElementById('plat'),h=document.getElementById('hint'),t=document.getElementById('tgt');
