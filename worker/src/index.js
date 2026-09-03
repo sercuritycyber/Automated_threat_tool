@@ -942,6 +942,25 @@ async function telegramWebhook(request, env, cfg) {
   if (env.TELEGRAM_WEBHOOK_SECRET && request.headers.get("x-telegram-bot-api-secret-token") !== env.TELEGRAM_WEBHOOK_SECRET)
     return json({ ok: false }, 403);
   let upd; try { upd = await request.json(); } catch { return json({ ok: true }); }
+
+  // Bot added to / promoted in a channel — capture the chat id so broadcast can
+  // be switched on without hunting for the numeric id.
+  const cm = upd.my_chat_member;
+  if (cm && cm.chat && (cm.chat.type === "channel" || cm.chat.type === "supergroup")) {
+    const st = cm.new_chat_member && cm.new_chat_member.status;
+    if (st === "administrator" || st === "creator") {
+      await db.kvSet(env.DB, "tg_channel_id", String(cm.chat.id)).catch(() => {});
+      await db.kvSet(env.DB, "tg_channel_title", cm.chat.title || "").catch(() => {});
+      await notifyOwner(env, cfg,
+        `Telegram: the bot is now an admin of "${cm.chat.title}" (chat id ${cm.chat.id}). `
+        + `Broadcast can be switched on.`).catch(() => {});
+    } else if (["left", "kicked", "member", "restricted"].includes(st)) {
+      await notifyOwner(env, cfg,
+        `Telegram: the bot lost posting rights on "${cm.chat.title}" (status ${st}).`).catch(() => {});
+    }
+    return json({ ok: true });
+  }
+
   const msg = upd.message || upd.edited_message || {};
   const t = (msg.text || "").trim();
   const chatId = String((msg.chat || {}).id || "");
