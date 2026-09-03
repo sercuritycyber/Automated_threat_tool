@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Blue Team Podcast — CTI harvest + publish orchestrator.
-# Stages: ingest (python) -> analyst (claude -p) -> publish (python).
+# Stages: ingest (python) -> analyst -> publish (python).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -70,26 +70,83 @@ if [[ "$USED" -ge "$MAXDAY" ]]; then
 fi
 echo "[run] $CAND_COUNT candidates queued for the analyst  ($USED/$MAXDAY posts used today)"
 
-echo "[run] stage 2/4 : analyst (claude -p)"
+# --- Analyst engine — config/settings.yaml -> analyst.engine ------------
+#   claude       claude -p first (full verified analyst), then Antigravity
+#                (Gemini), then local ollama, then the deterministic fallback.
+#                This is the default: Claude leads, ollama is the safety net.
+#   ollama       local model only; deterministic fallback if it's down.
+#                0 Claude tokens.
+#   antigravity  Antigravity (Gemini) first, then ollama, then deterministic.
+#   auto         ollama triage, then a NARROW claude -p deep pass on just the
+#                KEV/high-score items (state/escalate.json) when
+#                analyst.deep_pass; full claude -p if ollama triage fails.
+ENGINE="$(python3 - <<'PYEOF'
+import pathlib
+try:
+    import yaml
+    s = yaml.safe_load(pathlib.Path("config/settings.yaml").read_text()) or {}
+    a = s.get("analyst") or {}
+    print((a.get("engine") or "claude").strip().lower(),
+          "1" if a.get("deep_pass") else "0")
+except Exception:
+    print("claude 0")
+PYEOF
+)"
+DEEP="${ENGINE##* }"; ENGINE="${ENGINE%% *}"
+echo "[run] stage 2/4 : analyst (engine=$ENGINE)"
+
+run_claude_analyst() {
+  claude -p "$(cat "$ROOT/prompts/analyst.md")" \
+    --allowedTools "Read,Write,WebFetch" --permission-mode acceptEdits
+}
+
 set +e
-claude -p "$(cat "$ROOT/prompts/analyst.md")" \
-  --allowedTools "Read,Write,WebFetch" \
-  --permission-mode acceptEdits
-ANALYST_RC=$?
+ANALYST_RC=1
+case "$ENGINE" in
+  ollama|auto)
+    python3 "$ROOT/bin/analyst_ollama.py"; ANALYST_RC=$?
+    if [[ "$ANALYST_RC" -eq 0 && "$ENGINE" == "auto" && "$DEEP" == "1" && -s "$ROOT/state/escalate.json" ]]; then
+      HOT=$(python3 -c 'import json;print(len(json.load(open("state/escalate.json")).get("candidates",[])))' 2>/dev/null || echo 0)
+      if [[ "${HOT:-0}" -gt 0 ]]; then
+        echo "[run] auto: $HOT high-impact item(s) -> claude -p deep pass"
+        claude -p "$(cat "$ROOT/prompts/analyst.md")
+
+DEEP-PASS MODE: state/escalate.json lists the only stories to work this run.
+WebFetch and write a full verified brief for each, MERGE them into the existing
+state/decision.json (keep the ollama alerts for everything else, replace or add
+the escalated ones with your verified version, and you MAY set decision=post
+for any that clearly warrant it). Leave all other fields intact." \
+          --allowedTools "Read,Write,WebFetch" --permission-mode acceptEdits || echo "[run] deep pass returned $? (kept the ollama triage)"
+      fi
+    fi
+    if [[ "$ANALYST_RC" -ne 0 && "$ENGINE" == "auto" ]]; then
+      echo "[run] ollama triage failed ($ANALYST_RC) — full claude -p analyst"
+      run_claude_analyst; ANALYST_RC=$?
+    fi
+    ;;
+  antigravity)
+    python3 "$ROOT/bin/analyst_antigravity.py"; ANALYST_RC=$?
+    if [[ "$ANALYST_RC" -ne 0 ]]; then
+      echo "[run] Antigravity unavailable ($ANALYST_RC) — trying local ollama"
+      python3 "$ROOT/bin/analyst_ollama.py"; ANALYST_RC=$?
+    fi
+    ;;
+  claude|*)
+    run_claude_analyst; ANALYST_RC=$?
+    if [[ "$ANALYST_RC" -ne 0 ]]; then
+      echo "[run] claude analyst exited $ANALYST_RC — trying Antigravity (Gemini) backup"
+      python3 "$ROOT/bin/analyst_antigravity.py"; ANALYST_RC=$?
+    fi
+    if [[ "$ANALYST_RC" -ne 0 ]]; then
+      echo "[run] Antigravity unavailable ($ANALYST_RC) — trying local ollama backup"
+      python3 "$ROOT/bin/analyst_ollama.py"; ANALYST_RC=$?
+    fi
+    ;;
+esac
 set -e
 if [[ "$ANALYST_RC" -ne 0 ]]; then
-  # Token limit, outage, bad response.
-  # First try Antigravity (Gemini) — a real analyst that can still decide to post.
-  echo "[run] analyst exited $ANALYST_RC — trying Antigravity (Gemini) backup analyst"
-  set +e
-  python3 "$ROOT/bin/analyst_antigravity.py"
-  AGY_RC=$?
-  set -e
-  if [[ "$AGY_RC" -ne 0 ]]; then
-    # Antigravity also unavailable (no key, quota, etc.) — deterministic fallback.
-    echo "[run] Antigravity unavailable (rc $AGY_RC) — deterministic fallback for subscribers"
-    python3 "$ROOT/bin/analyst_fallback.py" || echo "[run] analyst_fallback returned $? (non-fatal)"
-  fi
+  echo "[run] all analyst engines failed ($ANALYST_RC) — deterministic fallback for subscribers"
+  python3 "$ROOT/bin/analyst_fallback.py" || echo "[run] analyst_fallback returned $? (non-fatal)"
 fi
 
 # Stage 3: paying subscribers FIRST. They are buying the lead time as much as

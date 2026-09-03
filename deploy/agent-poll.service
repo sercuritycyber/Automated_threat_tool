@@ -1,0 +1,16 @@
+[Unit]
+Description=Wake this agent when the other left work in the agent-bus
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/Threatintel
+Environment=PATH=%h/Threatintel/.venv/bin:%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+# override per machine in ~/.config/systemd/user/agent-poll.service.d/env.conf:
+#   Environment=AGENT=claude
+#   Environment=BUS=%h/agent-bus
+#   Environment=BUS_REMOTE=securitycyber@securitycybercti:agent-bus   (laptop only)
+Environment=AGENT=claude
+Environment=BUS=%h/agent-bus
+ExecStart=/usr/bin/env bash %h/Threatintel/bin/agent_bus_poll.sh
+TimeoutStartSec=1200
