@@ -12,6 +12,11 @@ CREATE TABLE IF NOT EXISTS subscribers (
   stripe_customer_id     TEXT,
   stripe_subscription_id TEXT,
   current_period_end     INTEGER,
+  -- Worker-managed access window (ISO 8601). Stripe-billed subscribers renew
+  -- via webhook and leave this NULL; a free-promo or timed-comp account sets
+  -- it, and the daily lifecycle cron lapses the account to 'cancelled' once it
+  -- passes. NULL = no Worker-managed term (Stripe-billed, or forever-free).
+  term_ends_at           TEXT,
   created_at             TEXT NOT NULL,
   confirmed_at           TEXT,
   cancelled_at           TEXT,

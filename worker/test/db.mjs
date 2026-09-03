@@ -85,5 +85,39 @@ ok("activeForDelivery returns active/paused/past_due only",
 ok("activeForDelivery excludes cancelled + unconfirmed",
   !forDelivery.includes("cancelled") && !forDelivery.includes("unconfirmed"));
 
+// --- plan term: expiredTerms / staleStripe ----------------------------
+const past = new Date(Date.now() - 86400000).toISOString();
+const future = new Date(Date.now() + 5 * 86400000).toISOString();
+
+const idPromoDue = await db.createPending(D, { email: "promo-due@example.com", tier: "free", source: "promo" });
+const idPromoLive = await db.createPending(D, { email: "promo-live@example.com", tier: "free", source: "promo" });
+const idPromoPaid = await db.createPending(D, { email: "promo-paid@example.com", tier: "free", source: "promo" });
+const idPromoKeep = await db.createPending(D, { email: "securitycyber_cti@securitycyber.uk", tier: "free", source: "promo" });
+for (const i of [idPromoDue, idPromoLive, idPromoPaid, idPromoKeep]) await db.setStatus(D, i, "active", "test");
+await db.setTermEnd(D, idPromoDue, past);
+await db.setTermEnd(D, idPromoLive, future);
+await db.setTermEnd(D, idPromoPaid, past);
+setCol(idPromoPaid, "stripe_subscription_id", "sub_promo_1");   // converted to paid mid-trial
+
+const expired = (await db.expiredTerms(D, ["securitycyber_cti@securitycyber.uk"])).map((r) => r.email).sort();
+ok("expiredTerms returns only the lapsed, non-Stripe, non-forever-free promo",
+  JSON.stringify(expired) === JSON.stringify(["promo-due@example.com"]));
+await db.setTermEnd(D, idPromoPaid, null);   // conversion to paid drops the promo clock
+
+const idStaleStripe = await db.createPending(D, { email: "stale-stripe@example.com", tier: "individual", source: "stripe" });
+const idFreshStripe = await db.createPending(D, { email: "fresh-stripe@example.com", tier: "individual", source: "stripe" });
+for (const i of [idStaleStripe, idFreshStripe]) await db.setStatus(D, i, "active", "test");
+setCol(idStaleStripe, "stripe_subscription_id", "sub_stale_1");
+setCol(idFreshStripe, "stripe_subscription_id", "sub_fresh_1");
+setCol(idStaleStripe, "current_period_end", Math.floor(Date.now() / 1000) - 4 * 86400);
+setCol(idFreshStripe, "current_period_end", Math.floor(Date.now() / 1000) + 4 * 86400);
+const stale = (await db.staleStripe(D, 2, 50)).map((r) => r.email);
+ok("staleStripe flags the overdue Stripe sub, not the fresh one",
+  stale.includes("stale-stripe@example.com") && !stale.includes("fresh-stripe@example.com"));
+
+const promoStats = await db.stats(D);
+ok("stats counts live promo terms + those expiring within 3 days",
+  promoStats.promo_terms === 2 && promoStats.promo_expiring_3d === 1);
+
 console.log(failed ? `\n❌ ${failed} failed` : "\n✅ db unit checks passed");
 process.exit(failed ? 1 : 0);

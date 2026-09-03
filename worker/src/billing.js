@@ -240,6 +240,9 @@ export async function handleEvent(env, cfg, event) {
       const alreadyLive = prior && ["active", "paused", "past_due"].includes(prior.status);
       const sid = await db.createPending(D, { email, tier, cadence, source: "stripe", stripe_customer_id: customer });
       await db.setStripeIds(D, sid, { customer_id: customer, subscription_id: subscription });
+      // A real Stripe subscription supersedes any free-promo / timed-comp clock:
+      // Stripe now owns the renewal, so drop the Worker-managed term.
+      if (subscription) await db.setTermEnd(D, sid, null);
       await db.logEvent(D, "stripe:checkout_completed", sid, { session: obj.id, cadence });
       // Which delivery channel did they pick? An explicit intent kind wins;
       // with no usable intent, email is the default (it's the address we're

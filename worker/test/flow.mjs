@@ -480,6 +480,33 @@ ok("purchases list is all one-off items", purchases.length > 0 && purchases.ever
   await adminPost(`subscribers/${sub.id}/erase`, {});
 }
 
+// 6z. free promo lifecycle: timer set on activation, cron lapses it, feed stops
+{
+  const em = `promo${Date.now()}@example.com`;
+  const add = await adminPost("add", { email: em, tier: "free" });
+  ok("free-promo add creates a subscriber", !!add.id);
+  let d = await adminGet(`subscribers/${add.id}`);
+  ok("promo term not started before activation", !d.subscriber.term_ends_at && d.subscriber.tier === "free");
+  await fetch(`${BASE}/confirm?t=${await signToken({ sub: add.id, act: "confirm" })}`, { redirect: "manual" });
+  d = await adminGet(`subscribers/${add.id}`);
+  ok("promo term_ends_at set ~7 days out on activation", (() => {
+    if (d.subscriber.status !== "active" || !d.subscriber.term_ends_at) return false;
+    const days = (Date.parse(d.subscriber.term_ends_at) - Date.now()) / 86400000;
+    return days > 6 && days < 8;
+  })());
+  const s0 = await adminGet("stats");
+  ok("stats reports at least one live promo term", s0.promo_terms >= 1);
+  // Backdate the term into the past, then run the daily (digest) cron.
+  await adminPost(`subscribers/${add.id}/edit`, { term_ends_at: new Date(Date.now() - 3600000).toISOString() });
+  await fetch(`${BASE}/cdn-cgi/handler/scheduled?cron=${encodeURIComponent("15 8 * * *")}`, { method: "POST" });
+  await new Promise((s) => setTimeout(s, 800));
+  d = await adminGet(`subscribers/${add.id}`);
+  ok("lifecycle cron lapsed the expired promo to cancelled", d.subscriber.status === "cancelled");
+  ok("lifecycle cron cleared the spent term", !d.subscriber.term_ends_at);
+  ok("term_expired event was logged", d.events.some((e) => e.kind === "lifecycle:term_expired"));
+  await adminPost(`subscribers/${add.id}/erase`, {});
+}
+
 // 7. DSAR export + erase
 const exp = await adminGet(`subscribers/${sid}/export`);
 ok("DSAR export has sections", exp.subscriber && exp.consents && exp.deliveries);

@@ -99,6 +99,43 @@ export async function setStripeIds(db, id, { customer_id = null, subscription_id
 export const setCadence = (db, id, cad) =>
   ["monthly", "weekly"].includes(cad) ? run(db, "UPDATE subscribers SET cadence=? WHERE id=?", cad, id) : null;
 export const setTier = (db, id, tier) => run(db, "UPDATE subscribers SET tier=? WHERE id=?", tier, id);
+
+// ---- Worker-managed access window (free promo / timed comp) --------------
+// term_ends_at is an ISO string. Stripe-billed subscribers renew via webhook
+// and leave it NULL; these are the accounts Stripe knows nothing about, so the
+// daily lifecycle cron is their only clock. Pass null to clear it.
+export const setTermEnd = (db, id, iso) =>
+  run(db, "UPDATE subscribers SET term_ends_at = ? WHERE id = ?", iso, id);
+
+// Live, non-Stripe subscribers whose Worker-managed term has run out — the
+// daily lifecycle cron lapses each of these to 'cancelled'. Excludes anything
+// Stripe is billing (that path is webhook + reconcile) and the forever-free
+// addresses.
+export async function expiredTerms(db, keepEmails = []) {
+  const keep = new Set((keepEmails || []).map((e) => String(e).toLowerCase()));
+  const rows = await many(db,
+    `SELECT * FROM subscribers
+      WHERE status IN ('active','past_due','paused')
+        AND term_ends_at IS NOT NULL AND term_ends_at < ?
+        AND stripe_subscription_id IS NULL AND stripe_customer_id IS NULL`,
+    nowIso());
+  return rows.filter((r) => !keep.has((r.email || "").toLowerCase()));
+}
+
+// Stripe-billed subscribers we still treat as live but whose last known period
+// end is well past — a renewal or cancellation webhook we may have missed. The
+// lifecycle cron pulls the live subscription for these and reconciles.
+// `graceDays` keeps us off Stripe's API for the ordinary case where the next
+// webhook simply hasn't landed yet.
+export const staleStripe = (db, graceDays = 2, limit = 50) =>
+  many(db,
+    `SELECT * FROM subscribers
+      WHERE status IN ('active','past_due')
+        AND stripe_subscription_id IS NOT NULL
+        AND current_period_end IS NOT NULL
+        AND current_period_end < ?
+      ORDER BY current_period_end LIMIT ?`,
+    Math.floor(Date.now() / 1000) - graceDays * 86400, limit);
 export const setNotes = (db, id, notes) => run(db, "UPDATE subscribers SET notes=? WHERE id=?", notes, id);
 
 // ---- channels -----------------------------------------------------------
@@ -283,8 +320,8 @@ export async function ensureForeverFree(db, emails = []) {
       await run(db, "INSERT INTO channels(subscriber_id, kind, target, verified, created_at) VALUES (?, 'email', ?, 1, ?)",
         id, email, nowIso());
       await logEvent(db, "created", id, { source: "free", note: "forever-free" });
-    } else if (s.status !== "active" || s.source !== "free") {
-      await run(db, "UPDATE subscribers SET status='active', source='free', cancelled_at=NULL WHERE id=?", s.id);
+    } else if (s.status !== "active" || s.source !== "free" || s.term_ends_at) {
+      await run(db, "UPDATE subscribers SET status='active', source='free', cancelled_at=NULL, term_ends_at=NULL WHERE id=?", s.id);
       await logEvent(db, "status:active", s.id, { reason: "forever-free re-asserted" });
     }
   }
@@ -358,7 +395,16 @@ export async function stats(db) {
     if (["active", "paused", "past_due"].includes(r.status)) active.push(r);
   }
   const sent24 = (await one(db, "SELECT COUNT(*) n FROM deliveries WHERE ok=1 AND sent_at > ?", isoDaysAgo(1))).n;
-  return { by_status, active, total_active: active.reduce((a, r) => a + r.n, 0), sent_24h: sent24 };
+  // Free-promo / timed-comp accounts on a Worker-managed clock, and how many
+  // of those lapse within three days (the operator's cue to nudge them).
+  const promo = await one(db,
+    `SELECT COUNT(*) n, SUM(CASE WHEN term_ends_at < ? THEN 1 ELSE 0 END) soon, MIN(term_ends_at) next
+       FROM subscribers WHERE status IN ('active','past_due','paused') AND term_ends_at IS NOT NULL`,
+    new Date(Date.now() + 3 * 86400000).toISOString());
+  return {
+    by_status, active, total_active: active.reduce((a, r) => a + r.n, 0), sent_24h: sent24,
+    promo_terms: promo?.n || 0, promo_expiring_3d: promo?.soon || 0, next_term_end: promo?.next || null,
+  };
 }
 
 export { mask };

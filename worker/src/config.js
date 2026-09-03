@@ -38,13 +38,19 @@ const DEFAULTS = {
     blurb: "A one-off, analyst-written deep dive on a vulnerability or incident of your choosing — impact, exposure, detection and response — delivered by email within two working days.",
   },
   tiers: {
-    // Free plan. £0 Stripe Payment Link — Stripe still runs the sign-up page
-    // (collects the email, no card, no charge) and fires
+    // Free plan — self-serve and forever. £0 Stripe Payment Link: Stripe runs
+    // the sign-up page (email, no card, no charge) and fires
     // checkout.session.completed, so the same webhook path provisions it. The
-    // signup intent carries tier=free; there is no recurring price and nothing
-    // ever lapses. A capped Individual: only the genuinely urgent items
-    // interrupt (instant_min_score 90), everything above the floor still lands
-    // in the daily digest and private feed.
+    // signup intent carries tier=free; there's no recurring price and, with
+    // promo_days 0, no Worker-managed term either — nothing ever lapses.
+    // A capped Individual: only the genuinely urgent items interrupt
+    // (instant_min_score 90); everything above the floor still lands in the
+    // daily digest and private feed.
+    //
+    // Timed trials / comps are separate: grant them per-account with
+    // `POST /admin/add {tier:"individual", days:N}` — that sets term_ends_at and
+    // the daily lifecycle cron lapses the account when it passes. Set
+    // promo_days > 0 on any tier to make every signup to it an N-day promo.
     free: {
       monthly_link: "https://buy.stripe.com/eVqbJ07lZ4Pf8IXfxX3ks04",
       weekly_link: "",
@@ -52,6 +58,7 @@ const DEFAULTS = {
       monthly_display: "Free", weekly_display: "",
       monthly_pence: 0, weekly_pence: 0,
       free: true,
+      promo_days: 0,   // 0 = forever; > 0 turns every free signup into an N-day trial
       blurb: "The urgent ones only — anything scoring 90+ the moment it's confirmed, plus the once-a-day digest. Email, private RSS or Discord.",
       instant_min_score: 90, attach_json: false,
       min_score: 40,

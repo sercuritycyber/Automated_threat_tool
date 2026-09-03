@@ -52,6 +52,9 @@ export default {
       }
       console.log(`retention: erased ${a} unconfirmed, ${b} cancelled, ${c} intents; ${stuck.length} paid-unconfirmed flagged`);
     } else {
+      // The clock for everything Stripe isn't watching — runs before the digest
+      // so a just-lapsed free trial doesn't get one more email.
+      await runLifecycle(env, cfg).catch((e) => console.error("lifecycle", e));
       const posts = await db.postsSince(D, cfg.digest_window_hours || 24);
       if (posts.length) {
         const subs = (await db.activeForDelivery(D)).filter(canDeliver);
@@ -505,10 +508,18 @@ async function activateSubscriber(env, cfg, request, sub, detail) {
     if (r.ok) await db.verifyChannel(env.DB, ch.id);
     else note = ` We couldn't reach your ${chanLabel(ch.kind)} — check it on the next page.`;
   }
+  // Free-promo tier: start the trial clock now (at activation, not signup, so a
+  // slow email confirm doesn't eat trial days). Stripe-billed subscribers never
+  // carry a Worker term — Stripe is their clock.
+  const pd = promoDays(cfg, sub.tier);
+  if (pd > 0 && !sub.stripe_subscription_id) {
+    await db.setTermEnd(env.DB, sub.id, daysFromNow(pd));
+    await db.logEvent(env.DB, "promo:started", sub.id, { days: pd, ends: daysFromNow(pd) });
+  }
   // A feed URL is useless until the subscriber actually has it, and it's the
   // one channel we can't push to — so mail it out the moment they're live.
   await emailFeedUrl(env, cfg, await db.get(env.DB, sub.id));
-  await notifyOwner(env, cfg, `new subscriber confirmed (${sub.tier}, ${sub.cadence})`);
+  await notifyOwner(env, cfg, `new subscriber confirmed (${sub.tier}, ${sub.cadence})${pd > 0 ? ` — free ${pd}d trial` : ""}`);
   return { note };
 }
 
@@ -550,6 +561,74 @@ async function remindPaidUnconfirmed(env, cfg) {
     await db.kvSet(env.DB, key, String(n + 1));
     await db.logEvent(env.DB, r.ok ? "confirm_reminder_sent" : "confirm_reminder_failed", row.id, { attempt: n + 1 });
   }
+}
+
+// How long a tier's free window runs, in days. Anything > 0 means the tier is a
+// timed promo: the clock starts at activation and the daily lifecycle cron
+// lapses the account when term_ends_at passes.
+function promoDays(cfg, tier) {
+  return Number((cfg.tiers[tier] || {}).promo_days || 0);
+}
+const daysFromNow = (d) => new Date(Date.now() + d * 86400000).toISOString();
+
+// ---------------------------------------------------------------- lifecycle cron
+// Stripe is the clock for card subscribers — it knows weekly vs monthly, takes
+// the payment and fires webhooks. This is the clock for everyone Stripe isn't
+// watching, plus a safety net for webhooks that never arrived. Runs once a day
+// on the digest cron (before the digest).
+//   1. Free-promo / timed-comp accounts whose term_ends_at has passed -> lapse
+//      to 'cancelled' (alerts + feed stop; the feed shows the upgrade prompt)
+//      and email them a way to keep it.
+//   2. Stripe-billed accounts whose period end is well overdue -> pull the live
+//      subscription and reconcile status + period end, in case a renew/cancel
+//      webhook was missed. This is the self-healing "did the recharge actually
+//      happen?" check.
+async function runLifecycle(env, cfg) {
+  const D = env.DB;
+  let lapsed = 0, reconciled = 0;
+
+  for (const s of await db.expiredTerms(D, cfg.forever_free_emails).catch(() => [])) {
+    await db.setStatus(D, s.id, "cancelled", `${s.source || "promo"} term expired`);
+    await db.setTermEnd(D, s.id, null);
+    await db.logEvent(D, "lifecycle:term_expired", s.id, { source: s.source, was: s.status });
+    lapsed++;
+    const hydrated = await db.get(D, s.id);
+    await discordAccess(env, cfg, hydrated, false).catch(() => {});
+    const t = await sign(env, { sub: s.id, act: "manage" }, 30 * 86400).catch(() => "");
+    const back = t ? `${cfg.site_url}/manage?t=${t}` : `${cfg.site_url}/`;
+    await send(env, cfg, "email", s.email, `Your ${cfg.brand} CTI free week has ended`,
+      `Your free ${promoDays(cfg, s.tier) || 7}-day run of ${cfg.brand} CTI alerts is up, so alerts and your private feed have stopped.\n\n`
+      + `Keep them going — Individual is £8/month or £2/week:\n\n${cfg.site_url}/subscribe?tier=individual\n\n`
+      + `Your preferences and feed URL are still here if you come back:\n${back}\n\n`
+      + `Nothing happens automatically — you have not been charged.`,
+      { priority: "default" }).catch(() => {});
+    await notifyOwner(env, cfg, `free-trial ended: ${s.email} (added ${String(s.created_at).slice(0, 10)}) — not converted`);
+  }
+
+  if (env.STRIPE_SECRET_KEY) {
+    for (const s of await db.staleStripe(D, 2, 50).catch(() => [])) {
+      let so;
+      try { so = await billing.getSubscription(env, s.stripe_subscription_id); }
+      catch (e) { console.error("lifecycle reconcile", s.id, e); continue; }
+      const st = so.status;
+      if (so.current_period_end) await db.setStripeIds(D, s.id, { period_end: so.current_period_end });
+      if (["canceled", "unpaid", "incomplete_expired"].includes(st) && s.status !== "cancelled") {
+        await db.setStatus(D, s.id, "cancelled", `lifecycle: stripe reports ${st}`);
+        await discordAccess(env, cfg, await db.get(D, s.id), false).catch(() => {});
+        await notifyOwner(env, cfg, `reconcile: ${s.email} cancelled (stripe: ${st}, webhook was missed)`);
+        reconciled++;
+      } else if (st === "past_due" && s.status === "active") {
+        await db.setStatus(D, s.id, "past_due", "lifecycle: stripe reports past_due");
+        reconciled++;
+      } else if (["active", "trialing"].includes(st) && s.status === "past_due") {
+        await db.setStatus(D, s.id, "active", "lifecycle: stripe recovered");
+        reconciled++;
+      }
+    }
+  }
+
+  if (lapsed || reconciled) await db.logEvent(D, "lifecycle:run", null, { lapsed, reconciled });
+  console.log(`lifecycle: ${lapsed} term(s) lapsed, ${reconciled} stripe sub(s) reconciled`);
 }
 
 // ---------------------------------------------------------------- Discord
@@ -1107,6 +1186,13 @@ async function adminApi(request, env, cfg, url, path) {
       if (b.tier && cfg.tiers[b.tier]) await db.setTier(D, id, b.tier);
       if (b.status) await db.setStatus(D, id, b.status, "operator edit");
       if (b.notes != null) await db.setNotes(D, id, b.notes);
+      // Extend / shorten / clear a free-promo or timed-comp window. An ISO
+      // string sets it; "" or null clears it (make it permanent); a positive
+      // `term_days` is shorthand for "that many days from now".
+      if (b.term_days != null && Number(b.term_days) > 0)
+        await db.setTermEnd(D, id, daysFromNow(Number(b.term_days)));
+      else if (b.term_ends_at !== undefined)
+        await db.setTermEnd(D, id, b.term_ends_at || null);
       await db.setPrefs(D, id, {
         vendors: b.vendors, min_score_override: b.min_score === "" ? null : (b.min_score != null ? Number(b.min_score) : undefined),
         instant: b.instant, digest: b.digest,
@@ -1153,14 +1239,31 @@ async function adminApi(request, env, cfg, url, path) {
   if (seg[1] === "add" && request.method === "POST") {
     const b = await request.json().catch(() => ({}));
     if (!/@/.test(b.email || "")) return json({ error: "bad email" }, 400);
-    const id = await db.createPending(D, { email: b.email, tier: b.tier || "individual", cadence: b.cadence || "monthly", source: "comp" });
-    await db.setNotes(D, id, b.note || "manual add");
+    const tier = cfg.tiers[b.tier] ? b.tier : "individual";
+    // tier "free" is the promo — timed, unbilled; anything else added here is a
+    // comp (individual/team access, no charge, no timer unless `days` is given).
+    const isPromo = promoDays(cfg, tier) > 0;
+    const days = Number(b.days) > 0 ? Number(b.days) : (isPromo ? promoDays(cfg, tier) : 0);
+    const id = await db.createPending(D, { email: b.email, tier, cadence: b.cadence || "monthly",
+      source: isPromo ? "promo" : "comp" });
+    await db.setNotes(D, id, (b.note || (isPromo ? "free promo" : "manual add"))
+      + (days > 0 ? ` — ${days}d term` : ""));
     // Operator-added subscribers get email delivery by default (operator vouches
     // for the address). Pass channel:"none" to add them without a live channel.
     if (b.channel !== "none")
       await db.addChannel(D, id, "email", String(b.email).trim().toLowerCase(), true, "signup");
-    if (b.skip_confirm) { await db.setStatus(D, id, "active", "operator manual add"); await db.logConsent(D, id, "signup", true, { detail: "operator add, confirm skipped" }); }
-    else await db.setStatus(D, id, "unconfirmed", "manual add");
+    if (b.skip_confirm) {
+      await db.setStatus(D, id, "active", "operator manual add");
+      await db.logConsent(D, id, "signup", true, { detail: "operator add, confirm skipped" });
+      // No activateSubscriber() on this path, so start the term from now.
+      if (days > 0) await db.setTermEnd(D, id, daysFromNow(days));
+    } else {
+      await db.setStatus(D, id, "unconfirmed", "manual add");
+      // A promo term starts at confirmation (activateSubscriber) so a slow
+      // confirm doesn't eat trial days. A non-promo timed comp has no
+      // activation hook, so its clock has to start now.
+      if (days > 0 && !isPromo) await db.setTermEnd(D, id, daysFromNow(days));
+    }
     return json({ ok: true, id });
   }
   return json({ error: "unknown admin route" }, 404);
