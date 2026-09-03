@@ -45,7 +45,7 @@ def _summary_text(c: dict) -> str:
 
 
 def build(cands: dict) -> dict:
-    floor = int(cands.get("subscriber_min_score", 15))
+    floor = int(cands.get("subscriber_min_score", 10))
     items = cands.get("candidates") or []
     alerts = []
     for c in sorted(items, key=lambda x: -(x.get("pre_score") or 0)):
@@ -65,7 +65,7 @@ def build(cands: dict) -> dict:
             "action": action,
             "subscriber_text": _summary_text(c),
         })
-        if len(alerts) >= 30:
+        if len(alerts) >= 40:
             break
 
     return {

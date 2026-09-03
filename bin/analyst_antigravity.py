@@ -34,8 +34,8 @@ PROMPT_FILE = ROOT / "prompts" / "analyst.md"
 
 # Model preference order — fall through on 429/503
 MODELS = [
-    "gemini-2.5-pro",
-    "gemini-2.0-flash",
+    "gemini-3.1-pro-preview",
+    "gemini-3.6-flash",
 ]
 API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 TIMEOUT = 300  # seconds per attempt

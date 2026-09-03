@@ -40,16 +40,25 @@ export default {
       const a = await db.purgeUnconfirmed(D, cfg.retention_days_unconfirmed, cfg.forever_free_emails);
       const b = await db.purgeCancelled(D, cfg.retention_days_cancelled, cfg.forever_free_emails);
       const c = await db.purgeIntents(D, 48);
-      await db.trimPostsLog(D, 500);
+      await db.trimPostsLog(D, 2000);
       await db.kvSet(D, "last_retention", nowIso());
-      console.log(`retention: erased ${a} unconfirmed, ${b} cancelled, ${c} intents`);
+      // Paying customers stuck in "unconfirmed" are never deleted — flag them.
+      const stuck = await db.paidUnconfirmed(D);
+      if (stuck.length) {
+        await notifyOwner(env, cfg,
+          `${stuck.length} paid subscriber(s) never completed confirmation and are getting nothing: `
+          + stuck.map((s) => s.email).join(", ")
+          + ` — activate them from the panel (/subscribers) or check the address Stripe has.`);
+      }
+      console.log(`retention: erased ${a} unconfirmed, ${b} cancelled, ${c} intents; ${stuck.length} paid-unconfirmed flagged`);
     } else {
       const posts = await db.postsSince(D, cfg.digest_window_hours || 24);
       if (posts.length) {
-        const subs = (await db.activeForDelivery(D)).filter((s) => s.status === "active");
+        const subs = (await db.activeForDelivery(D)).filter(canDeliver);
         for (const s of subs) await deliverDigest(env, cfg, s, posts).catch((e) => console.error("digest", s.id, e));
       }
       await db.kvSet(D, "last_digest", nowIso());
+      await remindPaidUnconfirmed(env, cfg);
       console.log(`digest: ${posts.length} posts to active subscribers`);
     }
   },
@@ -150,6 +159,7 @@ async function route(request, env, ctx, url, path, cfg) {
 
   // ---- manage ----
   if (path === "/manage" && m === "GET") return managePageRoute(request, env, cfg, url);
+  if (path === "/manage/resume" && m === "POST") return manageResume(request, env, cfg);
   if (path === "/manage/prefs" && m === "POST") return managePrefs(request, env, cfg);
   if (path === "/manage/channel/add" && m === "POST") return manageChannelAdd(request, env, cfg);
   if (path === "/manage/channel/remove" && m === "POST") return manageChannelRemove(request, env, cfg);
@@ -225,6 +235,11 @@ async function account(request, env, cfg) {
 // rather not cut off a good customer over a bank blip; `cancelled` does not.
 const FEED_OK = ["active"];
 const FEED_GRACE = ["past_due"];
+// Push delivery (instant + digest) follows the same rule as the feed: an
+// active subscriber, or one in the card-retry grace window. `paused` (the
+// subscriber pressed "pause all alerts") and everything else get nothing.
+const DELIVER_STATUSES = ["active", "past_due"];
+const canDeliver = (s) => DELIVER_STATUSES.includes(s.status);
 
 async function rssFeed(request, env, cfg, path) {
   const over = rl(request, "feed", cfg, 120); if (over) return over;
@@ -259,13 +274,15 @@ async function rssFeed(request, env, cfg, path) {
   // Reuse wants() rather than re-deriving the thresholds here. A second copy
   // of this logic silently kept the feed on the *instant* bar, so everything
   // between the tier floor and that bar — the extra a subscriber is paying
-  // for — never appeared in their reader.
+  // for — never appeared in their reader. "feed" mode = the tier floor (or
+  // their override) + vendor filter, and NOT the instant/digest on-off
+  // toggles: the feed is pull, so polling it is the opt-in.
   const tier = cfg.tiers[sub.tier] || {};
   sub.prefs = await db.getPrefs(env.DB, sub.id);
   const vendors = (sub.prefs.vendors || []).filter(Boolean);
-  const posts = (await db.postsForFeed(env.DB, 120))
-    .filter((p) => wants(p, sub, tier, "digest"))
-    .slice(0, 50);
+  const posts = (await db.postsForFeed(env.DB, 300))
+    .filter((p) => wants(p, sub, tier, "feed"))
+    .slice(0, 120);
   const floor = sub.prefs.min_score_override == null
     ? Number(tier.min_score ?? 0)
     : Math.max(Number(tier.min_score ?? 0), Number(sub.prefs.min_score_override));
@@ -290,12 +307,14 @@ async function subscribeSubmit(request, env, cfg) {
   // Don't take money for a delivery route that can't run yet.
   const avail = channelAvailability(env, cfg);
   if (!(avail[platform] || { ok: true }).ok)
-    return redirect(`/subscribe?tier=${tier}&m=` + q(`${chanLabel(platform)} is ${avail[platform].why}. Pick another delivery method.`) + "&k=bad");
+    return redirect(`/subscribe?tier=${tier}&m=` + q(`${chanLabel(platform)} isn't available — ${avail[platform].why}. Pick another delivery method.`) + "&k=bad");
   let target = "";
   if (platform === "email") target = email;
   // rss: we mint the feed id ourselves — it becomes the secret in the URL.
   else if (platform === "rss") target = newId(24);
-  else if (platform !== "telegram") {
+  // telegram + discord are connected AFTER payment (bot deep-link / OAuth) —
+  // there's nothing for the subscriber to type here, so don't demand a target.
+  else if (platform !== "telegram" && platform !== "discord") {
     const [ok, why] = verifyTarget(platform, f.target || "");
     if (!ok) return redirect(`/subscribe?tier=${tier}&m=` + q(why) + "&k=bad");
     target = (f.target || "").trim();
@@ -303,6 +322,9 @@ async function subscribeSubmit(request, env, cfg) {
   const intentTok = newId();
   await db.createIntent(env.DB, {
     token: intentTok, email, tier, cadence,
+    // telegram carries no channel row (linked purely via the bot); discord
+    // keeps its kind so the confirm mail and prefs page know to offer the
+    // one-click connect, but still has no target until they do.
     channel_kind: platform === "telegram" ? null : platform,
     channel_target: target || null, ip: clientIp(request), user_agent: request.headers.get("user-agent") || "",
   });
@@ -445,6 +467,46 @@ async function stripeWebhook(request, env, cfg) {
 }
 
 // ---------------------------------------------------------------- confirm
+// Statuses where the double opt-in hasn't happened yet.
+const NEEDS_CONFIRM = ["unconfirmed", "pending_payment"];
+
+// Switch a paid-but-unconfirmed subscriber on. Callers MUST only invoke this
+// for a subscriber currently in NEEDS_CONFIRM. Following any link we emailed
+// them — the /confirm link OR a /manage link — proves control of the address,
+// which is all double opt-in requires; both entry points land here so the
+// side effects (consent log, channel pings, feed URL email, owner ping)
+// happen exactly once.
+async function activateSubscriber(env, cfg, request, sub, detail) {
+  let note = "";
+  await db.setStatus(env.DB, sub.id, "active", detail, clientIp(request));
+  await db.logConsent(env.DB, sub.id, "signup", true, {
+    ip: clientIp(request), ua: request.headers.get("user-agent") || "",
+    terms_version: cfg.terms_version, detail,
+  });
+  for (const ch of sub.channels) {
+    if (ch.verified) continue;
+    // The email channel: verify it here only if email is their CHOSEN delivery
+    // method (label 'signup'). Clicking the confirm link that was sent to this
+    // address is the proof of control — there's nothing else to test-ping.
+    // An 'account'-labelled email row stays unverified: it's just the login id
+    // for someone who picked RSS/Discord/Telegram, and alerts must not double
+    // up on a channel they didn't ask for.
+    if (ch.kind === "email") { if (ch.label === "signup") await db.verifyChannel(env.DB, ch.id); continue; }
+    // rss is pull, not push — there's nothing to test-ping. Mark it good and
+    // email the URL below instead.
+    if (ch.kind === "rss") { await db.verifyChannel(env.DB, ch.id); continue; }
+    const r = await send(env, cfg, ch.kind, ch.target, "SecurityCyber CTI — you're connected",
+      "This channel is now linked. Real alerts will arrive here.", { priority: "default" });
+    if (r.ok) await db.verifyChannel(env.DB, ch.id);
+    else note = ` We couldn't reach your ${chanLabel(ch.kind)} — check it on the next page.`;
+  }
+  // A feed URL is useless until the subscriber actually has it, and it's the
+  // one channel we can't push to — so mail it out the moment they're live.
+  await emailFeedUrl(env, cfg, await db.get(env.DB, sub.id));
+  await notifyOwner(env, cfg, `new subscriber confirmed (${sub.tier}, ${sub.cadence})`);
+  return { note };
+}
+
 async function confirm(request, env, cfg, url) {
   const over = rl(request, "confirm", cfg, 15); if (over) return over;
   let data;
@@ -452,30 +514,37 @@ async function confirm(request, env, cfg, url) {
   catch (e) { return html(simple(cfg, "Link problem", "That link didn't work", `${e}. Use “Already subscribed?” on the home page for a fresh one.`)); }
   const sub = await db.get(env.DB, data.sub);
   if (!sub) return html(simple(cfg, "Not found", "Account not found", "It may have been removed."));
-  let note = "";
-  if (sub.status !== "cancelled") {
-    await db.setStatus(env.DB, sub.id, "active", "email confirmed", clientIp(request));
-    await db.logConsent(env.DB, sub.id, "signup", true, {
-      ip: clientIp(request), ua: request.headers.get("user-agent") || "",
-      terms_version: cfg.terms_version, detail: "double opt-in via /confirm",
-    });
-    for (const ch of sub.channels) {
-      if (ch.kind === "email" || ch.verified) continue;
-      // rss is pull, not push — there's nothing to test-ping. Mark it good and
-      // email the URL below instead.
-      if (ch.kind === "rss") { await db.verifyChannel(env.DB, ch.id); continue; }
-      const r = await send(env, cfg, ch.kind, ch.target, "SecurityCyber CTI — you're connected",
-        "This channel is now linked. Real alerts will arrive here.", { priority: "default" });
-      if (r.ok) await db.verifyChannel(env.DB, ch.id);
-      else note = ` We couldn't reach your ${chanLabel(ch.kind)} — check it on the next page.`;
-    }
-    // A feed URL is useless until the subscriber actually has it, and it's the
-    // one channel we can't push to — so mail it out the moment they're live.
-    await emailFeedUrl(env, cfg, sub);
-    await notifyOwner(env, cfg, `new subscriber confirmed (${sub.tier}, ${sub.cadence})`);
-  }
   const mtok = await sign(env, { sub: sub.id, act: "manage" }, 90 * 86400);
+  if (sub.status === "cancelled")
+    return redirect(`/manage?t=${mtok}&m=` + q("This subscription was cancelled — start a new one from the home page.") + "&k=bad");
+  // Already confirmed (link clicked twice, forwarded, prefetched): don't re-run
+  // the side effects — just take them to their preferences.
+  if (!NEEDS_CONFIRM.includes(sub.status))
+    return redirect(`/manage?t=${mtok}&m=` + q("You're already confirmed — alerts are live.") + "&k=good");
+  const { note } = await activateSubscriber(env, cfg, request, sub, "double opt-in via /confirm");
   return redirect(`/manage?t=${mtok}&m=` + q("You're in — alerts are live." + note) + (note ? "&k=bad" : "&k=good"));
+}
+
+// Digest cron calls this once a day: a paying subscriber who still hasn't
+// confirmed gets the confirm email again, up to 3 times (kv-tracked), so a
+// spam-foldered first attempt isn't the end of it. purgeUnconfirmed never
+// touches them, and the retention run also pages the owner.
+async function remindPaidUnconfirmed(env, cfg) {
+  const stuck = await db.paidUnconfirmed(env.DB).catch((e) => (console.error("paidUnconfirmed", e), []));
+  for (const row of stuck) {
+    const key = `confirm_resend:${row.id}`;
+    const n = Number((await db.kvGet(env.DB, key)) || 0);
+    if (n >= 3) continue;
+    const t = await sign(env, { sub: row.id, act: "confirm" }, 14 * 86400).catch(() => "");
+    if (!t) continue;
+    const r = await send(env, cfg, "email", row.email, "Confirm your SecurityCyber CTI alerts (reminder)",
+      `You subscribed to SecurityCyber CTI (${row.tier} plan) but haven't confirmed your email yet, `
+      + `so your alerts aren't switched on.\n\nConfirm now — one click:\n\n${cfg.site_url}/confirm?t=${t}\n\n`
+      + `You are being billed for this subscription. If you didn't mean to subscribe, reply to this email `
+      + `and we'll cancel and refund it. Questions: ${cfg.contact_email}`);
+    await db.kvSet(env.DB, key, String(n + 1));
+    await db.logEvent(env.DB, r.ok ? "confirm_reminder_sent" : "confirm_reminder_failed", row.id, { attempt: n + 1 });
+  }
 }
 
 // ---------------------------------------------------------------- Discord
@@ -588,9 +657,38 @@ async function manageSubFromForm(env, tok) {
 
 async function managePageRoute(request, env, cfg, url) {
   const over = rl(request, "manage", cfg, 60); if (over) return over;
-  const [sub, tok] = await manageSub(env, url);
+  let [sub, tok] = await manageSub(env, url);
   if (!sub) return html(simple(cfg, "Link problem", "Link expired", "Use “Already subscribed?” on the home page for a fresh link."));
-  return html(managePage(cfg, sub, tok, url.searchParams.get("m") || "", url.searchParams.get("k") || ""));
+  let extra = "";
+  if (NEEDS_CONFIRM.includes(sub.status)) {
+    // Reaching this page means they opened a link sent to their address — that
+    // is the double opt-in. Complete it here so a lost /confirm email can't
+    // strand a paying customer.
+    const { note } = await activateSubscriber(env, cfg, request, sub, "confirmed by opening emailed preferences link");
+    sub = await db.get(env.DB, sub.id);
+    extra = " Email confirmed — alerts are live." + note;
+  }
+  return html(managePage(cfg, sub, tok, (url.searchParams.get("m") || "") + extra, url.searchParams.get("k") || ""));
+}
+
+async function manageResume(request, env, cfg) {
+  const over = rl(request, "manage", cfg, 60); if (over) return over;
+  const f = await form(request);
+  const [sub, tok] = await manageSubFromForm(env, f.t);
+  if (!sub) return redirect("/?m=" + q("Link expired"));
+  if (sub.status === "paused") {
+    await db.setStatus(env.DB, sub.id, "active", "resumed via preferences", clientIp(request));
+    await db.logConsent(env.DB, sub.id, "signup", true, { ip: clientIp(request), detail: "resumed alerts via /manage" });
+    const s = await db.get(env.DB, sub.id);
+    if (s) await discordAccess(env, cfg, s, true);
+    return redirect(`/manage?t=${tok}&m=` + q("Alerts resumed — you're live again.") + "&k=good");
+  }
+  if (NEEDS_CONFIRM.includes(sub.status))
+    return redirect(`/manage?t=${tok}`);   // managePageRoute will confirm them
+  const msg = sub.status === "cancelled"
+    ? "This subscription was cancelled — start a new one from the home page."
+    : `Nothing to resume — alerts are already ${sub.status}.`;
+  return redirect(`/manage?t=${tok}&m=` + q(msg) + (sub.status === "active" ? "&k=good" : "&k=bad"));
 }
 
 async function managePrefs(request, env, cfg) {
@@ -769,7 +867,7 @@ async function internalIngest(request, env, cfg, ctx) {
   }
   // instant fan-out (in the background so the pipeline call returns fast)
   ctx.waitUntil((async () => {
-    const subs = (await db.activeForDelivery(env.DB)).filter((s) => s.status === "active");
+    const subs = (await db.activeForDelivery(env.DB)).filter(canDeliver);
     for (const s of subs) await deliverInstant(env, cfg, s, posts, "instant").catch((e) => console.error("instant", s.id, e));
     // Shared subscriber channel on Discord. Everyone in the channel sees the
     // same feed, so it uses one fixed threshold, not anyone's personal filter.
@@ -830,6 +928,8 @@ function wants(post, sub, tierCfg, mode) {
   const p = sub.prefs;
   if (mode === "instant" && !p.instant) return false;
   if (mode === "digest" && !p.digest) return false;
+  // mode "feed": no on/off toggle — the private RSS feed always carries
+  // everything from the floor up; the reader polling it is the opt-in.
   const score = Number(post.score || 0);
   const floor = Number(tierCfg.min_score ?? 0);
   const override = p.min_score_override == null ? null : Number(p.min_score_override);
@@ -857,10 +957,31 @@ function alertBody(post) {
   return post.post_text || "";
 }
 
+// Channels a deliverable subscriber actually receives on: verified + allowed by
+// their tier. The email row is special — it's created as the account identifier
+// (label 'account') and only becomes a delivery channel when email is the
+// chosen platform (label 'signup', verified on confirm). Legacy rows (no label)
+// are treated as a delivery channel too, so subscribers created before that
+// distinction existed still get their email alerts.
+function deliverableChannels(sub, tierCfg) {
+  const allowed = new Set(tierCfg.channels || []);
+  const chans = sub.channels || [];
+  // Legacy safety net: subscribers created before the email row carried a
+  // label had verified=0 on it and would now get nothing. Treat their own
+  // address as deliverable — but only if there's no other verified channel,
+  // so someone who deliberately picked RSS/Discord doesn't also start getting
+  // email. New signups don't need this: the email row is verified on confirm.
+  const hasOther = chans.some((c) => c.verified && c.kind !== "email" && allowed.has(c.kind));
+  return chans.filter((c) => {
+    if (!allowed.has(c.kind)) return false;
+    if (c.verified) return true;
+    return c.kind === "email" && c.target === sub.email && c.label == null && !hasOther;
+  });
+}
+
 async function deliverInstant(env, cfg, sub, posts, mode) {
   const tierCfg = cfg.tiers[sub.tier] || {};
-  const allowed = new Set(tierCfg.channels || []);
-  const verified = sub.channels.filter((c) => c.verified && allowed.has(c.kind));
+  const verified = deliverableChannels(sub, tierCfg);
   if (!verified.length) return;
   for (const post of posts) {
     if (mode !== "test" && !wants(post, sub, tierCfg, "instant")) continue;
@@ -886,16 +1007,24 @@ async function deliverInstant(env, cfg, sub, posts, mode) {
 
 async function deliverDigest(env, cfg, sub, allPosts) {
   const tierCfg = cfg.tiers[sub.tier] || {};
-  const allowed = new Set(tierCfg.channels || []);
-  const verified = sub.channels.filter((c) => c.verified && allowed.has(c.kind));
+  const verified = deliverableChannels(sub, tierCfg);
   if (!verified.length) return;
-  const matched = allPosts.filter((p) => wants(p, sub, tierCfg, "digest"));
+  const matched = allPosts.filter((p) => wants(p, sub, tierCfg, "digest")).sort((a, b) => b.score - a.score);
   if (!matched.length) return;
   const dayKey = `digest:${new Date().toISOString().slice(0, 10)}`;
   if (await db.alreadyDelivered(env.DB, sub.id, dayKey)) return;
+  // The private feed carries everything; the digest is the top slice so the
+  // email stays scannable even on a 100-item day.
+  const DIGEST_CAP = Number(cfg.digest_max_items ?? 25);
+  const shown = matched.slice(0, DIGEST_CAP);
+  const overflow = matched.length - shown.length;
+  const feedCh = sub.channels.find((c) => c.kind === "rss");
+  const feedUrl = feedCh ? `${cfg.site_url}/feed/${feedCh.target}.xml` : `${cfg.site_url}/manage`;
   const subject = `${cfg.brand} CTI — daily digest · ${matched.length} item(s)`;
-  const lines = [`${matched.length} item(s) from the last 24 hours, highest impact first.`, ""];
-  for (const p of matched.sort((a, b) => b.score - a.score)) {
+  const lines = [`${matched.length} item(s) from the last 24 hours, highest impact first.`];
+  if (overflow > 0) lines.push(`Showing the top ${shown.length} — the other ${overflow} are in your feed: ${feedUrl}`);
+  lines.push("");
+  for (const p of shown) {
     // Lead with the action a subscriber is paying for, not the social teaser.
     lines.push(`• [${p.score}] ${p.title || (p.post_text || "").split("\n")[0]}`);
     if ((p.action || "").trim()) lines.push(`  DO NOW: ${p.action.trim()}`);
@@ -903,6 +1032,7 @@ async function deliverDigest(env, cfg, sub, allPosts) {
     if (p.url) lines.push(`  ${p.url}`);
     lines.push("");
   }
+  if (overflow > 0) lines.push(`+ ${overflow} more lower-scoring item(s) in your feed: ${feedUrl}`, "");
   lines.push("— Change vendors, channels or unsubscribe from your preference link.");
   const body = lines.join("\n");
   const jsonp = tierCfg.attach_json ? { posts: matched } : null;
@@ -1020,6 +1150,10 @@ async function adminApi(request, env, cfg, url, path) {
     if (!/@/.test(b.email || "")) return json({ error: "bad email" }, 400);
     const id = await db.createPending(D, { email: b.email, tier: b.tier || "individual", cadence: b.cadence || "monthly", source: "comp" });
     await db.setNotes(D, id, b.note || "manual add");
+    // Operator-added subscribers get email delivery by default (operator vouches
+    // for the address). Pass channel:"none" to add them without a live channel.
+    if (b.channel !== "none")
+      await db.addChannel(D, id, "email", String(b.email).trim().toLowerCase(), true, "signup");
     if (b.skip_confirm) { await db.setStatus(D, id, "active", "operator manual add"); await db.logConsent(D, id, "signup", true, { detail: "operator add, confirm skipped" }); }
     else await db.setStatus(D, id, "unconfirmed", "manual add");
     return json({ ok: true, id });

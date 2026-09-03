@@ -472,9 +472,9 @@ Questions: <a href="mailto:${esc(contact)}">${esc(contact)}</a>.</p>
 </form>
 <script>(function(){var s=document.getElementById('plat'),h=document.getElementById('hint'),t=document.getElementById('tgt');
 function u(){var o=s.options[s.selectedIndex];h.textContent=o.getAttribute('data-hint')||'';t.placeholder=o.getAttribute('data-ph')||'';
-// telegram and rss need nothing typed — we mint the feed id / deep-link the
-// bot ourselves, so hide the box rather than leaving an empty one on screen.
-var noInput=(s.value==='telegram'||s.value==='rss');
+// telegram, discord and rss need nothing typed — we mint the feed id, deep-link
+// the bot, or run the Discord OAuth after payment. Hide the box for those.
+var noInput=(s.value==='telegram'||s.value==='rss'||s.value==='discord');
 if(noInput){t.style.display='none';t.required=false;t.value='';}else{t.style.display='';t.required=true;}}
 s.addEventListener('change',u);u();})();</script>`;
   return page(cfg, `Subscribe — ${tier}`, body, flash, flashKind);
@@ -507,10 +507,22 @@ keeps updating for as long as the subscription is active.</p>` : "";
   const portal = sub.stripe_customer_id ?
     `<form method=post action="/manage/portal"><input type=hidden name=t value="${esc(tok)}">
 <button class="btn ghost">Manage billing / payment method</button></form>` : "";
+  const paused = sub.status === "paused";
+  const pastDue = sub.status === "past_due";
+  const resumeForm = `<form method=post action="/manage/resume" style="display:inline">
+<input type=hidden name=t value="${esc(tok)}"><button class=btn>Resume alerts</button></form>`;
+  const statusBanner = paused
+    ? `<div class="flash bad">Alerts are <b>paused</b> — you're still subscribed and billed, but nothing is being
+sent. ${resumeForm}</div>`
+    : pastDue
+      ? `<div class="flash bad">Your last payment failed. Alerts keep coming for a few days while your bank
+retries — update your card in the billing portal below to avoid interruption.</div>`
+      : "";
   const body = `
 <h1>Your alert preferences</h1>
 <p class=muted>Plan: <b>${esc(sub.tier[0].toUpperCase() + sub.tier.slice(1))}</b> (${esc(sub.cadence)}) ·
 Status: <b>${esc(sub.status)}</b> · ${esc(sub.email)}</p>
+${statusBanner}
 <h2>Channels</h2>
 <div class=card><table><tbody><tr><th>type</th><th>where</th><th></th></tr>${chRows}</tbody></table>${rssNote}
 <form method=post action="/manage/channel/add" style="margin-top:12px"><input type=hidden name=t value="${esc(tok)}">
@@ -539,7 +551,7 @@ Setting a number here uses it for both (it can't go below ${esc(tierCfg.min_scor
 <form method=post action="/manage/test"><input type=hidden name=t value="${esc(tok)}"><button class="btn ghost">Send me a test alert</button></form>
 ${portal}
 <a class="btn ghost" href="/manage/export?t=${esc(tok)}">Download my data</a>
-<a class="btn ghost" href="/unsubscribe?t=${esc(tok)}">Pause all alerts</a></div>
+${paused ? resumeForm : `<a class="btn ghost" href="/unsubscribe?t=${esc(tok)}">Pause all alerts</a>`}</div>
 <form method=post action="/manage/delete" style="margin-top:14px"
  onsubmit="return confirm('Delete your account and all your data? If you have a paid subscription this also cancels it. This cannot be undone.')">
 <input type=hidden name=t value="${esc(tok)}"><button class="btn bad">Delete my account &amp; data</button></form></div>`;

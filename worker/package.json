@@ -10,9 +10,14 @@
     "db:remote": "wrangler d1 execute cti-subs --remote --file schema.sql",
     "deploy": "wrangler deploy",
     "tail": "wrangler tail",
-    "test": "node test/run.mjs"
+    "test": "node test/run.mjs && node test/db.mjs",
+    "test:flow": "node test/flow.mjs"
   },
   "devDependencies": {
     "wrangler": "^4.128.0"
+  },
+  "allowScripts": {
+    "esbuild@0.28.1": true,
+    "workerd@1.20260831.1": true
   }
 }

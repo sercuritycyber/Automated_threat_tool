@@ -10,12 +10,15 @@
 FROM registry.fedoraproject.org/fedora-minimal:44
 
 RUN microdnf install -y --setopt=install_weak_deps=0 \
-      python3 python3-pip bash ca-certificates git tini shadow-utils \
+      python3 python3-pip bash curl ca-certificates git tini shadow-utils \
     && microdnf clean all
 
-# claude CLI, pinned. Self-update is disabled in the unit; rebuild to bump.
-RUN curl -fsSL https://claude.ai/install.sh | bash -s -- --no-modify-path \
-    && ln -sf /root/.local/bin/claude /usr/local/bin/claude
+# claude CLI, pinned to the version running on the host. Self-update is disabled
+# via env below; bump this line and rebuild to move versions.
+ARG CLAUDE_VERSION=2.1.259
+RUN curl -fsSL https://claude.ai/install.sh | bash -s -- "${CLAUDE_VERSION}" \
+    && ln -sf /root/.local/bin/claude /usr/local/bin/claude \
+    && /usr/local/bin/claude --version
 
 WORKDIR /app
 COPY requirements.txt .
@@ -26,13 +29,16 @@ COPY lib/ ./lib/
 COPY web/ ./web/
 COPY prompts/ ./prompts/
 COPY config/feeds.yaml ./config/feeds.yaml
+COPY deploy/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh bin/run.sh
 
 # config/env, config/settings.yaml, state/, logs/, drafts/ and ~/.claude are
 # provided by bind mounts at run time — never copied in.
 ENV PYTHONUNBUFFERED=1 \
     DISABLE_AUTOUPDATER=1 \
     CLAUDE_DISABLE_AUTOUPDATE=1 \
+    DISABLE_TELEMETRY=1 \
     HOME=/root
 
-ENTRYPOINT ["/usr/bin/tini", "--"]
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/entrypoint.sh"]
 CMD ["bash", "bin/run.sh"]

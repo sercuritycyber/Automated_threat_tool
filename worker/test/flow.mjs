@@ -262,6 +262,224 @@ ok("purchases list is all one-off items", purchases.length > 0 && purchases.ever
   await adminPost(`subscribers/${add.id}/erase`, {});
 }
 
+// 6g. Pause -> resume. A subscriber who pauses alerts keeps paying, so there
+//     must be a one-click way back on — not a support ticket.
+{
+  const em = `pauser${Date.now()}@test.co`;
+  const add = await adminPost("add", { email: em, tier: "team", skip_confirm: true });
+  const mtok = await signToken({ sub: add.id, act: "manage" }, 3600);
+  let r = await fetch(`${BASE}/unsubscribe?t=${await signToken({ sub: add.id, act: "unsubscribe" }, 3600)}`, { redirect: "manual" });
+  ok("unsubscribe link pauses", (await adminGet(`subscribers/${add.id}`)).subscriber.status === "paused");
+  const mgr = await (await fetch(`${BASE}/manage?t=${encodeURIComponent(mtok)}`)).text();
+  ok("paused manage page offers Resume, not a dead end", /action="\/manage\/resume"/.test(mgr) && /paused/i.test(mgr));
+  r = await fetch(`${BASE}/manage/resume`, {
+    method: "POST", redirect: "manual",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: `t=${encodeURIComponent(mtok)}`,
+  });
+  ok("resume redirects back to /manage", r.status === 303);
+  ok("resume reactivates the subscriber", (await adminGet(`subscribers/${add.id}`)).subscriber.status === "active");
+  await adminPost(`subscribers/${add.id}/erase`, {});
+}
+
+// 6h. A lost /confirm email must not strand a paying customer: opening ANY
+//     link we sent to their address (a /manage link) completes the opt-in.
+{
+  const email = `manageconfirm${Date.now()}@example.com`;
+  const ev = JSON.stringify({
+    id: "evt_mc_" + Date.now(), type: "checkout.session.completed",
+    data: { object: { id: "cs_mc", customer: "cus_mc" + Date.now(), subscription: "sub_mc" + Date.now(),
+      customer_details: { email }, metadata: { tier: "individual", cadence: "monthly" } } },
+  });
+  await fetch(`${BASE}/webhooks/stripe`, { method: "POST", headers: { "stripe-signature": await stripeSig(ev) }, body: ev });
+  const sub = (await adminGet(`subscribers?q=${email.split("@")[0]}`)).subscribers[0];
+  ok("checkout created an unconfirmed subscriber", sub && sub.status === "unconfirmed");
+  const mtok = await signToken({ sub: sub.id, act: "manage" }, 3600);
+  const r = await fetch(`${BASE}/manage?t=${encodeURIComponent(mtok)}`);
+  ok("opening the emailed /manage link renders", r.status === 200);
+  ok("opening the emailed /manage link confirms the subscriber",
+    (await adminGet(`subscribers/${sub.id}`)).subscriber.status === "active");
+  await adminPost(`subscribers/${sub.id}/erase`, {});
+}
+
+// 6i. An already-confirmed subscriber going through Checkout again (upgrade,
+//     re-subscribe, Stripe event replay under a new id) must NOT drop back to
+//     'unconfirmed' — that would cut a live customer's alerts.
+{
+  const email = `recheckout${Date.now()}@example.com`;
+  const mk = (evid, tier) => JSON.stringify({
+    id: evid, type: "checkout.session.completed",
+    data: { object: { id: "cs_" + evid, customer: "cus_rc" + Date.now(), subscription: "sub_rc",
+      customer_details: { email }, metadata: { tier, cadence: "monthly" } } },
+  });
+  const e1 = mk("evt_rc1_" + Date.now(), "individual");
+  await fetch(`${BASE}/webhooks/stripe`, { method: "POST", headers: { "stripe-signature": await stripeSig(e1) }, body: e1 });
+  const sub = (await adminGet(`subscribers?q=${email.split("@")[0]}`)).subscribers[0];
+  await fetch(`${BASE}/confirm?t=${await signToken({ sub: sub.id, act: "confirm" })}`, { redirect: "manual" });
+  ok("first checkout + confirm -> active", (await adminGet(`subscribers/${sub.id}`)).subscriber.status === "active");
+  const e2 = mk("evt_rc2_" + Date.now(), "team");
+  const r = await fetch(`${BASE}/webhooks/stripe`, { method: "POST", headers: { "stripe-signature": await stripeSig(e2) }, body: e2 });
+  const j = await r.json();
+  ok("second checkout is 'synced', not 'send_confirm'", j.action === "synced");
+  const after = (await adminGet(`subscribers/${sub.id}`)).subscriber;
+  ok("second checkout leaves a live subscriber ACTIVE", after.status === "active");
+  ok("second checkout applied the tier change", after.tier === "team");
+  await adminPost(`subscribers/${sub.id}/erase`, {});
+}
+
+// 6j. The private RSS feed is pull, not push — turning OFF the daily-digest
+//     toggle must not empty it (that bar is the tier floor, always).
+{
+  const em = `feedpref${Date.now()}@test.co`;
+  const add = await adminPost("add", { email: em, tier: "team", skip_confirm: true });
+  const feedTok = "feedpreftoken" + Date.now();
+  await adminPost(`subscribers/${add.id}/channel`, { kind: "rss", target: feedTok, verified: true });
+  await adminPost(`subscribers/${add.id}/edit`, { instant: false, digest: false, min_score: 0 });
+  await fetch(`${BASE}/internal/ingest`, {
+    method: "POST", headers: { Authorization: `Bearer ${INGEST}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ posts: [{ title: "Feed pref check", url: "https://ex.com/fp" + Date.now(), score: 80,
+      cve_ids: [], subscriber_text: "Body for the feed-pref test." }] }),
+  });
+  const feed = await (await fetch(`${BASE}/feed/${feedTok}.xml`)).text();
+  ok("feed still carries alerts with both delivery toggles off", feed.includes("Feed pref check"));
+  await adminPost(`subscribers/${add.id}/erase`, {});
+}
+
+// 6k. past_due keeps getting alerts (card-retry grace); paused does not.
+{
+  const pd = await adminPost("add", { email: `pd${Date.now()}@test.co`, tier: "team", skip_confirm: true });
+  const pz = await adminPost("add", { email: `pz${Date.now()}@test.co`, tier: "team", skip_confirm: true });
+  await adminPost(`subscribers/${pd.id}/channel`, { kind: "ntfy", target: "https://ntfy.sh/pdtest", verified: true });
+  await adminPost(`subscribers/${pz.id}/channel`, { kind: "ntfy", target: "https://ntfy.sh/pztest", verified: true });
+  await adminPost(`subscribers/${pd.id}/edit`, { status: "past_due", min_score: 0, instant: true });
+  await adminPost(`subscribers/${pz.id}/edit`, { status: "paused", min_score: 0, instant: true });
+  const u = `https://ex.com/grace${Date.now()}`;
+  await fetch(`${BASE}/internal/ingest`, {
+    method: "POST", headers: { Authorization: `Bearer ${INGEST}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ posts: [{ title: "grace test", url: u, score: 99, cve_ids: [], subscriber_text: "body" }] }),
+  });
+  await new Promise((s) => setTimeout(s, 1500));
+  const dpd = await adminGet(`subscribers/${pd.id}`), dpz = await adminGet(`subscribers/${pz.id}`);
+  ok("past_due subscriber still receives instant alerts (grace window)",
+    dpd.deliveries.some((x) => x.post_key.includes("grace")));
+  ok("paused subscriber receives nothing", !dpz.deliveries.some((x) => x.post_key.includes("grace")));
+  await adminPost(`subscribers/${pd.id}/erase`, {});
+  await adminPost(`subscribers/${pz.id}/erase`, {});
+}
+
+// 6l. Choosing Discord at signup is deferred (OAuth after payment), not
+//     rejected for an empty target the way a typed channel would be. In dev
+//     Discord has no secrets, so the expected outcome is the graceful
+//     "unavailable" bounce — never a 5xx and never the raw target error.
+{
+  const r = await fetch(`${BASE}/subscribe`, {
+    method: "POST", redirect: "manual",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: `tier=team&cadence=monthly&email=disc${Date.now()}@test.co&platform=discord&agree=on`,
+  });
+  const loc = r.headers.get("location") || "";
+  const body = r.status >= 300 && r.status < 400 ? "" : await r.text();
+  ok("discord signup is handled cleanly (deferred connect / graceful unavailable)",
+    r.status < 500 && !/connect Discord with the button/.test(body + loc));
+  ok("discord signup either proceeds to payment or bounces with a reason",
+    /^https:\/\/buy\.stripe\.com\//.test(loc) || /\/subscribe\?tier=team&m=/.test(loc) || /Almost there|Checkout/.test(body));
+}
+
+// 6m. The paid feed must be FULL — a whole run's worth of alerts, not a
+//     highlights reel. Push 30 alerts spanning the score range and check the
+//     subscriber's private feed carries essentially all of them.
+{
+  const em = `volume${Date.now()}@test.co`;
+  const add = await adminPost("add", { email: em, tier: "team", skip_confirm: true });
+  const feedTok = "volumefeedtoken" + Date.now();
+  await adminPost(`subscribers/${add.id}/channel`, { kind: "rss", target: feedTok, verified: true });
+  await adminPost(`subscribers/${add.id}/edit`, { min_score: "" });   // tier floor only (team = 10)
+  const batch = Array.from({ length: 30 }, (_, i) => ({
+    title: `Bulk advisory ${i} ${Date.now()}`,
+    url: `https://ex.com/bulk${i}-${Date.now()}`,
+    source: "Vendor", score: 12 + i * 2, cve_ids: [`CVE-2026-${9000 + i}`],
+    action: `Patch component ${i}.`,
+    subscriber_text: `Analyst write-up for bulk advisory ${i}: affected versions, exposure check, detection.`,
+  }));
+  const r = await fetch(`${BASE}/internal/ingest`, {
+    method: "POST", headers: { Authorization: `Bearer ${INGEST}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ posts: batch }),
+  });
+  ok("ingest accepts a full run of 30 alerts", (await r.json()).received === 30);
+  const feed = await (await fetch(`${BASE}/feed/${feedTok}.xml`)).text();
+  const items = (feed.match(/<item>/g) || []).length;
+  ok(`private feed carries the whole run, not a shortlist (${items} items)`, items >= 28);
+  ok("every feed item leads with the analyst action + write-up",
+    /DO NOW: Patch component/.test(feed) && feed.includes("exposure check, detection"));
+  await adminPost(`subscribers/${add.id}/erase`, {});
+}
+
+// 6n. THE default path: someone subscribes with email delivery. Their email
+//     channel must end up verified and actually receive alerts — the whole
+//     point of paying. (Regression: the auto-created email row was never
+//     verified, so email subscribers got nothing.)
+{
+  const email = `emaildeliver${Date.now()}@example.com`;
+  const ev = JSON.stringify({
+    id: "evt_ed_" + Date.now(), type: "checkout.session.completed",
+    data: { object: { id: "cs_ed", customer: "cus_ed" + Date.now(), subscription: "sub_ed" + Date.now(),
+      customer_details: { email }, metadata: { tier: "individual", cadence: "monthly" } } },
+  });
+  // no signup intent in this event -> the webhook must still default them to
+  // email delivery, not leave them channel-less.
+  await fetch(`${BASE}/webhooks/stripe`, { method: "POST", headers: { "stripe-signature": await stripeSig(ev) }, body: ev });
+  const sub = (await adminGet(`subscribers?q=${email.split("@")[0]}`)).subscribers[0];
+  await fetch(`${BASE}/confirm?t=${await signToken({ sub: sub.id, act: "confirm" })}`, { redirect: "manual" });
+  const d = await adminGet(`subscribers/${sub.id}`);
+  const emailCh = d.subscriber.channels.find((c) => c.kind === "email");
+  ok("email subscriber's email channel is verified after confirm", emailCh && emailCh.verified);
+  await adminPost(`subscribers/${sub.id}/edit`, { min_score: 0, instant: true });
+  await fetch(`${BASE}/internal/ingest`, {
+    method: "POST", headers: { Authorization: `Bearer ${INGEST}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ posts: [{ title: "email delivery regression", url: "https://ex.com/ed" + Date.now(),
+      score: 99, cve_ids: [], subscriber_text: "depth", action: "patch" }] }),
+  });
+  await new Promise((s) => setTimeout(s, 1500));
+  const d2 = await adminGet(`subscribers/${sub.id}`);
+  ok("email subscriber receives the alert (delivery recorded on the email channel)",
+    d2.deliveries.some((x) => x.channel_kind === "email" && x.post_key.includes("/ed")));
+  await adminPost(`subscribers/${sub.id}/erase`, {});
+}
+
+// 6o. An RSS subscriber must NOT also get email — they picked one channel.
+//     Full path: POST /subscribe (mints the intent) -> webhook with that
+//     client_reference_id -> confirm.
+{
+  const em = `rssonly${Date.now()}@test.co`;
+  const sr = await fetch(`${BASE}/subscribe`, {
+    method: "POST", redirect: "manual",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: `tier=individual&cadence=monthly&email=${encodeURIComponent(em)}&platform=rss&agree=on`,
+  });
+  const ref = new URL(sr.headers.get("location")).searchParams.get("client_reference_id");
+  ok("rss signup minted a client_reference_id", !!ref);
+  const ev = JSON.stringify({
+    id: "evt_ro_" + Date.now(), type: "checkout.session.completed",
+    data: { object: { id: "cs_ro", customer: "cus_ro" + Date.now(), subscription: "sub_ro" + Date.now(),
+      customer_details: { email: em }, client_reference_id: ref } },
+  });
+  await fetch(`${BASE}/webhooks/stripe`, { method: "POST", headers: { "stripe-signature": await stripeSig(ev) }, body: ev });
+  const sub = (await adminGet(`subscribers?q=${em.split("@")[0]}`)).subscribers[0];
+  await fetch(`${BASE}/confirm?t=${await signToken({ sub: sub.id, act: "confirm" })}`, { redirect: "manual" });
+  await adminPost(`subscribers/${sub.id}/edit`, { min_score: 0, instant: true });
+  await fetch(`${BASE}/internal/ingest`, {
+    method: "POST", headers: { Authorization: `Bearer ${INGEST}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ posts: [{ title: "rss-only channel check", url: "https://ex.com/ro" + Date.now(),
+      score: 99, cve_ids: [], subscriber_text: "depth" }] }),
+  });
+  await new Promise((s) => setTimeout(s, 1200));
+  const d = await adminGet(`subscribers/${sub.id}`);
+  const emailCh = d.subscriber.channels.find((c) => c.kind === "email");
+  ok("rss subscriber's email row stays an unverified identifier", emailCh && !emailCh.verified);
+  ok("rss subscriber gets NO email delivery", !d.deliveries.some((x) => x.channel_kind === "email"));
+  await adminPost(`subscribers/${sub.id}/erase`, {});
+}
+
 // 7. DSAR export + erase
 const exp = await adminGet(`subscribers/${sid}/export`);
 ok("DSAR export has sections", exp.subscriber && exp.consents && exp.deliveries);

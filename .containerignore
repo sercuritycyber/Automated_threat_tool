@@ -1,0 +1,20 @@
+# Keep the build context small — only bin/ lib/ web/ prompts/ config/feeds.yaml
+# are COPYed in (see deploy/Containerfile). Everything runtime is bind-mounted.
+.git
+.venv
+logs
+state
+drafts
+worker/node_modules
+worker/.wrangler
+__pycache__
+*.pyc
+config/env
+config/settings.yaml
+config/subscribers.json
+*.db
+*.db-*
+ssh-key-*.key
+*.pem
+.agent-bus
+agent-bus

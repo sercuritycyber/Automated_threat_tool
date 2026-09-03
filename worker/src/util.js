@@ -14,7 +14,10 @@ const SECURITY_HEADERS = {
   "Content-Security-Policy":
     "default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
     "font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; script-src 'self' 'unsafe-inline'; " +
-    "form-action 'self' https://checkout.stripe.com; frame-ancestors 'none'; base-uri 'none'",
+    // Stripe hosted Checkout (API sessions) + Stripe Payment Links (buy.stripe.com):
+    // "Continue to payment" is a POST to /subscribe that 303-redirects to one of
+    // these, and some browsers still check form-action against the redirect target.
+    "form-action 'self' https://checkout.stripe.com https://buy.stripe.com; frame-ancestors 'none'; base-uri 'none'",
 };
 
 export function html(body, status = 200, extra = {}) {

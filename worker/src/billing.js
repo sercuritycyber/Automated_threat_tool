@@ -221,17 +221,38 @@ export async function handleEvent(env, cfg, event) {
     tier = tier || "individual";
     cadence = ["monthly", "weekly"].includes(cadence) ? cadence : "monthly";
     if (email) {
+      // An already-confirmed subscriber going through checkout again (upgrading
+      // tier, re-subscribing after pausing, a Stripe event replay with a new id)
+      // must NOT be knocked back to 'unconfirmed' — that would cut their alerts
+      // until they re-confirmed. Only a genuinely new / never-confirmed / lapsed
+      // account gets the double opt-in.
+      const prior = await db.getByEmail(D, email);
+      const alreadyLive = prior && ["active", "paused", "past_due"].includes(prior.status);
       const sid = await db.createPending(D, { email, tier, cadence, source: "stripe", stripe_customer_id: customer });
       await db.setStripeIds(D, sid, { customer_id: customer, subscription_id: subscription });
-      await db.setStatus(D, sid, "unconfirmed", "checkout complete");
       await db.logEvent(D, "stripe:checkout_completed", sid, { session: obj.id, cadence });
-      let channel = null;
-      if (intent?.channel_kind) {
-        channel = { kind: intent.channel_kind, target: intent.channel_target || "" };
-        if (channel.target) await db.addChannel(D, sid, channel.kind, channel.target, false, "signup");
-        await db.consumeIntent(D, clientRef);
+      // Which delivery channel did they pick? An explicit intent kind wins;
+      // with no usable intent, email is the default (it's the address we're
+      // about to confirm). Marking the email row label 'signup' is what turns
+      // it from "just the account id" into a channel alerts actually go to —
+      // activateSubscriber verifies it on confirm.
+      let channel = intent?.channel_kind
+        ? { kind: intent.channel_kind, target: intent.channel_target || "" }
+        : { kind: "email", target: email };
+      if (channel.kind === "email") {
+        await db.addChannel(D, sid, "email", email, alreadyLive, "signup");
+      } else if (channel.target) {
+        await db.addChannel(D, sid, channel.kind, channel.target, alreadyLive, "signup");
       }
-      result = { action: "send_confirm", subscriber_id: sid, email, tier, cadence, channel };
+      if (intent) await db.consumeIntent(D, clientRef);
+      if (alreadyLive) {
+        // keep them where they were (active stays active; paused stays paused)
+        if (prior.status !== "active") await db.setStatus(D, sid, prior.status, "checkout complete (existing subscriber)");
+        result = { action: "synced", subscriber_id: sid, email, tier, cadence, channel };
+      } else {
+        await db.setStatus(D, sid, "unconfirmed", "checkout complete");
+        result = { action: "send_confirm", subscriber_id: sid, email, tier, cadence, channel };
+      }
     } else {
       result = { action: "error", detail: "no email on checkout session" };
     }

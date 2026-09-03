@@ -32,3 +32,10 @@ ssh-key-*.key
 *.pem
 gemini-code-*.html
 Gemini_Generated_Image*
+
+# machine-local (VM)
+/.agent-bus
+/state
+/logs
+/drafts
+config/env.bak.*

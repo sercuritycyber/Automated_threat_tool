@@ -48,25 +48,38 @@ TRACKING_PARAMS = {
     "amp", "__twitter_impression", "guccounter",
 }
 
-# keyword -> (points, why)  used only for the pre-score hint
+# keyword -> (points, why)  used only for the pre-score hint.
+#
+# Tuned for the PAID feed, not just the social post: a subscriber wants the
+# breach, the new malware family, the published exploit and the LE takedown as
+# well as the CVE-of-the-day. CVE/KEV items still score highest, but a
+# substantive story with no CVE number should still clear the subscriber floor.
 SIGNALS = [
     (re.compile(r"\bzero[- ]day\b|\b0day\b", re.I), 30, "zero-day"),
-    (re.compile(r"actively exploited|exploited in the wild|under active attack|in-the-wild", re.I), 30, "active exploitation"),
-    (re.compile(r"\bunauthenticated\b|pre-?auth|without authentication", re.I), 12, "unauthenticated"),
-    (re.compile(r"\bRCE\b|remote code execution|arbitrary code", re.I), 14, "RCE"),
+    (re.compile(r"actively exploited|exploited in the wild|under active attack|in-the-wild|mass exploitation|being exploited", re.I), 30, "active exploitation"),
+    (re.compile(r"\bunauthenticated\b|pre-?auth|without authentication|auth(?:entication)? bypass", re.I), 12, "unauthenticated"),
+    (re.compile(r"\bRCE\b|remote code execution|arbitrary code|command injection", re.I), 14, "RCE"),
     (re.compile(r"\bwormable\b|self-propagat", re.I), 12, "wormable"),
-    (re.compile(r"supply[- ]chain|compromised package|malicious (?:npm|pypi|package)", re.I), 16, "supply chain"),
-    (re.compile(r"ransomware|extortion group|data-leak site", re.I), 8, "ransomware"),
-    (re.compile(r"\bPoC\b|proof[- ]of[- ]concept|exploit code (?:released|public)", re.I), 10, "public PoC"),
-    (re.compile(r"emergency (?:patch|update|directive)|out-of-band", re.I), 12, "emergency patch"),
-    (re.compile(r"critical infrastructure|water utility|power grid|healthcare|hospital", re.I), 10, "critical infrastructure"),
-    (re.compile(r"CVSS[^0-9]{0,6}(?:9\.\d|10(?:\.0)?)", re.I), 14, "CVSS 9.0+"),
-    (re.compile(r"\b(Fortinet|FortiOS|Cisco|Ivanti|Citrix|Palo Alto|VMware|Exchange|SharePoint|Outlook|Chrome|Windows|Active Directory|Okta|SolarWinds|MOVEit|Confluence|Jira|GitLab|Kubernetes)\b", re.I), 8, "widely deployed vendor"),
+    (re.compile(r"supply[- ]chain|compromised package|malicious (?:npm|pypi|package)|typosquat|dependency confusion", re.I), 16, "supply chain"),
+    (re.compile(r"\b(?:npm|PyPI|RubyGems|NuGet|crates\.io|Packagist|Go module|VS ?Code extension|browser extension|GitHub Action)\b", re.I), 10, "package ecosystem"),
+    (re.compile(r"ransomware|extortion group|data-leak site|double extortion", re.I), 8, "ransomware"),
+    (re.compile(r"\bPoC\b|proof[- ]of[- ]concept|exploit (?:code |script )?(?:released|public|published|available|now available|drops?)|working exploit|Metasploit module|Nuclei template", re.I), 12, "public exploit / PoC"),
+    (re.compile(r"\b(?:data )?breach(?:ed|es)?\b|\bhacked\b|\bcompromise[ds]?\b|data (?:theft|leak(?:ed)?|exposed|stolen)|\bexfiltrat|unauthorized access|intrusion", re.I), 9, "breach / intrusion"),
+    (re.compile(r"\b(?:botnet|trojan|infostealer|info-stealer|stealer|backdoor|loader|dropper|wiper|rootkit|keylogger|\bRAT\b|webshell|implant|spyware|cryptominer)\b", re.I), 8, "malware family"),
+    (re.compile(r"\bcampaign\b|threat actor|\bAPT[- ]?\d+\b|\bUNC\d+\b|nation[- ]state|state[- ]sponsored|espionage|initial access broker|phishing kit|watering hole", re.I), 8, "named activity / campaign"),
+    (re.compile(r"takedown|dismantl|seiz(?:ed|ure)|disrupt(?:ed|ion)|law enforcement|indict|charged with|arrest(?:ed)?|sentenced|sanction", re.I), 5, "law-enforcement action"),
+    (re.compile(r"emergency (?:patch|update|directive)|out-of-band|patch now|patch (?:today|immediately)", re.I), 12, "emergency patch"),
+    (re.compile(r"critical infrastructure|water utility|power grid|\bICS\b|\bOT\b|SCADA|healthcare|hospital|\bPLC\b|building automation", re.I), 10, "critical infrastructure / OT"),
+    (re.compile(r"CVSS[^0-9]{0,6}(?:9\.\d|10(?:\.0)?)|\bcritical(?:ity)?\b.{0,12}(?:flaw|vuln|bug|rating)|rated critical", re.I), 14, "critical severity"),
+    (re.compile(r"\b(Fortinet|FortiOS|FortiGate|Cisco|Ivanti|Citrix|NetScaler|Palo Alto|PAN-OS|GlobalProtect|VMware|ESXi|vCenter|Exchange|SharePoint|Outlook|Chrome|Firefox|Windows|Active Directory|Entra|Okta|SolarWinds|MOVEit|Confluence|Jira|Bitbucket|GitLab|GitHub|Kubernetes|SonicWall|WatchGuard|Zyxel|QNAP|Synology|Jenkins|Apache|Tomcat|nginx|OpenSSL|OpenSSH|PostgreSQL|MongoDB|Elastic|Docker|Zoom|Atlassian|Veeam|Zimbra|Roundcube|F5|BIG-IP|pfSense|OPNsense|OpenVPN|WireGuard|1Password|LastPass|Bitwarden|JetBrains|TeamCity|PaperCut|ScreenConnect|ConnectWise|AnyDesk|Cleo|CrushFTP|GoAnywhere|Rockwell|Siemens|Schneider Electric|Moxa|Advantech|Mitsubishi Electric|Honeywell)\b", re.I), 8, "widely deployed / high-value vendor"),
 ]
 NEGATIVE = [
-    (re.compile(r"\bwebinar\b|\bsponsored\b|\bwhitepaper\b|register now|\be-?book\b", re.I), -40, "marketing"),
-    (re.compile(r"weekly (?:recap|roundup)|news roundup|in case you missed", re.I), -25, "roundup"),
-    (re.compile(r"\bopinion\b|\bpredictions\b|\bthought leadership\b", re.I), -20, "opinion"),
+    (re.compile(r"\bwebinar\b|\bsponsored\b|\bwhitepaper\b|register (?:now|today|here)|save your seat|\be-?book\b|\[?virtual event\]?|\[?webcast\]?|on-demand (?:webinar|session)|join us (?:for|on)", re.I), -40, "marketing / event"),
+    (re.compile(r"weekly (?:recap|roundup|review)|news roundup|in case you missed|week in (?:review|security)|this week in|monthly (?:recap|roundup)|newsletter", re.I), -25, "roundup / newsletter"),
+    (re.compile(r"stormcast|\bpodcast\b|\bepisode\b\s*#?\d|daily briefing|morning (?:brief|coffee)", re.I), -25, "podcast / audio"),
+    (re.compile(r"\bopinion\b|\bpredictions\b|thought leadership|\bhot take\b|\bmusings\b|lessons learned from|the future of|why .{0,40}\bmatters\b", re.I), -20, "opinion / thought-piece"),
+    (re.compile(r"how to (?:secure|protect|build|choose|approach)|\bbeginners? guide\b|\bultimate guide\b|\btips (?:for|to)\b|explained:|\bwhat is\b.{0,40}\?|for consumers|protect yourself|your (?:family|kids|children)", re.I), -14, "explainer / consumer"),
+    (re.compile(r"\bhiring\b|\bwe'?re hiring\b|join our team|award|recognized (?:as|in)|named a leader|magic quadrant|forrester wave|raises \$|series [A-E] funding|acquires|acquisition of", re.I), -30, "corporate / PR"),
 ]
 
 STOP = set("the a an and or of to in for on with is are be by from at as into via new update patch flaw bug vulnerability vulnerabilities attack attacks hackers threat security cyber".split())
@@ -142,7 +155,11 @@ def fetch_kev(timeout: int) -> dict:
 
 def prescore(item: dict, kev: dict) -> dict:
     text = f"{item['title']} \n {item['summary']}"
-    score = 8.0 * item["source_weight"]
+    # Base lifted from 8 -> 11: a substantive story from a trusted feed with no
+    # CVE and no keyword hit used to land ~5-7, below the subscriber floor, so
+    # breaches / campaigns / exploits-published silently never reached the paid
+    # feed. The NEGATIVE rules pull genuine noise back down.
+    score = 11.0 * item["source_weight"]
     reasons = [f"source weight {item['source_weight']:.2f}"]
     for rx, pts, why in SIGNALS:
         if rx.search(text):
@@ -284,10 +301,12 @@ def main() -> int:
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "lookback_hours": lookback,
         "min_score": int(settings.get("scoring", {}).get("min_score", 65)),
-        # Floor for the paid subscriber feed — well below the posting threshold
-        # so subscribers see essentially everything real. Tunable via
+        # Floor for the paid subscriber feed — deliberately far below the social
+        # posting threshold so subscribers get the FULL picture, not a highlights
+        # reel. This is the "why pay" line: the free feed is 1-2 posts/day, the
+        # paid feed is everything real with an analyst write-up. Tunable via
         # scoring.subscriber_min_score in settings.yaml.
-        "subscriber_min_score": int(settings.get("scoring", {}).get("subscriber_min_score", 15)),
+        "subscriber_min_score": int(settings.get("scoring", {}).get("subscriber_min_score", 10)),
         "brand": settings.get("brand", {}),
         "kev_recent_days": KEV_RECENT_DAYS,
         "counts": {

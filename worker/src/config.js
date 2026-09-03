@@ -24,6 +24,10 @@ const DEFAULTS = {
   retention_days_cancelled: 180,
   retention_days_unconfirmed: 7,
   digest_window_hours: 24,
+  // The private RSS feed carries everything above a subscriber's floor; the
+  // daily digest email is the top slice of that, so it stays readable on a
+  // heavy day. Raise if subscribers want the whole list in the email too.
+  digest_max_items: 25,
   brief: {
     link: "https://buy.stripe.com/bJe4gy5dRa9z8IX3Pf3ks02",  // Stripe Payment Link (one-off)
     price_id: "",            // set to skip the auto-created product

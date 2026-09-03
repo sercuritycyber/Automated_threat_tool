@@ -38,7 +38,10 @@ export async function createPending(db, { email, tier, cadence = "monthly", sour
     email, name, tier, cadence, source, stripe_customer_id, nowIso());
   const id = r.meta.last_row_id;
   await run(db, "INSERT INTO prefs(subscriber_id, updated_at) VALUES (?, ?)", id, nowIso());
-  await run(db, "INSERT INTO channels(subscriber_id, kind, target, verified, created_at) VALUES (?, 'email', ?, 0, ?)",
+  // label 'account' = this row is only the account identifier. It becomes a
+  // real delivery channel (label 'signup') when email is the chosen platform;
+  // see billing.handleEvent + activateSubscriber.
+  await run(db, "INSERT INTO channels(subscriber_id, kind, target, verified, label, created_at) VALUES (?, 'email', ?, 0, 'account', ?)",
     id, email, nowIso());
   await logEvent(db, "created", id, { tier, source });
   return id;
@@ -254,8 +257,12 @@ export async function purchaseCount24h(db) {
 }
 
 // ---- delivery feed ----------------------------------------------
+// `past_due` is included on purpose: Stripe retries a failed card for several
+// days and a good customer over a bank blip should keep getting alerts during
+// that window — the same grace the private RSS feed gives them. Callers still
+// decide per-status; this just doesn't pre-filter the grace case out.
 export async function activeForDelivery(db) {
-  const subs = await many(db, "SELECT * FROM subscribers WHERE status IN ('active','paused')");
+  const subs = await many(db, "SELECT * FROM subscribers WHERE status IN ('active','paused','past_due')");
   return Promise.all(subs.map((s) => hydrateSub(db, s)));
 }
 
@@ -307,14 +314,32 @@ export async function eraseSubscriber(db, id, reason = "DSAR erasure") {
 }
 
 // ---- retention ------------------------------------------------
+// Deletes ONLY sign-ups that never confirmed AND never paid — exactly the
+// "never confirmed / never paid" wording in the privacy policy. A subscriber
+// with a Stripe customer or subscription id has paid: Stripe is billing them,
+// so erasing our record here would strand a paying customer (no alerts, no
+// account, no way for us to tie the ongoing charge back to a person). Those
+// are surfaced to the owner instead — see paidUnconfirmed().
 export async function purgeUnconfirmed(db, days, keepEmails = []) {
   const keep = new Set((keepEmails || []).map((e) => e.toLowerCase()));
   const ids = (await many(db,
-    "SELECT id, email FROM subscribers WHERE status IN ('pending_payment','unconfirmed') AND created_at < ?",
+    `SELECT id, email FROM subscribers
+      WHERE status IN ('pending_payment','unconfirmed') AND created_at < ?
+        AND stripe_customer_id IS NULL AND stripe_subscription_id IS NULL`,
     isoDaysAgo(days))).filter((r) => !keep.has((r.email || "").toLowerCase())).map((r) => r.id);
   for (const id of ids) await eraseSubscriber(db, id, `retention: unconfirmed > ${days}d`);
   return ids.length;
 }
+
+// Paid, but the double opt-in was never completed: Stripe is charging them and
+// we're delivering nothing. Something (spam-foldered confirm mail, typo'd
+// address at Stripe) needs a human. Never auto-deleted.
+export const paidUnconfirmed = (db) =>
+  many(db, `SELECT id, email, tier, cadence, created_at, stripe_customer_id, stripe_subscription_id
+            FROM subscribers
+            WHERE status IN ('pending_payment','unconfirmed')
+              AND (stripe_customer_id IS NOT NULL OR stripe_subscription_id IS NOT NULL)
+            ORDER BY created_at`);
 export async function purgeCancelled(db, days, keepEmails = []) {
   const keep = new Set((keepEmails || []).map((e) => e.toLowerCase()));
   const ids = (await many(db,
