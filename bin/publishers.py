@@ -117,6 +117,26 @@ def _li_refresh(creds: dict, log):
     return r.json().get("access_token")
 
 
+
+
+# Posting as Charlie's personal profile until the company-page token has
+# w_organization_social — so every post plugs the company page explicitly.
+LI_COMPANY_PLUG = (
+    "\n\n\u2014\u2014\u2014\n"
+    "Published by SecurityCyber \u00b7 UK threat intelligence for small teams.\n"
+    "Follow the company page: https://www.linkedin.com/company/security-cyber-uk"
+)
+
+
+def _li_with_plug(text: str) -> str:
+    """Append the company-page plug once, staying under LinkedIn's hard cap."""
+    t = (text or "").rstrip()
+    if "company/security-cyber-uk" in t:
+        return t
+    combined = t + LI_COMPANY_PLUG
+    return combined if len(combined) <= 2950 else t
+
+
 def post_linkedin(text: str, creds: dict, settings: dict, short_text=None, log=print) -> dict:
     token = creds.get("LINKEDIN_ACCESS_TOKEN")
     if not token:
@@ -127,7 +147,7 @@ def post_linkedin(text: str, creds: dict, settings: dict, short_text=None, log=p
 
     def _do(tok, version):
         payload = {
-            "author": _li_author(tok, creds, log), "commentary": text, "visibility": visibility,
+            "author": _li_author(tok, creds, log), "commentary": _li_with_plug(text), "visibility": visibility,
             "distribution": {"feedDistribution": "MAIN_FEED", "targetEntities": [],
                              "thirdPartyDistributionChannels": []},
             "lifecycleState": "PUBLISHED", "isReshareDisabledByAuthor": False,
