@@ -260,8 +260,10 @@ export async function handleEvent(env, cfg, event) {
         // Connected after checkout via OAuth / a bot deep-link, so there's no
         // target to store yet — but record the CHOICE as an unverified,
         // empty-target row so activateSubscriber knows to email them the
-        // one-click connect link instead of silently doing nothing.
-        await db.addChannel(D, sid, channel.kind, "", alreadyLive, "signup");
+        // one-click connect link instead of silently doing nothing. This row
+        // is never itself a deliverable channel, so it must never be marked
+        // verified — not even for an already-live subscriber re-checking out.
+        await db.addChannel(D, sid, channel.kind, "", false, "signup");
       }
       if (intent) await db.consumeIntent(D, clientRef);
       if (alreadyLive) {
