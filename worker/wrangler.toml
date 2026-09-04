@@ -25,10 +25,10 @@ database_name = "cti-subs"
 database_id = "2d514521-9be2-4c8e-8bf0-73c68bcaeafd"
 
 [triggers]
-# 08:15 UTC daily digest · 03:30 UTC Sunday retention + intent purge.
+# digests 06:15 / 11:15 / 16:15 UTC = 07:15 / 12:15 / 17:15 BST · 03:30 UTC Sunday retention + intent purge.
 # Day-of-week must be SUN-SAT or 1-7 — Cloudflare's API rejects `0`
 # ("invalid cron string ... [code: 10100]"), so this is SUN, not 0.
-crons = ["15 8 * * *", "30 3 * * SUN"]
+crons = ["15 6 * * *", "15 11 * * *", "15 16 * * *", "30 3 * * SUN"]
 
 [observability]
 enabled = true

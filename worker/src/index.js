@@ -1146,10 +1146,17 @@ async function deliverDigest(env, cfg, sub, allPosts) {
   const tierCfg = cfg.tiers[sub.tier] || {};
   const verified = deliverableChannels(sub, tierCfg);
   if (!verified.length) return;
-  const matched = allPosts.filter((p) => wants(p, sub, tierCfg, "digest")).sort((a, b) => b.score - a.score);
+  let matched = allPosts.filter((p) => wants(p, sub, tierCfg, "digest")).sort((a, b) => b.score - a.score);
   if (!matched.length) return;
-  const dayKey = `digest:${new Date().toISOString().slice(0, 10)}`;
-  if (await db.alreadyDelivered(env.DB, sub.id, dayKey)) return;
+  // Per-item, not one-digest-per-day: keep only what this subscriber has never
+  // been sent (by instant or an earlier digest). Lets the digest run several
+  // times a day and still never repeat an item.
+  const seen = [];
+  for (const p of matched) {
+    if (!(await db.alreadyDelivered(env.DB, sub.id, p.post_key))) seen.push(p);
+  }
+  if (!seen.length) return;
+  matched = seen;
   // The private feed carries everything; the digest is the top slice so the
   // email stays scannable even on a 100-item day.
   const DIGEST_CAP = Number(cfg.digest_max_items ?? 25);
@@ -1173,11 +1180,19 @@ async function deliverDigest(env, cfg, sub, allPosts) {
   lines.push("— Change vendors, channels or unsubscribe from your preference link.");
   const body = lines.join("\n");
   const jsonp = tierCfg.attach_json ? { posts: matched } : null;
+  let anyOk = false;
   for (const ch of verified) {
     const r = await send(env, cfg, ch.kind, ch.target, subject, body, {
       priority: "digest", jsonPayload: ["email", "webhook"].includes(ch.kind) ? jsonp : null,
     });
-    await db.recordDelivery(env.DB, sub.id, dayKey, ch.kind, "digest", r.ok, r.ok ? null : r.error);
+    anyOk = anyOk || r.ok;
+  }
+  if (anyOk) {
+    // mark every item in this digest as delivered so the next digest / an
+    // instant for the same story does not re-send it
+    for (const p of matched) {
+      await db.recordDelivery(env.DB, sub.id, p.post_key, "digest", "digest", true, null).catch(() => {});
+    }
   }
 }
 
@@ -1291,6 +1306,20 @@ async function adminApi(request, env, cfg, url, path) {
   }
   // POST /admin/stripe/links — set every Payment Link's after-payment redirect
   // (buyers otherwise land on Stripe's receipt and miss /welcome). Re-runnable.
+  // POST /admin/digest — run the subscriber digest now (same logic as the cron)
+  if (seg[1] === "digest" && request.method === "POST") {
+    const posts = await db.postsSince(env.DB, cfg.digest_window_hours || 24);
+    if (!posts.length) return json({ ran: true, posts: 0, delivered: 0 });
+    const subs = (await db.activeForDelivery(env.DB)).filter(canDeliver);
+    let delivered = 0;
+    for (const su of subs) {
+      try { await deliverDigest(env, cfg, su, posts); delivered++; }
+      catch (e) { console.error("manual digest", su.id, e); }
+    }
+    await db.kvSet(env.DB, "last_digest", nowIso());
+    return json({ ran: true, posts: posts.length, subscribers: subs.length, delivered });
+  }
+
   if (seg[1] === "stripe" && seg[2] === "links" && request.method === "POST") {
     const welcome = `${cfg.site_url}/welcome`;
     const thanks = `${cfg.site_url}/brief/thanks`;
