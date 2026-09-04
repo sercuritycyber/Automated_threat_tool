@@ -444,7 +444,7 @@ async function stripeWebhook(request, env, cfg) {
     const t = await sign(env, { sub: res.subscriber_id, act: "confirm" }, 14 * 86400);
     const where = res.channel ? chanLabel(res.channel.kind) : "email";
     await send(env, cfg, "email", res.email, "Confirm your SecurityCyber CTI alerts",
-      `Thanks for subscribing — ${cfg.tiers[res.tier]?.free ? "the free plan" : `${res.tier} plan, billed ${res.cadence}`}.\n\n` +
+      `Thanks for subscribing — ${cfg.tiers[res.tier]?.free ? "your 7-day free trial" : `${res.tier} plan, billed ${res.cadence}`}.\n\n` +
       `Confirm your email to switch your alerts on:\n\n${cfg.site_url}/confirm?t=${t}\n\n` +
       `Your alerts will go to: ${where}.\nThis link works for 14 days. If you didn't subscribe, ignore this and email ${cfg.contact_email}.`);
     await db.logEvent(env.DB, "confirm_email_sent", res.subscriber_id, { cadence: res.cadence });
