@@ -12,7 +12,7 @@ ingest:
 scoring:
   min_score: 80
 analyst:
-  engine: claude
+  engine: openai
   deep_pass: false
 publish:
   mode: review
