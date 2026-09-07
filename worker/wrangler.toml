@@ -4,21 +4,18 @@ compatibility_date = "2025-01-15"
 compatibility_flags = ["nodejs_compat"]
 workers_dev = false
 
-# NO [assets] / [site] block — this Worker serves everything from src/index.js.
-# `web/` at the repo root is the private owner panel (FastAPI) and must never
-# be deployed. Do not add an assets directory here.
+# Keep a concrete assets directory so Cloudflare Workers Builds can resolve the
+# project in both deploy and version-upload modes. The Worker handler remains the
+# source of all routes; this directory is intentionally empty.
+[assets]
+directory = "./public"
 
 # Production hostname, as a Custom Domain rather than a plain route.
-# `custom_domain = true` makes `wrangler deploy` CREATE the proxied DNS record
-# for cti.securitycyber.uk itself — a plain route does not, which is why the
-# first deploy succeeded but the hostname stayed NXDOMAIN. Note the pattern is
-# the bare hostname here: no `/*` (a custom domain always takes every path).
 [[routes]]
 pattern = "cti.securitycyber.uk"
 custom_domain = true
 
 # Subscriber database. Create once:  npx wrangler d1 create cti-subs
-# then paste the id below.
 [[d1_databases]]
 binding = "DB"
 database_name = "cti-subs"
@@ -26,8 +23,6 @@ database_id = "2d514521-9be2-4c8e-8bf0-73c68bcaeafd"
 
 [triggers]
 # digests 06:15 / 11:15 / 16:15 UTC = 07:15 / 12:15 / 17:15 BST · 03:30 UTC Sunday retention + intent purge.
-# Day-of-week must be SUN-SAT or 1-7 — Cloudflare's API rejects `0`
-# ("invalid cron string ... [code: 10100]"), so this is SUN, not 0.
 crons = ["15 6 * * *", "15 11 * * *", "15 16 * * *", "30 3 * * SUN"]
 
 [observability]
@@ -48,18 +43,6 @@ SUPPORT_EMAIL = "securitycyber_cti@securitycyber.uk"
 COMPANY_LEGAL_NAME = "Charlie Collins"
 ICO_REG = ""   # <-- register at ico.org.uk and paste the number here before go-live
 TERMS_VERSION = "2026-09-02"
-# Everything tunable in one JSON blob. Edit and re-deploy.
-#   checkout_mode      — "link_only": sell only via Stripe Payment Links; a
-#                        cadence with no link is hidden. "auto": fall back to
-#                        an API Checkout Session (needs STRIPE_SECRET_KEY).
-#   *_link             — Stripe Payment Link. We append ?client_reference_id=
-#                        (our signup intent) and &prefilled_email=. Set each
-#                        link's "After payment" to redirect to SITE_URL/welcome.
-#   channels_disabled  — kinds to hide from signup, e.g. ["slack"]
-#   *_price_id         — OPTIONAL. Left blank, the Worker creates the Stripe
-#                        product + recurring price on the first checkout and
-#                        caches it in D1. Set them only to reuse existing
-#                        Stripe products.
 CONFIG = """
 {
   "live": false,
@@ -73,10 +56,10 @@ CONFIG = """
   "brief": {
     "link": "https://buy.stripe.com/bJe4gy5dRa9z8IX3Pf3ks02",
     "price_id": "",
-    "name": "SecurityCyber \u2014 on-demand threat brief",
+    "name": "SecurityCyber — on-demand threat brief",
     "currency": "gbp",
     "unit_amount": 4900,
-    "display": "\u00a349"
+    "display": "£49"
   },
   "tiers": {
     "free": {
@@ -97,21 +80,15 @@ CONFIG = """
       "weekly_link": "https://buy.stripe.com/28EdR8dKn5Tj1gv0D33ks00",
       "monthly_price_id": "",
       "weekly_price_id": "",
-      "monthly_display": "\u00a38 / month",
-      "weekly_display": "\u00a32 / week",
+      "monthly_display": "£8 / month",
+      "weekly_display": "£2 / week",
       "monthly_pence": 800,
       "weekly_pence": 200,
       "blurb": "Instant alerts for anything scoring 90+, plus a daily digest.",
       "instant_min_score": 70,
       "min_score": 15,
       "attach_json": false,
-      "channels": [
-        "email",
-        "rss",
-        "discord",
-        "telegram",
-        "ntfy"
-      ],
+      "channels": ["email", "rss", "discord", "telegram", "ntfy"],
       "max_channels": 3
     },
     "team": {
@@ -119,7 +96,7 @@ CONFIG = """
       "weekly_link": "",
       "monthly_price_id": "",
       "weekly_price_id": "",
-      "monthly_display": "\u00a318 / month",
+      "monthly_display": "£18 / month",
       "weekly_display": "",
       "monthly_pence": 1800,
       "weekly_pence": 0,
@@ -127,42 +104,10 @@ CONFIG = """
       "instant_min_score": 55,
       "min_score": 10,
       "attach_json": true,
-      "channels": [
-        "email",
-        "rss",
-        "discord",
-        "slack",
-        "telegram",
-        "webhook",
-        "ntfy"
-      ],
+      "channels": ["email", "rss", "discord", "slack", "telegram", "webhook", "ntfy"],
       "max_channels": 7
     }
   },
   "discord_channel_min_score": 0
 }
 """
-
-# Secrets — set with:  npx wrangler secret put <NAME>
-#   STRIPE_SECRET_KEY        sk_test_… then sk_live_…   (checkout won't show without this)
-#   STRIPE_WEBHOOK_SECRET    whsec_…   (from the Stripe dashboard webhook)
-#   RESEND_API_KEY           re_…      (without it, email shows as unavailable)
-#   DISCORD_CLIENT_ID        Discord app -> OAuth2 -> Client ID
-#   DISCORD_CLIENT_SECRET    Discord app -> OAuth2 -> Client Secret
-#   DISCORD_BOT_TOKEN        Discord app -> Bot -> Token (bot must be IN the server,
-#                            with Create Invite + Manage Roles)
-#   DISCORD_GUILD_ID         right-click your server -> Copy Server ID (dev mode on)
-#   DISCORD_SUBSCRIBER_ROLE_ID  optional — role granted on join, revoked when
-#                            a subscription lapses
-#   DISCORD_REMOVE_ON_LAPSE  optional — "1" to kick instead of just unrole
-#   Redirect URI to whitelist in the Discord app:
-#     https://cti.securitycyber.uk/channel/discord/callback
-#   TELEGRAM_BOT_TOKEN       from @BotFather   (optional — else telegram is unavailable)
-#   TELEGRAM_BOT_USERNAME    without the @      (optional)
-#   TELEGRAM_WEBHOOK_SECRET  any random string  (optional)
-#   SUBS_TOKEN_SECRET        32+ random bytes   (signs subscriber links)
-#   INGEST_SECRET            32+ random bytes   (pipeline → worker auth)
-#   ADMIN_TOKEN              32+ random bytes   (owner panel → /admin auth)
-#   BRIEF_PRICE_ID           optional — a Stripe Price id for the one-off threat
-#                            brief. If unset, a product+price is created once on
-#                            the first purchase and cached in D1.
