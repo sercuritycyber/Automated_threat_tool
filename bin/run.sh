@@ -77,6 +77,7 @@ echo "[run] $CAND_COUNT candidates queued for the analyst  ($USED/$MAXDAY posts 
 #   ollama       local model only; deterministic fallback if it's down.
 #                0 Claude tokens.
 #   antigravity  Antigravity (Gemini) first, then ollama, then deterministic.
+#   openai       OpenAI API first, then ollama, then deterministic.
 #   auto         ollama triage, then a NARROW claude -p deep pass on just the
 #                KEV/high-score items (state/escalate.json) when
 #                analyst.deep_pass; full claude -p if ollama triage fails.
@@ -131,11 +132,22 @@ for any that clearly warrant it). Leave all other fields intact." \
       python3 "$ROOT/bin/analyst_ollama.py"; ANALYST_RC=$?
     fi
     ;;
+  openai)
+    python3 "$ROOT/bin/analyst_openai.py"; ANALYST_RC=$?
+    if [[ "$ANALYST_RC" -ne 0 ]]; then
+      echo "[run] OpenAI unavailable ($ANALYST_RC) — trying local ollama"
+      python3 "$ROOT/bin/analyst_ollama.py"; ANALYST_RC=$?
+    fi
+    ;;
   claude|*)
     run_claude_analyst; ANALYST_RC=$?
     if [[ "$ANALYST_RC" -ne 0 ]]; then
       echo "[run] claude analyst exited $ANALYST_RC — trying Antigravity (Gemini) backup"
       python3 "$ROOT/bin/analyst_antigravity.py"; ANALYST_RC=$?
+    fi
+    if [[ "$ANALYST_RC" -ne 0 ]]; then
+      echo "[run] Gemini unavailable ($ANALYST_RC) — trying OpenAI backup"
+      python3 "$ROOT/bin/analyst_openai.py"; ANALYST_RC=$?
     fi
     if [[ "$ANALYST_RC" -ne 0 ]]; then
       echo "[run] Antigravity unavailable ($ANALYST_RC) — trying local ollama backup"
@@ -149,6 +161,25 @@ if [[ "$ANALYST_RC" -ne 0 ]]; then
   python3 "$ROOT/bin/analyst_fallback.py" || echo "[run] analyst_fallback returned $? (non-fatal)"
 fi
 
+# Model output is untrusted: validate provenance before any delivery or posting.
+python3 - <<'PY'
+import json
+import sys
+from pathlib import Path
+sys.path.insert(0, "bin")
+from decision_validation import validate_decision
+try:
+    decision = json.loads(Path("state/decision.json").read_text())
+    candidates = json.loads(Path("state/candidates.json").read_text())
+except (OSError, json.JSONDecodeError) as exc:
+    print(f"[run] decision validation input unavailable: {exc}")
+    raise SystemExit(2)
+errors = validate_decision(decision, candidates)
+if errors:
+    print("[run] rejecting analyst decision: " + " | ".join(errors))
+    raise SystemExit(2)
+PY
+
 # Stage 3: paying subscribers FIRST. They are buying the lead time as much as
 # the analysis, so the people who pay hear it before it is given away publicly.
 # Never fatal: a fan-out problem must not stop the brand posting.
@@ -159,7 +190,7 @@ python3 "$ROOT/bin/push_to_worker.py" "$ROOT/state/decision.json" || echo "[run]
 LEAD_MIN="${CTI_SUBSCRIBER_LEAD_MINUTES:-0}"
 if [[ "$LEAD_MIN" =~ ^[0-9]+$ ]] && (( LEAD_MIN > 0 )); then
   echo "[run] holding the public post ${LEAD_MIN}m so subscribers stay ahead"
-  sleep $(( LEAD_MIN * 60 ))
+  sleep $((LEAD_MIN * 60))
 fi
 
 echo "[run] stage 4/4 : publish"
