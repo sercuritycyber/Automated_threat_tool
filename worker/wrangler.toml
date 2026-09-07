@@ -11,26 +11,19 @@ workers_dev = false
 directory = "./public"
 
 # Production hostname, as a Custom Domain rather than a plain route.
-# `custom_domain = true` makes `wrangler deploy` CREATE the proxied DNS record
-# for cti.securitycyber.uk itself — a plain route does not, which is why the
-# first deploy succeeded but the hostname stayed NXDOMAIN. Note the pattern is
-# the bare hostname here: no `/*` (a custom domain always takes every path).
 [[routes]]
 pattern = "cti.securitycyber.uk"
 custom_domain = true
 
 # Subscriber database. Create once:  npx wrangler d1 create cti-subs
-# then paste the id below.
 [[d1_databases]]
 binding = "DB"
 database_name = "cti-subs"
 database_id = "2d514521-9be2-4c8e-8bf0-73c68bcaeafd"
 
 [triggers]
-# 08:15 UTC daily digest · 03:30 UTC Sunday retention + intent purge.
-# Day-of-week must be SUN-SAT or 1-7 — Cloudflare's API rejects `0`
-# ("invalid cron string ... [code: 10100]"), so this is SUN, not 0.
-crons = ["15 8 * * *", "30 3 * * SUN"]
+# digests 06:15 / 11:15 / 16:15 UTC = 07:15 / 12:15 / 17:15 BST · 03:30 UTC Sunday retention + intent purge.
+crons = ["15 6 * * *", "15 11 * * *", "15 16 * * *", "30 3 * * SUN"]
 
 [observability]
 enabled = true
@@ -50,18 +43,6 @@ SUPPORT_EMAIL = "securitycyber_cti@securitycyber.uk"
 COMPANY_LEGAL_NAME = "Charlie Collins"
 ICO_REG = ""   # <-- register at ico.org.uk and paste the number here before go-live
 TERMS_VERSION = "2026-09-02"
-# Everything tunable in one JSON blob. Edit and re-deploy.
-#   checkout_mode      — "link_only": sell only via Stripe Payment Links; a
-#                        cadence with no link is hidden. "auto": fall back to
-#                        an API Checkout Session (needs STRIPE_SECRET_KEY).
-#   *_link             — Stripe Payment Link. We append ?client_reference_id=
-#                        (our signup intent) and &prefilled_email=. Set each
-#                        link's "After payment" to redirect to SITE_URL/welcome.
-#   channels_disabled  — kinds to hide from signup, e.g. ["slack"]
-#   *_price_id         — OPTIONAL. Left blank, the Worker creates the Stripe
-#                        product + recurring price on the first checkout and
-#                        caches it in D1. Set them only to reuse existing Stripe
-#                        products.
 CONFIG = """
 {
   "live": false,
@@ -84,14 +65,15 @@ CONFIG = """
     "free": {
       "monthly_link": "https://buy.stripe.com/eVqbJ07lZ4Pf8IXfxX3ks04",
       "free": true,
+      "promo_days": 7,
       "monthly_pence": 0,
       "weekly_pence": 0,
-      "monthly_display": "Free",
-      "blurb": "The urgent ones only — anything scoring 90+ the moment it's confirmed, plus the once-a-day digest. Email, private RSS or Discord.",
-      "instant_min_score": 90,
-      "min_score": 40,
-      "channels": ["email", "rss", "discord"],
-      "max_channels": 2
+      "monthly_display": "Free trial",
+      "blurb": "A 7-day run of the full Individual plan — instant alerts plus the daily digest, to email, RSS, Discord, Telegram or ntfy. No card. Keep it going for £8/month or £2/week.",
+      "instant_min_score": 70,
+      "min_score": 15,
+      "channels": ["email", "rss", "discord", "telegram", "ntfy"],
+      "max_channels": 3
     },
     "individual": {
       "monthly_link": "https://buy.stripe.com/aFa3cu6hVdlLf7lbhH3ks01",
