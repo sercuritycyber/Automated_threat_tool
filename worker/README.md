@@ -4,10 +4,10 @@ The public subscription service for the SecurityCyber CTI alert feed. Same
 deploy model as securitycyber.uk: code in GitHub → push → Cloudflare builds.
 
 - **Worker name:** `cti-alerts` (set in `wrangler.toml`)
-- **Deploy:** `npx wrangler deploy` **from this `worker/` directory**. That is the
-  only supported path right now. The GitHub repo is *cold storage* — Workers
-  Builds failing there is expected and ignored, because the repo root is the
-  Python pipeline, not the Worker.
+- **Deploy:** `npx wrangler deploy` **from this `worker/` directory**, or use the
+  Cloudflare build settings with root directory `worker/` and deploy command
+  `npx wrangler deploy`. The Version command should be blank; if Cloudflare
+  requires one, use `npx wrangler versions upload` from the `worker/` directory.
 - **Custom domain:** don't hand-add a DNS record. Cloudflare dashboard →
   Workers & Pages → `cti-alerts` → Settings → **Domains & Routes → Add → Custom
   Domain** → `cti.securitycyber.uk`. That creates and proxies the DNS record for you.
@@ -15,11 +15,14 @@ deploy model as securitycyber.uk: code in GitHub → push → Cloudflare builds.
 - **Storage:** D1 (`cti-subs`) — all subscriber PII
 - **Email:** Resend
 - **Payments:** Stripe hosted Checkout + Customer Portal (no card data here)
-- **Cron:** daily digest (08:15 UTC) + weekly retention (Sun 03:30 UTC)
+- **Cron:** daily digest + weekly retention (see `wrangler.toml`)
 
 The Python pipeline stays on Charlie's box; after each harvest it POSTs the
 posts to `POST /internal/ingest` (bin/push_to_worker.py). The owner panel
 (`web/app.py` → Subscribers) reads/writes via `/admin/*`.
+
+The Worker has an intentionally empty `public/` assets directory for Cloudflare
+build compatibility. Application routes remain handled by `src/index.js`.
 
 ```
 src/index.js     router + fetch()/scheduled() + delivery fan-out + /admin API
@@ -63,13 +66,13 @@ npx wrangler secret put TELEGRAM_WEBHOOK_SECRET
 #    COMPANY_LEGAL_NAME, ICO_REG, and the CONFIG JSON (paste your Stripe price ids
 #    into tiers.<t>.monthly_price_id / weekly_price_id)
 
-# 4. DNS: add an A/AAAA (or CNAME) record `cti` in the securitycyber.uk zone,
-#    proxied (orange cloud).
+# 4. DNS: the custom_domain route in wrangler.toml creates the proxied
+#    cti.securitycyber.uk record during deployment.
 
 # 5. deploy   (ALWAYS run from this worker/ directory)
 npx wrangler deploy
-#    GitHub is cold storage — its Workers Builds are expected to fail and are
-#    ignored. Deployment is manual until Charlie decides otherwise.
+#    Cloudflare Workers Builds can use root directory worker/ and the deploy command above.
+#    The Version command should be blank unless configured to run from worker/.
 
 # 6. Stripe webhook endpoint:
 #    https://cti.securitycyber.uk/webhooks/stripe   → copy signing secret to STRIPE_WEBHOOK_SECRET
