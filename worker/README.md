@@ -4,10 +4,10 @@ The public subscription service for the SecurityCyber CTI alert feed. Same
 deploy model as securitycyber.uk: code in GitHub → push → Cloudflare builds.
 
 - **Worker name:** `cti-alerts` (set in `wrangler.toml`)
-- **Deploy:** `npx wrangler deploy` **from this `worker/` directory**, or use the
-  Cloudflare build settings with root directory `worker/` and deploy command
-  `npx wrangler deploy`. The Version command should be blank; if Cloudflare
-  requires one, use `npx wrangler versions upload` from the `worker/` directory.
+- **Deploy:** Cloudflare build settings should use root directory `worker/`,
+  deploy command `npx wrangler deploy`, and Version command
+  `npx wrangler versions upload`. Both commands must run from `worker/` so
+  Wrangler loads `worker/wrangler.toml` and finds `src/index.js`.
 - **Custom domain:** don't hand-add a DNS record. Cloudflare dashboard →
   Workers & Pages → `cti-alerts` → Settings → **Domains & Routes → Add → Custom
   Domain** → `cti.securitycyber.uk`. That creates and proxies the DNS record for you.
@@ -35,7 +35,7 @@ src/pages.js     branded HTML  (SecurityCyber dark theme)
 src/legal.js     privacy / terms / cookies  (mirror of docs/legal/*.md)
 src/util.js      helpers
 test/run.mjs     pure-logic unit checks   (node test/run.mjs)
-test/flow.mjs    end-to-end vs `wrangler dev`   (node test/flow.mjs)
+test/flow.mjs    end-to-end vs `wrangler dev`   (full lifecycle vs the running dev server)
 ```
 
 ## First-time setup
@@ -71,8 +71,10 @@ npx wrangler secret put TELEGRAM_WEBHOOK_SECRET
 
 # 5. deploy   (ALWAYS run from this worker/ directory)
 npx wrangler deploy
-#    Cloudflare Workers Builds can use root directory worker/ and the deploy command above.
-#    The Version command should be blank unless configured to run from worker/.
+#    Cloudflare Workers Builds:
+#      Root directory: worker/
+#      Deploy command: npx wrangler deploy
+#      Version command: npx wrangler versions upload
 
 # 6. Stripe webhook endpoint:
 #    https://cti.securitycyber.uk/webhooks/stripe   → copy signing secret to STRIPE_WEBHOOK_SECRET
