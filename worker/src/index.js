@@ -330,10 +330,9 @@ async function subscribeSubmit(request, env, cfg) {
   const intentTok = newId();
   await db.createIntent(env.DB, {
     token: intentTok, email, tier, cadence,
-    // telegram carries no channel row (linked purely via the bot); discord
-    // keeps its kind so the confirm mail and prefs page know to offer the
-    // one-click connect, but still has no target until they do.
-    channel_kind: platform === "telegram" ? null : platform,
+    // Both keep their kind (even with no target yet) so the confirm mail and
+    // prefs page know to offer the one-click connect for whichever it is.
+    channel_kind: platform,
     channel_target: target || null, ip: clientIp(request), user_agent: request.headers.get("user-agent") || "",
   });
   await db.logConsent(env.DB, null, "terms", true, {
@@ -506,6 +505,9 @@ async function activateSubscriber(env, cfg, request, sub, detail) {
     // discord / telegram picked at signup but not yet connected (no target):
     // there's nothing to ping — email them the one-click connect link instead.
     if ((ch.kind === "discord" || ch.kind === "telegram") && !ch.target) {
+      
+      await emailConnectLink(env, cfg, sub, ch.kind).catch((e) => console.error("connect link", e));
+      
       await emailConnectLink(env, cfg, await db.get(env.DB, sub.id), ch.kind).catch((e) => console.error("connect link", e));
       continue;
     }
@@ -708,7 +710,7 @@ async function discordCallback(request, env, cfg, url) {
 // caller — losing Discord access must not break status handling.
 async function discordAccess(env, cfg, sub, grant) {
   if (!discord.discordConfigured(env)) return;
-  const ch = (sub.channels || []).find((c) => c.kind === "discord");
+  const ch = (sub.channels || []).find((c) => c.kind === "discord" && c.target);
   if (!ch) return;
   try {
     if (grant) await discord.grantSubscriberRole(env, ch.target);
@@ -970,6 +972,10 @@ async function telegramWebhook(request, env, cfg) {
       const data = await verify(env, payload, "tg_link");
       const sub = await db.get(env.DB, data.sub, false);
       if (sub) {
+        // Drop the empty-target placeholder row left by the signup so there's
+        // exactly one telegram channel, same as the Discord OAuth callback.
+        const placeholder = (sub.channels || []).find((c) => c.kind === "telegram" && !c.target);
+        if (placeholder) await db.removeChannel(env.DB, placeholder.id);
         await db.addChannel(env.DB, sub.id, "telegram", chatId, true, "telegram");
         await tgReply(env, chatId, "✅ Linked. You'll get SecurityCyber CTI alerts here.");
         return json({ ok: true });
@@ -1110,7 +1116,7 @@ function deliverableChannels(sub, tierCfg) {
   // email. New signups don't need this: the email row is verified on confirm.
   const hasOther = chans.some((c) => c.verified && c.kind !== "email" && allowed.has(c.kind));
   return chans.filter((c) => {
-    if (!allowed.has(c.kind)) return false;
+    if (!allowed.has(c.kind) || !c.target) return false;
     if (c.verified) return true;
     return c.kind === "email" && c.target === sub.email && c.label == null && !hasOther;
   });

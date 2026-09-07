@@ -1,8 +1,8 @@
 [Unit]
-Description=Run the Blue Team CTI harvester every 4 hours
+Description=Run the Blue Team CTI harvester 7x/day (extra midday run at 14:00)
 
 [Timer]
-OnCalendar=*-*-* 00,04,08,12,16,20:00:00
+OnCalendar=*-*-* 00,04,08,12,14,16,20:00:00
 # catch up if the machine was asleep at the scheduled time
 Persistent=true
 # spread load / avoid every box firing on the dot
