@@ -984,9 +984,19 @@ async function manageExport(request, env, cfg, url) {
 
 async function manageDelete(request, env, cfg) {
   const f = await form(request);
-  const [sub] = await manageSubFromForm(env, f.t);
+  const [sub, tok] = await manageSubFromForm(env, f.t);
   if (!sub) return html(simple(cfg, "Link problem", "Link expired", ""));
-  if (sub.stripe_subscription_id) { try { await billing.cancelSubscription(env, sub.stripe_subscription_id); } catch (e) { console.error("cancel on delete", e); } }
+  if (sub.stripe_subscription_id) {
+    try {
+      await billing.cancelSubscription(env, sub.stripe_subscription_id);
+    } catch (e) {
+      console.error("cancel on delete", e);
+      await notifyOwner(env, cfg, `delete blocked: could not cancel Stripe subscription for subscriber ${sub.id}: ${e}`);
+      return html(simple(cfg, "Delete blocked", "Delete blocked",
+        "We couldn't cancel the active Stripe subscription, so we kept your account record intact to avoid billing or data loss.",
+        `<p><a class="btn" href="/manage?t=${tok}">Back to preferences</a></p>`));
+    }
+  }
   await db.eraseSubscriber(env.DB, sub.id, "self-service deletion");
   await notifyOwner(env, cfg, "a subscriber deleted their account");
   return html(simple(cfg, "Deleted", "Your account is deleted",

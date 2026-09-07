@@ -837,6 +837,13 @@ def manage_delete(request: Request, t: str = Form("")):
             billing.cancel_subscription(sub["stripe_subscription_id"])
         except billing.StripeError as ex:
             notify_owner(f"CTI: could not cancel Stripe sub on delete for #{sub['id']}: {ex}")
+            return page("Delete blocked",
+                        "<h1>Delete blocked</h1>"
+                        "<p class=lede>We couldn't cancel the active Stripe subscription, so we kept your account "
+                        "record intact to avoid billing or data loss.</p>"
+                        "<p class=muted>Please use the billing portal or contact support to resolve the subscription "
+                        "before deleting your account.</p>"
+                        "<p><a href='/manage?t=" + e(tok) + "'>Back to preferences</a></p>")
     S.erase_subscriber(sub["id"], "self-service deletion")
     notify_owner("CTI: a subscriber deleted their account")
     return page("Deleted",

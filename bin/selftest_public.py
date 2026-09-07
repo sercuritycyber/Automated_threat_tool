@@ -190,6 +190,18 @@ def main() -> int:
     r = c.post("/manage/portal", data={"t": mtok})
     check("portal redirects to Stripe", r.status_code == 303 and "billing.stripe.com" in r.headers["location"])
 
+    # --- delete blocks if Stripe cancel fails ---
+    billing.cancel_subscription = lambda sid, at_period_end=False: (_ for _ in ()).throw(billing.StripeError("card payment failed"))
+    sid2 = S.create_pending("blocked@example.com", "individual", source="stripe",
+                           stripe_customer_id="cus_blocked", cadence="monthly")
+    S.set_stripe_ids(sid2, customer_id="cus_blocked", subscription_id="sub_blocked")
+    S.set_status(sid2, "active", "test")
+    mtok2 = tokens.sign({"sub": sid2, "act": "manage"}, ttl=3600)
+    r = c.post("/manage/delete", data={"t": mtok2})
+    check("delete blocks when Stripe cancel fails",
+          r.status_code == 200 and "Delete blocked" in r.text and S.get(sid2)["status"] == "active")
+    billing.cancel_subscription = lambda sid, at_period_end=False: {"status": "canceled"}
+
     # --- delete ---
     r = c.post("/manage/delete", data={"t": mtok})
     check("delete erases + confirms", r.status_code == 200 and S.get(sub["id"]) is None)
