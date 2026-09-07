@@ -15,6 +15,7 @@ Exit codes: 0 always (an empty candidate set is a valid outcome).
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 import time
@@ -123,6 +124,57 @@ def fetch_feed(name: str, url: str, weight: float, timeout: int) -> list[dict]:
     return out
 
 
+
+CVEFEED_API = "https://cvefeed.io/api/vulnerability/"
+
+
+def fetch_cvefeed(name: str, weight: float, min_cvss: float, timeout: int, api_key: str) -> list[dict]:
+    """CVEFeed.io — authoritative CVE stream (NVD + CISA KEV + vendor advisories).
+    Keeps items scoring >= min_cvss OR on CISA KEV; the lookback window is applied
+    downstream like every other source."""
+    if not api_key:
+        print(f"  ! {name}: CVEFEED_API_KEY not set — skipping", file=sys.stderr)
+        return []
+    try:
+        r = requests.get(CVEFEED_API, params={"ordering": "-published", "page_size": 200},
+                         headers={**HEADERS, "Authorization": f"Bearer {api_key}",
+                                  "Accept": "application/json"}, timeout=timeout)
+        r.raise_for_status()
+        results = r.json().get("results", [])
+    except (requests.RequestException, ValueError) as e:
+        print(f"  ! {name}: {e}", file=sys.stderr)
+        return []
+    out = []
+    for v in results:
+        if v.get("is_rejected"):
+            continue
+        cvss = v.get("cvss_score")
+        kev = bool(v.get("cisa_kev_detail"))
+        try:
+            score_ok = kev or (cvss is not None and float(cvss) >= min_cvss)
+        except (TypeError, ValueError):
+            score_ok = kev
+        if not score_ok:
+            continue
+        try:
+            pub = datetime.fromisoformat(str(v["published"]).replace("Z", "+00:00"))
+        except (KeyError, ValueError, TypeError):
+            continue
+        sev = v.get("severity") or ""
+        desc = (v.get("description") or "").strip()
+        tag = f"[{sev}" + (f" · CVSS {cvss}" if cvss is not None else "") + (" · CISA KEV" if kev else "") + "] "
+        out.append({
+            "title": v.get("title") or v.get("id") or "CVE advisory",
+            "link": v.get("url") or f"https://cvefeed.io/vuln/detail/{v.get('id', '')}",
+            "summary": (tag + desc)[:1200],
+            "published": pub,
+            "source": name,
+            "source_weight": weight,
+        })
+    print(f"  - {name}: {len(out)} items (CVSS >= {min_cvss} or KEV)")
+    return out
+
+
 def fetch_kev(timeout: int) -> dict:
     try:
         r = requests.get(KEV_URL, headers=HEADERS, timeout=timeout)
@@ -201,6 +253,8 @@ def main() -> int:
     max_candidates = int(ing.get("max_candidates", 40))
     all_feeds = load_yaml(ROOT / "config" / "feeds.yaml").get("feeds", [])
     feeds = [f for f in all_feeds if f.get("enabled", True)]
+    rss_feeds = [f for f in feeds if f.get("type", "rss") == "rss"]
+    api_feeds = [f for f in feeds if f.get("type") == "api"]
 
     cutoff = datetime.now(timezone.utc) - timedelta(hours=lookback)
     print(f"[ingest] {len(feeds)}/{len(all_feeds)} feeds enabled, lookback {lookback}h "
@@ -231,8 +285,13 @@ def main() -> int:
     with ThreadPoolExecutor(max_workers=8) as ex:
         futs = [
             ex.submit(fetch_feed, f["name"], f["url"], float(f.get("weight", 0.6)), timeout)
-            for f in feeds
+            for f in rss_feeds
         ]
+        for f in api_feeds:
+            if f.get("provider") == "cvefeed":
+                futs.append(ex.submit(
+                    fetch_cvefeed, f["name"], float(f.get("weight", 0.9)),
+                    float(f.get("min_cvss", 7.5)), timeout, os.environ.get("CVEFEED_API_KEY", "")))
         for fut in as_completed(futs):
             raw.extend(fut.result())
     kev = fetch_kev(timeout)

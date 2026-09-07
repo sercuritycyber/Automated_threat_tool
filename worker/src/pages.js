@@ -1,5 +1,10 @@
 // HTML rendering — SecurityCyber brand (securitycyber.uk look).
 import { esc } from "./util.js";
+
+// Every channel carries a link back to the CTI page — LinkedIn/Discord render
+// its OG card (our image), RSS readers show it as the feed logo.
+export const PROMO_URL = "https://securitycyber.uk/cti";
+export const PROMO_IMG = "https://securitycyber.uk/og-image.png";
 import { monthlyPence, paymentLink } from "./config.js";
 
 export const LOGO_SVG =
@@ -158,16 +163,16 @@ export function landing(cfg, flash = "", flashKind = "", buyable = null) {
     // billing toggle never hides (data-cads covers both periods).
     if (t.free) {
       if (!paymentLink(cfg, name, "monthly")) continue;
-      tiers += `<div class=tier data-cads="monthly weekly"><h3>Free</h3>
-<div class=p1>£0 <span class=p2>no card</span></div>
+      tiers += `<div class=tier data-cads="monthly weekly"><h3>Free trial</h3>
+<div class=p1>7 days <span class=p2>free · no card</span></div>
 <p class=muted style="margin-top:8px">${esc(t.blurb || "")}</p>
 <ul>
-<li>The genuinely urgent items — scoring ${Number(t.instant_min_score) || 90}+ — the moment they're confirmed</li>
-<li>The once-a-day digest of everything above the line</li>
+<li>The full paid feed for a week — instant alerts scoring ${Number(t.instant_min_score) || 70}+ and the daily digest</li>
 <li>Goes to ${esc(chans)}</li>
-<li>Upgrade any time for a lower threshold, more channels and instant JSON</li>
+<li>No card, no charge. It stops after 7 days unless you upgrade</li>
+<li>Keep it going from £2/week — your feed URL and preferences carry over</li>
 </ul>
-<a class="btn ghost" href="/subscribe?tier=free">Start free →</a></div>`;
+<a class="btn ghost" href="/subscribe?tier=free">Start the trial →</a></div>`;
       continue;
     }
     // Only advertise a cadence we can actually take money for, so the pricing
@@ -320,8 +325,8 @@ bad week, you get the full picture — fast.</p></div>
 <button type=button class=bt data-cad=weekly aria-pressed=false>Weekly</button>
 </div>
 <div class=tiers>${tiers}${briefCard}</div>
-<p class=muted style="margin-top:12px">Start on the free plan and upgrade when you want a lower threshold —
-no card for that one. Paid plans: weekly or monthly, cancel anytime, no contract.
+<p class=muted style="margin-top:12px">Start with a 7-day free trial — no card, the full paid feed for a week.
+Keep it going any time. Paid plans: weekly or monthly, cancel anytime, no contract.
 Card handled by Stripe — it never touches our servers. Prices in GBP, no VAT.</p>
 </div>
 <script>(function(){
@@ -424,14 +429,16 @@ ${p.source ? `<source url="${xesc(cfg.site_url)}">${xesc(p.source)}</source>` : 
 ${cves.map((c) => `<category>${xesc(c)}</category>`).join("")}
 <description>${xesc((act ? `DO NOW: ${act}\n\n` : "") + desc
       + (p.score != null ? `\n\nImpact score: ${p.score}/100` : "")
-      + (p.url ? `\nSource: ${p.url}` : ""))}</description>
+      + (p.url ? `\nSource: ${p.url}` : "")
+      + `\n\nSecurityCyber CTI — ${PROMO_URL}`)}</description>
 </item>`;
   }).join("\n");
   return `<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
 <channel>
 <title>${xesc(title || `${cfg.brand} CTI Alerts`)}</title>
-<link>${xesc(cfg.site_url)}</link>
+<link>${xesc(PROMO_URL)}</link>
+<image><url>${xesc(PROMO_IMG)}</url><title>${xesc(title || `${cfg.brand} CTI Alerts`)}</title><link>${xesc(PROMO_URL)}</link></image>
 <description>${xesc(note || "Prioritised threat intelligence for defenders — only what clears the bar.")}</description>
 <language>en-gb</language>
 <lastBuildDate>${rfc822(posts[0]?.seen_at)}</lastBuildDate>
@@ -468,7 +475,7 @@ export function subscribeForm(cfg, tier, flash = "", flashKind = "", avail = nul
   const contact = cfg.contact_email || "securitycyber_cti@securitycyber.uk";
   const isFree = !!t.free;
   const body = `
-<h1>${isFree ? "Start free" : `Subscribe — ${tier[0].toUpperCase() + tier.slice(1)}`}</h1>
+<h1>${isFree ? "Start your 7-day free trial" : `Subscribe — ${tier[0].toUpperCase() + tier.slice(1)}`}</h1>
 <p class=lede>${esc(t.blurb || "")}</p>
 <form method=post action="/subscribe" id=sf>
 <input type=hidden name=tier value="${tier}">
@@ -483,10 +490,10 @@ ${cadOpts ? `<label>Billing</label><div class=seg>${cadOpts}</div>` : ""}
 <input type=checkbox name=agree required style="width:auto">&nbsp;I agree to the
 <a href="/terms" target=_blank>Terms</a> and <a href="/privacy" target=_blank>Privacy Policy</a>,
 and I want alerts to start straight away.</label>
-<div class=row style="margin-top:16px"><button class=btn>${isFree ? "Start free →" : "Continue to payment →"}</button>
+<div class=row style="margin-top:16px"><button class=btn>${isFree ? "Start the free trial →" : "Continue to payment →"}</button>
 <a class="btn ghost" href="/">Back</a></div>
 <p class=muted style="margin-top:10px">${isFree
-    ? "No card and no charge — the free plan uses the same secure sign-up, then confirm your email and alerts start."
+    ? "7-day free trial, no card. Same secure sign-up (Stripe, £0), then confirm your email and alerts start. It stops after 7 days unless you upgrade — nothing happens automatically."
     : "Card details are handled by Stripe — they never touch our servers."}
 Questions: <a href="mailto:${esc(contact)}">${esc(contact)}</a>.</p>
 </form>

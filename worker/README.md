@@ -4,10 +4,10 @@ The public subscription service for the SecurityCyber CTI alert feed. Same
 deploy model as securitycyber.uk: code in GitHub → push → Cloudflare builds.
 
 - **Worker name:** `cti-alerts` (set in `wrangler.toml`)
-- **Deploy:** `npx wrangler deploy` **from this `worker/` directory**. That is the
-  only supported path right now. The GitHub repo is *cold storage* — Workers
-  Builds failing there is expected and ignored, because the repo root is the
-  Python pipeline, not the Worker.
+- **Deploy:** Cloudflare build settings should use root directory `worker/`,
+  deploy command `npx wrangler deploy`, and Version command
+  `npx wrangler versions upload`. Both commands must run from `worker/` so
+  Wrangler loads `worker/wrangler.toml` and finds `src/index.js`.
 - **Custom domain:** don't hand-add a DNS record. Cloudflare dashboard →
   Workers & Pages → `cti-alerts` → Settings → **Domains & Routes → Add → Custom
   Domain** → `cti.securitycyber.uk`. That creates and proxies the DNS record for you.
@@ -15,11 +15,14 @@ deploy model as securitycyber.uk: code in GitHub → push → Cloudflare builds.
 - **Storage:** D1 (`cti-subs`) — all subscriber PII
 - **Email:** Resend
 - **Payments:** Stripe hosted Checkout + Customer Portal (no card data here)
-- **Cron:** daily digest (08:15 UTC) + weekly retention (Sun 03:30 UTC)
+- **Cron:** daily digest + weekly retention (see `wrangler.toml`)
 
 The Python pipeline stays on Charlie's box; after each harvest it POSTs the
 posts to `POST /internal/ingest` (bin/push_to_worker.py). The owner panel
 (`web/app.py` → Subscribers) reads/writes via `/admin/*`.
+
+The Worker has an intentionally empty `public/` assets directory for Cloudflare
+build compatibility. Application routes remain handled by `src/index.js`.
 
 ```
 src/index.js     router + fetch()/scheduled() + delivery fan-out + /admin API
@@ -32,7 +35,7 @@ src/pages.js     branded HTML  (SecurityCyber dark theme)
 src/legal.js     privacy / terms / cookies  (mirror of docs/legal/*.md)
 src/util.js      helpers
 test/run.mjs     pure-logic unit checks   (node test/run.mjs)
-test/flow.mjs    end-to-end vs `wrangler dev`   (node test/flow.mjs)
+test/flow.mjs    end-to-end vs `wrangler dev`   (full lifecycle vs the running dev server)
 ```
 
 ## First-time setup
@@ -63,13 +66,15 @@ npx wrangler secret put TELEGRAM_WEBHOOK_SECRET
 #    COMPANY_LEGAL_NAME, ICO_REG, and the CONFIG JSON (paste your Stripe price ids
 #    into tiers.<t>.monthly_price_id / weekly_price_id)
 
-# 4. DNS: add an A/AAAA (or CNAME) record `cti` in the securitycyber.uk zone,
-#    proxied (orange cloud).
+# 4. DNS: the custom_domain route in wrangler.toml creates the proxied
+#    cti.securitycyber.uk record during deployment.
 
 # 5. deploy   (ALWAYS run from this worker/ directory)
 npx wrangler deploy
-#    GitHub is cold storage — its Workers Builds are expected to fail and are
-#    ignored. Deployment is manual until Charlie decides otherwise.
+#    Cloudflare Workers Builds:
+#      Root directory: worker/
+#      Deploy command: npx wrangler deploy
+#      Version command: npx wrangler versions upload
 
 # 6. Stripe webhook endpoint:
 #    https://cti.securitycyber.uk/webhooks/stripe   → copy signing secret to STRIPE_WEBHOOK_SECRET

@@ -150,6 +150,12 @@ export async function createBriefCheckout(env, cfg, { email, successUrl, cancelU
   return { id: s.id, url: s.url };
 }
 export const getSubscription = (env, id) => req(env, "GET", `/subscriptions/${id}`);
+export const listPaymentLinks = (env) => req(env, "GET", "/payment_links?limit=100");
+export const setPaymentLinkRedirect = (env, id, url) =>
+  req(env, "POST", `/payment_links/${id}`, {
+    after_completion: { type: "redirect", redirect: { url } },
+  });
+
 export const cancelSubscription = (env, id) => req(env, "DELETE", `/subscriptions/${id}`);
 
 // ---- webhook signature (t=…,v1=…) --------------------------------
@@ -260,10 +266,12 @@ export async function handleEvent(env, cfg, event) {
         // Connected after checkout via OAuth / a bot deep-link, so there's no
         // target to store yet — but record the CHOICE as an unverified,
         // empty-target row so activateSubscriber knows to email them the
+
         // one-click connect link instead of silently doing nothing. This row
         // is never itself a deliverable channel, so it must never be marked
         // verified — not even for an already-live subscriber re-checking out.
         await db.addChannel(D, sid, channel.kind, "", false, "signup");
+
       }
       if (intent) await db.consumeIntent(D, clientRef);
       if (alreadyLive) {

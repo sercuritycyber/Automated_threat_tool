@@ -443,7 +443,7 @@ async function stripeWebhook(request, env, cfg) {
     const t = await sign(env, { sub: res.subscriber_id, act: "confirm" }, 14 * 86400);
     const where = res.channel ? chanLabel(res.channel.kind) : "email";
     await send(env, cfg, "email", res.email, "Confirm your SecurityCyber CTI alerts",
-      `Thanks for subscribing — ${cfg.tiers[res.tier]?.free ? "the free plan" : `${res.tier} plan, billed ${res.cadence}`}.\n\n` +
+      `Thanks for subscribing — ${cfg.tiers[res.tier]?.free ? "your 7-day free trial" : `${res.tier} plan, billed ${res.cadence}`}.\n\n` +
       `Confirm your email to switch your alerts on:\n\n${cfg.site_url}/confirm?t=${t}\n\n` +
       `Your alerts will go to: ${where}.\nThis link works for 14 days. If you didn't subscribe, ignore this and email ${cfg.contact_email}.`);
     await db.logEvent(env.DB, "confirm_email_sent", res.subscriber_id, { cadence: res.cadence });
@@ -505,7 +505,10 @@ async function activateSubscriber(env, cfg, request, sub, detail) {
     // discord / telegram picked at signup but not yet connected (no target):
     // there's nothing to ping — email them the one-click connect link instead.
     if ((ch.kind === "discord" || ch.kind === "telegram") && !ch.target) {
+      
       await emailConnectLink(env, cfg, sub, ch.kind).catch((e) => console.error("connect link", e));
+      
+      await emailConnectLink(env, cfg, await db.get(env.DB, sub.id), ch.kind).catch((e) => console.error("connect link", e));
       continue;
     }
     const r = await send(env, cfg, ch.kind, ch.target, "SecurityCyber CTI — you're connected",
@@ -941,6 +944,25 @@ async function telegramWebhook(request, env, cfg) {
   if (env.TELEGRAM_WEBHOOK_SECRET && request.headers.get("x-telegram-bot-api-secret-token") !== env.TELEGRAM_WEBHOOK_SECRET)
     return json({ ok: false }, 403);
   let upd; try { upd = await request.json(); } catch { return json({ ok: true }); }
+
+  // Bot added to / promoted in a channel — capture the chat id so broadcast can
+  // be switched on without hunting for the numeric id.
+  const cm = upd.my_chat_member;
+  if (cm && cm.chat && (cm.chat.type === "channel" || cm.chat.type === "supergroup")) {
+    const st = cm.new_chat_member && cm.new_chat_member.status;
+    if (st === "administrator" || st === "creator") {
+      await db.kvSet(env.DB, "tg_channel_id", String(cm.chat.id)).catch(() => {});
+      await db.kvSet(env.DB, "tg_channel_title", cm.chat.title || "").catch(() => {});
+      await notifyOwner(env, cfg,
+        `Telegram: the bot is now an admin of "${cm.chat.title}" (chat id ${cm.chat.id}). `
+        + `Broadcast can be switched on.`).catch(() => {});
+    } else if (["left", "kicked", "member", "restricted"].includes(st)) {
+      await notifyOwner(env, cfg,
+        `Telegram: the bot lost posting rights on "${cm.chat.title}" (status ${st}).`).catch(() => {});
+    }
+    return json({ ok: true });
+  }
+
   const msg = upd.message || upd.edited_message || {};
   const t = (msg.text || "").trim();
   const chatId = String((msg.chat || {}).id || "");
@@ -1016,6 +1038,7 @@ function discordChannelPost(cfg, p) {
     (p.subscriber_text || p.post_text || "").trim(),
     cves ? `CVE: ${cves}` : "",
     p.url ? `<${p.url}>` : "",
+    "https://securitycyber.uk/cti",
   ].filter(Boolean);
   return parts.join("\n\n");
 }
@@ -1129,10 +1152,17 @@ async function deliverDigest(env, cfg, sub, allPosts) {
   const tierCfg = cfg.tiers[sub.tier] || {};
   const verified = deliverableChannels(sub, tierCfg);
   if (!verified.length) return;
-  const matched = allPosts.filter((p) => wants(p, sub, tierCfg, "digest")).sort((a, b) => b.score - a.score);
+  let matched = allPosts.filter((p) => wants(p, sub, tierCfg, "digest")).sort((a, b) => b.score - a.score);
   if (!matched.length) return;
-  const dayKey = `digest:${new Date().toISOString().slice(0, 10)}`;
-  if (await db.alreadyDelivered(env.DB, sub.id, dayKey)) return;
+  // Per-item, not one-digest-per-day: keep only what this subscriber has never
+  // been sent (by instant or an earlier digest). Lets the digest run several
+  // times a day and still never repeat an item.
+  const seen = [];
+  for (const p of matched) {
+    if (!(await db.alreadyDelivered(env.DB, sub.id, p.post_key))) seen.push(p);
+  }
+  if (!seen.length) return;
+  matched = seen;
   // The private feed carries everything; the digest is the top slice so the
   // email stays scannable even on a 100-item day.
   const DIGEST_CAP = Number(cfg.digest_max_items ?? 25);
@@ -1156,11 +1186,19 @@ async function deliverDigest(env, cfg, sub, allPosts) {
   lines.push("— Change vendors, channels or unsubscribe from your preference link.");
   const body = lines.join("\n");
   const jsonp = tierCfg.attach_json ? { posts: matched } : null;
+  let anyOk = false;
   for (const ch of verified) {
     const r = await send(env, cfg, ch.kind, ch.target, subject, body, {
       priority: "digest", jsonPayload: ["email", "webhook"].includes(ch.kind) ? jsonp : null,
     });
-    await db.recordDelivery(env.DB, sub.id, dayKey, ch.kind, "digest", r.ok, r.ok ? null : r.error);
+    anyOk = anyOk || r.ok;
+  }
+  if (anyOk) {
+    // mark every item in this digest as delivered so the next digest / an
+    // instant for the same story does not re-send it
+    for (const p of matched) {
+      await db.recordDelivery(env.DB, sub.id, p.post_key, "digest", "digest", true, null).catch(() => {});
+    }
   }
 }
 
@@ -1272,6 +1310,46 @@ async function adminApi(request, env, cfg, url, path) {
     const total = (await D.prepare(`SELECT COUNT(*) n FROM "${seg[2]}"`).first())?.n ?? null;
     return json({ table: seg[2], columns: cols.map((c) => c.name), rows, total, limit, offset });
   }
+  // POST /admin/stripe/links — set every Payment Link's after-payment redirect
+  // (buyers otherwise land on Stripe's receipt and miss /welcome). Re-runnable.
+  // POST /admin/digest — run the subscriber digest now (same logic as the cron)
+  if (seg[1] === "digest" && request.method === "POST") {
+    const posts = await db.postsSince(env.DB, cfg.digest_window_hours || 24);
+    if (!posts.length) return json({ ran: true, posts: 0, delivered: 0 });
+    const subs = (await db.activeForDelivery(env.DB)).filter(canDeliver);
+    let delivered = 0;
+    for (const su of subs) {
+      try { await deliverDigest(env, cfg, su, posts); delivered++; }
+      catch (e) { console.error("manual digest", su.id, e); }
+    }
+    await db.kvSet(env.DB, "last_digest", nowIso());
+    return json({ ran: true, posts: posts.length, subscribers: subs.length, delivered });
+  }
+
+  if (seg[1] === "stripe" && seg[2] === "links" && request.method === "POST") {
+    const welcome = `${cfg.site_url}/welcome`;
+    const thanks = `${cfg.site_url}/brief/thanks`;
+    const briefUrl = (cfg.brief && cfg.brief.link) || "";
+    let links;
+    try { links = (await billing.listPaymentLinks(env)).data || []; }
+    catch (e) {
+      return json({ error: String(e).includes("STRIPE_SECRET_KEY")
+        ? "STRIPE_SECRET_KEY is not set on the Worker — set it (wrangler secret put) or configure the redirects in the Stripe dashboard."
+        : `stripe: ${e}` }, 502);
+    }
+    const out = [];
+    for (const l of links) {
+      const want = (briefUrl && l.url === briefUrl) ? thanks : welcome;
+      const cur = l.after_completion?.type === "redirect" ? (l.after_completion.redirect?.url || null) : null;
+      if (cur === want) { out.push({ url: l.url, redirect: cur, changed: false }); continue; }
+      try {
+        await billing.setPaymentLinkRedirect(env, l.id, want);
+        out.push({ url: l.url, redirect: want, changed: true, was: cur || "(stripe receipt page)" });
+      } catch (e) { out.push({ url: l.url, error: String(e).slice(0, 150) }); }
+    }
+    return json({ updated: out.filter((x) => x.changed).length, links: out });
+  }
+
   if (seg[1] === "add" && request.method === "POST") {
     const b = await request.json().catch(() => ({}));
     if (!/@/.test(b.email || "")) return json({ error: "bad email" }, 400);

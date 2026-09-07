@@ -76,7 +76,7 @@ ok("landing shows the team tier + one-off brief", landHtml.includes("£18 / mont
 ok("free tier is in config with the £0 payment link",
   cNoPrice.tiers.free && cNoPrice.tiers.free.free === true
   && paymentLink(cNoPrice, "free", "monthly").startsWith("https://buy.stripe.com/"));
-ok("landing renders the free card", landHtml.includes("Start free") && landHtml.includes(">Free<"));
+ok("landing renders the free card", landHtml.includes("Start the trial") && landHtml.includes(">Free trial<"));
 const freeSub = subscribeForm(cNoPrice, "free", "", "", channelAvailability({ RESEND_API_KEY: "re_x" }, cNoPrice));
 ok("free subscribe form: no cadence radios, posts tier=free",
   !/name=cadence/.test(freeSub) && /value="free"/.test(freeSub) && freeSub.includes('action="/subscribe"'));

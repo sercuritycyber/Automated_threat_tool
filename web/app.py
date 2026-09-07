@@ -40,6 +40,9 @@ for d in (STATE, DRAFTS, LOGS):
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "bin"))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 import publishers  # noqa: E402
+import marketing_desk as MKT  # noqa: E402
+import admin_center as AC  # noqa: E402
+import cve_desk as CVE  # noqa: E402
 try:
     import subscribers as SUBS  # noqa: E402
     import subsconfig           # noqa: E402
@@ -301,11 +304,13 @@ animation:pulse 2.4s infinite}
 """
 
 NAV = [
-    ("/", "Dashboard"),
+    ("/", "Operations"),
     ("/review", "Review queue"),
     ("/compose", "Compose"),
     ("/candidates", "Candidates"),
+    ("/intel", "Intel Desk"),
     ("/drafts", "Drafts"),
+    ("/marketing", "Marketing"),
     ("/service", "CTI service"),
     ("/subscribers", "Subscribers"),
     ("/purchases", "Purchases"),
@@ -325,9 +330,9 @@ def page(title: str, body: str, active: str = "", flash: str = "") -> HTMLRespon
     fl = f'<div class="flash">{e(flash)}</div>' if flash else ""
     return HTMLResponse(f"""<!doctype html><html><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1">
-<title>{e(title)} · Blue Team CTI</title><style>{CSS}</style></head><body>
+<title>{e(title)} · SecurityCyber Admin Center</title><style>{CSS}</style></head><body>
 <div class=wrap><div class=side>
-<div class=brand>Blue Team CTI<small>securitycyber.uk</small></div>
+<div class=brand>SecurityCyber<small>Admin Center · securitycyber.uk</small></div>
 <div class=nav>{nav}</div></div>
 <div class=main><h1>{e(title)}</h1>{fl}{body}</div></div></body></html>""")
 
@@ -663,7 +668,7 @@ def dashboard(request: Request):
 </div>
 {script}
 """
-    return page("Dashboard", body, "/", flash_from(request))
+    return page("Operations", AC.console_head() + body, "/", flash_from(request))
 
 
 @app.post("/reset-test")
@@ -2417,9 +2422,176 @@ async def subscriptions_save(request: Request):
     return RedirectResponse("/subscriptions?m=Saved", 303)
 
 
+
+
+# ----------------------------------------------------------------------------- intel desk
+@app.get("/intel", response_class=HTMLResponse)
+def intel_page(request: Request):
+    return page("Intel Desk", CVE.render_page(), "/intel", flash_from(request))
+
+
+@app.get("/intel/api/search")
+def intel_search(q: str = ""):
+    return CVE.search(q, load_env().get("CVEFEED_API_KEY", ""))
+
+
+@app.get("/intel/api/cve/{cve_id}")
+def intel_cve(cve_id: str):
+    return CVE.detail(cve_id, load_env().get("CVEFEED_API_KEY", ""))
+
+
+@app.post("/intel/api/draft")
+async def intel_draft(request: Request):
+    b = await request.json()
+    key = load_env().get("CVEFEED_API_KEY", "")
+    row = CVE.detail(str(b.get("id", "")), key)
+    if row.get("error"):
+        return {"error": row["error"]}
+    d = CVE.draft_text(row)
+    return MKT.handoff(ROOT, title=d["title"], body=d["body"], url=d["url"],
+                       short_text=d["short_text"], publish_now=False, creds=load_env())
+
+
+# ----------------------------------------------------------------------------- admin center
+@app.get("/api/pulse")
+def api_pulse():
+    return AC.pulse(
+        ROOT, load_env(),
+        settings=load_yaml(CFG / "settings.yaml"),
+        next_run=next_run_iso(),
+        targets_ready=bool(configured_targets()),
+    )
+
+
+@app.post("/action/approve-next")
+def action_approve_next():
+    q = queue_load() or {}
+    items = q.get("queue", []) if isinstance(q.get("queue"), list) else []
+    if not items:
+        return {"message": "Hold queue is empty."}
+    p = items[0]
+    settings = load_yaml(CFG / "settings.yaml")
+    try:
+        r = publishers.post_linkedin(p.get("post_text", ""), load_env(), settings,
+                                     short_text=p.get("short_text"))
+    except Exception as ex:  # noqa: BLE001
+        r = {"ok": False, "error": f"{type(ex).__name__}: {ex}"}
+    if r.get("ok"):
+        q["queue"] = items[1:]
+        queue_save(q)
+        with (STATE / "history.jsonl").open("a") as fh:
+            fh.write(json.dumps({
+                "posted_at": datetime.now(timezone.utc).isoformat(),
+                "title": p.get("title"), "url": p.get("url"), "score": p.get("score"),
+                "post_id": r.get("id"), "post_url": r.get("url"),
+                "targets": ["linkedin"], "author": "organization", "source": "approve",
+            }) + "\n")
+        fan = AC.push_alert(p, load_env())
+        tail = " (also sent to subscribers)" if fan.get("ok") else " (subscriber fan-out failed)"
+        return {"message": f"Posted “{(p.get('title') or '')[:44]}”{tail}"}
+    return {"message": f"Post failed — {str(r.get('error'))[:140]}"}
+
+
+@app.post("/action/sync-stripe-links")
+def action_sync_stripe_links():
+    env = load_env()
+    wu = (env.get("CTI_WORKER_URL") or "").rstrip("/")
+    tok = env.get("CTI_ADMIN_TOKEN")
+    if not (wu and tok):
+        return {"message": "CTI_WORKER_URL / CTI_ADMIN_TOKEN not set in config/env."}
+    try:
+        r = requests.post(f"{wu}/admin/stripe/links",
+                          headers={"Authorization": f"Bearer {tok}",
+                                   "User-Agent": "Mozilla/5.0 (admin-center)"}, timeout=25)
+        j = r.json()
+    except Exception as ex:  # noqa: BLE001
+        return {"message": f"error: {ex}"}
+    if isinstance(j, dict) and j.get("error"):
+        return {"message": j["error"]}
+    n = j.get("updated", 0) if isinstance(j, dict) else 0
+    return {"message": f"Stripe links synced — {n} redirect(s) updated to /welcome."}
+
+
+# ----------------------------------------------------------------------------- marketing desk
+@app.get("/marketing", response_class=HTMLResponse)
+def marketing_page(request: Request):
+    return page("Marketing Desk", MKT.render_page(ROOT, load_env()), "/marketing", flash_from(request))
+
+
+@app.get("/marketing/api/posts")
+def marketing_posts():
+    return MKT.posts_payload(ROOT)
+
+
+@app.get("/marketing/api/kpis")
+def marketing_kpis():
+    return MKT.kpis(ROOT, load_env())
+
+
+@app.get("/marketing/api/bundle")
+def marketing_bundle():
+    return MKT.export_bundle(ROOT)
+
+
+@app.post("/marketing/api/post/{pid}")
+async def marketing_update(pid: str, request: Request):
+    f = await request.form()
+    fields = {}
+    for k in ("status", "scheduled_for", "notes", "edited"):
+        if k in f and f.get(k) != "":
+            v = f.get(k)
+            if k == "scheduled_for" and v and "T" in v and len(v) == 16:
+                v = v + ":00Z"
+            fields[k] = v
+    return MKT.update_post(ROOT, pid, **fields)
+
+
+@app.post("/marketing/api/kpis")
+async def marketing_kpis_save(request: Request):
+    f = await request.form()
+    d = MKT.store_load(ROOT)
+    if f.get("monthly"):
+        try:
+            d["budget"]["monthly"] = float(f["monthly"])
+        except (TypeError, ValueError):
+            pass
+    if f.get("spend_item") and f.get("spend_amount"):
+        try:
+            d["budget"]["entries"].append({
+                "item": str(f["spend_item"])[:80], "amount": float(f["spend_amount"]),
+                "at": datetime.now(timezone.utc).isoformat()})
+        except (TypeError, ValueError):
+            pass
+    for k in ("followers", "impressions_30d", "leads_30d", "cac", "mrr"):
+        if f.get(k) not in (None, ""):
+            d["kpis"][k] = str(f[k])
+    MKT.store_save(ROOT, d)
+    return {"ok": True}
+
+
+
+
+@app.post("/marketing/api/compose")
+async def marketing_compose(request: Request):
+    f = await request.form()
+    sched = f.get("schedule") or ""
+    if sched and "T" in sched and len(sched) == 16:
+        sched = sched + ":00Z"
+    return MKT.handoff(
+        ROOT,
+        title=f.get("title") or "",
+        body=f.get("body") or "",
+        url=f.get("url") or "",
+        short_text=f.get("short_text") or "",
+        schedule=sched,
+        publish_now=(f.get("publish_now") in ("1", "true", "on", "yes")),
+        creds=load_env(),
+    )
+
+
 # ----------------------------------------------------------------------------- main
 if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("CTI_UI_PORT", "8799"))
-    print(f"Blue Team CTI panel → http://127.0.0.1:{port}")
+    print(f"SecurityCyber Admin Center → http://127.0.0.1:{port}")
     uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")

@@ -1,4 +1,3 @@
-# Edited by the web UI. weight 0-1 nudges the pre-score / breaks duplicate ties.
 feeds:
 - name: CISA Advisories
   url: https://www.cisa.gov/cybersecurity-advisories/all.xml
@@ -75,4 +74,11 @@ feeds:
 - name: Ransomware.live
   url: https://www.ransomware.live/rss.xml
   weight: 0.45
+  enabled: true
+- name: CVEFeed
+  type: api
+  provider: cvefeed
+  url: https://cvefeed.io/api/vulnerability/
+  min_cvss: 7.5
+  weight: 0.9
   enabled: true

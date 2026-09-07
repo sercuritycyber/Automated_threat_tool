@@ -11,6 +11,9 @@ ingest:
   max_candidates: 40
 scoring:
   min_score: 80
+analyst:
+  engine: openai
+  deep_pass: false
 publish:
   mode: review
   dry_run: true
