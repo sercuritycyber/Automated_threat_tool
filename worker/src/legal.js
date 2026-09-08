@@ -170,7 +170,7 @@ export function legalHtml(cfg, name) {
   const filled = src
     .replaceAll("{{brand}}", cfg.brand)
     .replaceAll("{{legal_name}}", cfg.company_legal_name || "SecurityCyber")
-    .replaceAll("{{ico}}", cfg.ico_reg || "(registration pending)")
+    .replaceAll("{{ico}}", cfg.ico_reg || (cfg.ico_pending ? "(registration in progress)" : "(registration pending)"))
     .replaceAll("{{contact}}", cfg.contact_email || "securitycyber_cti@securitycyber.uk")
     .replaceAll("{{site}}", cfg.site_url)
     .replaceAll("{{terms_version}}", cfg.terms_version)

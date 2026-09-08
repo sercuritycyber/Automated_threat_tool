@@ -45,7 +45,8 @@ ICO_REG = ""   # <-- register at ico.org.uk and paste the number here before go-
 TERMS_VERSION = "2026-09-02"
 CONFIG = """
 {
-  "live": false,
+  "live": true,
+  "ico_pending": true,
   "checkout_mode": "link_only",
   "cancel_after_failed_payments": 2,
   "channels_disabled": [],

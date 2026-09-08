@@ -134,6 +134,10 @@ export function config(env) {
   c.support_email = env.SUPPORT_EMAIL || env.CONTACT_EMAIL || "";
   c.company_legal_name = env.COMPANY_LEGAL_NAME || "";
   c.ico_reg = env.ICO_REG || "";
+  // ico_pending: registration is filed but the number has not arrived — lets
+  // go-live proceed without displaying a fake reg number. Clear it and set
+  // ICO_REG once the ICO issues one.
+  c.ico_pending = !!over.ico_pending;
   if (env.FOREVER_FREE_EMAILS)
     c.forever_free_emails = [...new Set([...(c.forever_free_emails || []),
       ...env.FOREVER_FREE_EMAILS.split(",").map((x) => x.trim().toLowerCase()).filter(Boolean)])];
@@ -256,10 +260,8 @@ export function problems(c, env) {
   // Taking real money = holding a real customer list, which in the UK needs
   // ICO registration. Keyed off the live Stripe key, not CONFIG.live, so this
   // can't be dodged by leaving a flag switched off.
-  if (takingRealMoney(c, env)) {
-    if (!c.ico_reg)
-      out.push("Live Stripe key in use — ICO_REG must be set. You are taking real money and holding real customer data; UK registration is required (ico.org.uk, £40-52/yr).");
-  }
+  if (takingRealMoney(c, env) && !c.ico_reg && !c.ico_pending)
+    out.push("Live Stripe key in use — ICO_REG must be set. You are taking real money and holding real customer data; UK registration is required (ico.org.uk, £40-52/yr).");
   if (c.live && !linkOnly && !env.STRIPE_SECRET_KEY)
     out.push("live=true but STRIPE_SECRET_KEY is not set");
   return out;
@@ -276,8 +278,12 @@ export function advisories(c, env = {}) {
     out.push("CAUTION: the Stripe key is sk_live_ but CONFIG.live is false. Payment Links charge in whatever mode they were created in, so CONFIG.live gates nothing — treat this as LIVE. Real cards will be charged.");
   else if (live) out.push("LIVE — real cards are being charged.");
   else if (env.STRIPE_SECRET_KEY) out.push("Stripe key is sk_test_ — no real charges. Run a full test checkout before switching to a live key.");
-  if (!live && !c.ico_reg)
-    out.push("ICO registration not set yet — required before you take real money. Register at ico.org.uk, then paste ICO_REG.");
+  if (!c.ico_reg) {
+    if (c.ico_pending)
+      out.push("ICO registration is in progress — paste ICO_REG and remove ico_pending once the number arrives (legally required for a live customer list).");
+    else if (!live)
+      out.push("ICO registration not set yet — required before you take real money. Register at ico.org.uk, then paste ICO_REG.");
+  }
   if (c.checkout_mode === "link_only") {
     const gaps = [];
     for (const [name, t] of Object.entries(c.tiers)) {
