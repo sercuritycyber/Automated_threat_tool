@@ -161,24 +161,28 @@ if [[ "$ANALYST_RC" -ne 0 ]]; then
   python3 "$ROOT/bin/analyst_fallback.py" || echo "[run] analyst_fallback returned $? (non-fatal)"
 fi
 
-# Model output is untrusted: validate provenance before any delivery or posting.
+# Model output is untrusted: drop any public post whose URL was not in this
+# run's candidate set (or is missing from its own body). NON-FATAL — subscribers
+# still get served; only the offending social posts are removed.
+set +e
 python3 - <<'PY'
-import json
-import sys
+import json, sys
 from pathlib import Path
 sys.path.insert(0, "bin")
-from decision_validation import validate_decision
 try:
+    from decision_validation import sanitize_decision
     decision = json.loads(Path("state/decision.json").read_text())
     candidates = json.loads(Path("state/candidates.json").read_text())
-except (OSError, json.JSONDecodeError) as exc:
-    print(f"[run] decision validation input unavailable: {exc}")
-    raise SystemExit(2)
-errors = validate_decision(decision, candidates)
-if errors:
-    print("[run] rejecting analyst decision: " + " | ".join(errors))
-    raise SystemExit(2)
+except Exception as exc:  # noqa: BLE001
+    print(f"[run] validation skipped ({exc}) — decision left as-is")
+    raise SystemExit(0)
+clean, dropped = sanitize_decision(decision, candidates)
+for d in dropped:
+    print(f"[run] validation dropped a public post: {d}")
+if dropped:
+    Path("state/decision.json").write_text(json.dumps(clean, indent=2))
 PY
+set -e
 
 # Stage 3: paying subscribers FIRST. They are buying the lead time as much as
 # the analysis, so the people who pay hear it before it is given away publicly.

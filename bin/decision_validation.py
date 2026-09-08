@@ -1,26 +1,48 @@
-"""Safety checks for model-produced analyst decisions."""
+"""Safety checks for model-produced analyst decisions.
+
+Model output is untrusted: a post must reference a URL that was actually in this
+run's candidate set, and its post_text must carry that URL. But a validation
+failure must NOT sink the whole pipeline — `sanitize_decision` drops the
+offending social posts and lets the run continue so subscribers still get served.
+"""
 from __future__ import annotations
 
 import re
 from urllib.parse import urlsplit, urlunsplit
 
-
 URL_RE = re.compile(r"https?://[^\s<>\])]+", re.I)
+_TRACKING = {
+    "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
+    "utm_id", "mkt_tok", "fbclid", "gclid", "ref", "ref_src", "source",
+}
 
 
 def normalise_url(url: str) -> str:
-    """Match ingest URL normalisation without importing the ingest script."""
+    """Host + path, https, www- and tracking-param stripped — matches the way
+    bin/ingest.py stores candidate URLs, plus we drop the query entirely for
+    matching so `?utm=…` on an otherwise-real URL still resolves to its source."""
     try:
-        parsed = urlsplit(str(url).strip())
+        s = urlsplit(str(url).strip())
     except ValueError:
         return ""
-    host = (parsed.hostname or "").lower().removeprefix("www.")
-    path = parsed.path.rstrip("/") or "/"
-    return urlunsplit(("https", host, path, parsed.query, ""))
+    host = (s.hostname or "").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    path = s.path.rstrip("/") or "/"
+    return urlunsplit(("https", host, path, "", ""))
+
+
+def _candidate_urls(candidates: dict) -> set[str]:
+    return {
+        normalise_url(c.get("url"))
+        for c in (candidates.get("candidates") or [])
+        if isinstance(c, dict) and c.get("url")
+    }
 
 
 def validate_decision(decision: dict, candidates: dict, *, operator: bool = False) -> list[str]:
-    """Return blocking errors; model output must not create new source URLs."""
+    """Return a list of blocking problems (empty == clean). Kept for callers
+    that want a yes/no; the pipeline uses sanitize_decision instead."""
     errors: list[str] = []
     if decision.get("decision") not in {"post", "skip"}:
         errors.append("decision must be 'post' or 'skip'")
@@ -30,29 +52,60 @@ def validate_decision(decision: dict, candidates: dict, *, operator: bool = Fals
     if not isinstance(posts, list):
         errors.append("posts must be a list")
         return errors
-    allowed_urls = {
-        normalise_url(c.get("url"))
-        for c in (candidates.get("candidates") or [])
-        if isinstance(c, dict) and c.get("url")
-    }
-    for index, post in enumerate(posts):
-        if not isinstance(post, dict):
-            errors.append(f"posts[{index}] must be an object")
-            continue
-        if operator:
-            continue
-        url = normalise_url(post.get("url", ""))
-        if not url or url not in allowed_urls:
-            errors.append(f"posts[{index}] URL is not one of the current candidate sources")
-        score = post.get("score")
-        try:
-            numeric_score = float(score)
-        except (TypeError, ValueError):
-            errors.append(f"posts[{index}] score is not numeric")
-        else:
-            if not 0 <= numeric_score <= 100:
-                errors.append(f"posts[{index}] score must be between 0 and 100")
-        text = str(post.get("post_text") or "")
-        if url and url not in {normalise_url(u) for u in URL_RE.findall(text)}:
-            errors.append(f"posts[{index}] post_text does not contain its source URL")
+    allowed = _candidate_urls(candidates)
+    for i, post in enumerate(posts):
+        errors.extend(f"posts[{i}] {p}" for p in _post_problems(post, allowed, operator))
     return errors
+
+
+def _post_problems(post: dict, allowed: set[str], operator: bool) -> list[str]:
+    out: list[str] = []
+    if not isinstance(post, dict):
+        return ["is not an object"]
+    if operator:
+        return out
+    url = normalise_url(post.get("url", ""))
+    if not url or url not in allowed:
+        out.append("URL is not one of this run's candidate sources")
+    score = post.get("score")
+    try:
+        n = float(score)
+        if not 0 <= n <= 100:
+            out.append("score must be 0-100")
+    except (TypeError, ValueError):
+        out.append("score is not numeric")
+    text = str(post.get("post_text") or "")
+    if url and url not in {normalise_url(u) for u in URL_RE.findall(text)}:
+        out.append("post_text is missing its source URL")
+    return out
+
+
+def sanitize_decision(decision: dict, candidates: dict) -> tuple[dict, list[str]]:
+    """Drop any social post that fails provenance; never raise. Returns
+    (possibly-modified decision, human-readable list of what was dropped).
+    `alerts[]` (subscriber briefs) are left intact — they carry more analysis
+    and less blast radius, and silently losing them would hurt paying users."""
+    dropped: list[str] = []
+    if decision.get("decision") == "skip":
+        return decision, dropped
+    posts = decision.get("posts")
+    if posts is None and isinstance(decision.get("selected"), dict):
+        posts = [decision["selected"]]
+    if not isinstance(posts, list):
+        return decision, dropped
+    allowed = _candidate_urls(candidates)
+    kept = []
+    for i, post in enumerate(posts):
+        probs = _post_problems(post, allowed, operator=False)
+        if probs:
+            title = (post.get("title") or post.get("url") or f"post {i}") if isinstance(post, dict) else f"post {i}"
+            dropped.append(f"{str(title)[:60]} — {'; '.join(probs)}")
+        else:
+            kept.append(post)
+    if dropped:
+        decision = dict(decision)
+        decision["posts"] = kept
+        if not kept:
+            decision["decision"] = "skip"
+            decision["reason"] = (decision.get("reason", "") + " [all public posts failed provenance validation]").strip()
+    return decision, dropped
