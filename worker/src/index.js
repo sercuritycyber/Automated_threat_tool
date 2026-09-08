@@ -461,13 +461,37 @@ async function stripeWebhook(request, env, cfg) {
     await notifyOwner(env, cfg, `threat brief purchased${res.email ? " by " + res.email : ""}${topic ? " — " + topic : ""}`);
   } else if (res.action === "notify_owner") {
     await notifyOwner(env, cfg, res.detail || "payment issue");
+    // Tell the subscriber too — a failed charge is recoverable if they update
+    // the card before Stripe gives up.
+    if (res.subscriber_id) {
+      const s = await db.get(env.DB, res.subscriber_id);
+      if (s && s.email) {
+        const mtok = await sign(env, { sub: s.id, act: "manage" }, 30 * 86400).catch(() => "");
+        await send(env, cfg, "email", s.email, "Payment problem on your SecurityCyber CTI subscription",
+          `Your last payment didn't go through, so your subscription is on hold while Stripe retries.\n\n`
+          + `Update your card to avoid interruption:\n${cfg.site_url}/manage?t=${mtok}\n\n`
+          + `Your alerts keep running for now. If the retries also fail your subscription is cancelled — `
+          + `no charge, and you can restart any time.\n\n— ${cfg.brand}`).catch((e) => console.error("dunning email", e));
+      }
+    }
   } else if (["cancelled", "recovered"].includes(res.action)) {
-    await notifyOwner(env, cfg, `subscriber ${res.action}`);
+    await notifyOwner(env, cfg, `subscriber ${res.action}` + (res.detail ? ` — ${res.detail}` : ""));
     // Discord access follows payment, exactly as the RSS feed does: lose the
     // subscriber role on cancellation, get it back on recovery.
     if (res.subscriber_id) {
       const s = await db.get(env.DB, res.subscriber_id);
       if (s) await discordAccess(env, cfg, s, res.action === "recovered");
+      if (s && s.email && res.action === "cancelled") {
+        const payFail = /failed payment/i.test(res.detail || "");
+        await send(env, cfg, "email", s.email,
+          payFail ? "Your SecurityCyber CTI subscription has ended" : "Your SecurityCyber CTI subscription is cancelled",
+          (payFail
+            ? `We couldn't take payment after several tries, so your subscription has ended and your alerts have stopped. `
+              + `Nothing more will be charged.\n\n`
+            : `Your subscription is cancelled and your alerts have stopped. Nothing more will be charged.\n\n`)
+          + `Start again any time — your preferences and feed URL come back with you:\n${cfg.site_url}/subscribe\n\n`
+          + `— ${cfg.brand}`).catch((e) => console.error("cancel email", e));
+      }
     }
   }
   return json({ received: true, action: res.action });
@@ -505,9 +529,6 @@ async function activateSubscriber(env, cfg, request, sub, detail) {
     // discord / telegram picked at signup but not yet connected (no target):
     // there's nothing to ping — email them the one-click connect link instead.
     if ((ch.kind === "discord" || ch.kind === "telegram") && !ch.target) {
-      
-      await emailConnectLink(env, cfg, sub, ch.kind).catch((e) => console.error("connect link", e));
-      
       await emailConnectLink(env, cfg, await db.get(env.DB, sub.id), ch.kind).catch((e) => console.error("connect link", e));
       continue;
     }
