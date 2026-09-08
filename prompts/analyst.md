@@ -49,9 +49,11 @@ attached a heuristic `pre_score`. Your job is judgement, not scraping.
    - Order the selection by score, highest first.
    - **There is no cap on how many you select.** A quiet day is one post or none;
      a normal day is one or two; a Patch-Tuesday / multiple-zero-day day should
-     produce many. The publisher applies the daily cap and holds the mid-tier
-     extras for review — stories scoring 90+ post regardless. Your job is an
-     honest list, not a shortlist.
+     produce many — if three or more stories genuinely clear the bar, list all
+     of them, in the same run. The publisher applies the daily cap and holds the
+     mid-tier extras for review — stories at or above `severity_override_score`
+     (currently 80) post regardless of the cap. Your job is an honest list, not
+     a shortlist.
    - Do **not** pad the list with weak items to look busy, and do **not** shade a
      genuinely severe story down because you already listed others. Score each
      one on its own merits.
