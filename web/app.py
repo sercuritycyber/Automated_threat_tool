@@ -12,6 +12,8 @@ or:   python3 web/app.py
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
 import html
 import json
 import os
@@ -27,7 +29,7 @@ from urllib.parse import quote
 import requests
 import yaml
 from fastapi import FastAPI, Form, Request
-from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 
 ROOT = Path(__file__).resolve().parent.parent
 CFG = ROOT / "config"
@@ -43,6 +45,7 @@ import publishers  # noqa: E402
 import marketing_desk as MKT  # noqa: E402
 import admin_center as AC  # noqa: E402
 import cve_desk as CVE  # noqa: E402
+import panel_theme as PT  # noqa: E402
 try:
     import subscribers as SUBS  # noqa: E402
     import subsconfig           # noqa: E402
@@ -61,7 +64,86 @@ PLAINTEXT_KEYS = {"LINKEDIN_AUTHOR_URN", "MASTODON_BASE_URL", "BLUESKY_HANDLE", 
                   "EMAIL_SMTP_HOST", "EMAIL_SMTP_PORT", "EMAIL_SMTP_USER", "EMAIL_FROM", "EMAIL_TO"}
 ALL_TARGETS = list(publishers.PROVIDERS)
 
-app = FastAPI(title="Blue Team CTI")
+app = FastAPI(title="SecurityCyber Admin Center")
+
+# --------------------------------------------------------------------------- idle lock
+# One operator (Charlie). Not internet-facing, but a passphrase + 10-minute
+# idle lock keeps small hands out if he steps away. Set PANEL_PASSPHRASE in
+# config/env; leave it blank to disable the lock entirely.
+def _panel_pass() -> str:
+    return (load_env().get("PANEL_PASSPHRASE") or os.environ.get("PANEL_PASSPHRASE") or "").strip()
+
+
+def _panel_sign(ts: str) -> str:
+    key = (load_env().get("ADMIN_TOKEN") or os.environ.get("ADMIN_TOKEN") or "sc-panel").encode()
+    return hmac.new(key, ts.encode(), hashlib.sha256).hexdigest()[:24]
+
+
+def _panel_unlocked(request: Request) -> bool:
+    if not _panel_pass():
+        return True
+    raw = request.cookies.get("sc_lock", "")
+    if raw.count(".") != 1:
+        return False
+    ts, sig = raw.split(".", 1)
+    if not hmac.compare_digest(sig, _panel_sign(ts)):
+        return False
+    try:
+        return (time.time() - float(ts)) <= PT.IDLE_SECS
+    except ValueError:
+        return False
+
+
+def _set_lock_cookie(resp):
+    ts = f"{time.time():.0f}"
+    resp.set_cookie("sc_lock", f"{ts}.{_panel_sign(ts)}", max_age=PT.IDLE_SECS + 90,
+                    httponly=True, samesite="lax", path="/")
+    return resp
+
+
+@app.middleware("http")
+async def _idle_lock(request: Request, call_next):
+    path = request.url.path
+    is_open = path in ("/unlock", "/lock", "/favicon.ico") or path.startswith("/static")
+    unlocked = _panel_unlocked(request)
+    if path == "/api/pulse" and not unlocked:
+        return JSONResponse({"locked": True}, status_code=401)
+    if not is_open and not unlocked:
+        nxt = path + (("?" + request.url.query) if request.url.query else "")
+        return RedirectResponse(f"/unlock?next={quote(nxt)}", 303)
+    resp = await call_next(request)
+    # slide the window on real activity; the 20s background poll must not
+    if _panel_pass() and unlocked and path != "/api/pulse":
+        _set_lock_cookie(resp)
+    return resp
+
+
+@app.get("/unlock", response_class=HTMLResponse)
+def unlock_page(request: Request):
+    if not _panel_pass():
+        return RedirectResponse("/", 303)
+    if _panel_unlocked(request):
+        return RedirectResponse(request.query_params.get("next") or "/", 303)
+    return HTMLResponse(PT.lock_screen(e(request.query_params.get("next") or "/"),
+                                      request.query_params.get("e") == "1"))
+
+
+@app.post("/unlock")
+async def unlock_submit(request: Request):
+    f = await request.form()
+    nxt = str(f.get("next") or "/")
+    if _panel_pass() and hmac.compare_digest(str(f.get("word") or "").strip(), _panel_pass()):
+        return _set_lock_cookie(RedirectResponse(nxt if nxt.startswith("/") else "/", 303))
+    return RedirectResponse(f"/unlock?next={quote(nxt)}&e=1", 303)
+
+
+@app.post("/lock")
+def lock_now():
+    r = RedirectResponse("/unlock", 303)
+    r.delete_cookie("sc_lock", path="/")
+    return r
+
+
 
 
 # ----------------------------------------------------------------------------- helpers
@@ -328,13 +410,7 @@ def page(title: str, body: str, active: str = "", flash: str = "") -> HTMLRespon
         for p, label in NAV
     )
     fl = f'<div class="flash">{e(flash)}</div>' if flash else ""
-    return HTMLResponse(f"""<!doctype html><html><head><meta charset=utf-8>
-<meta name=viewport content="width=device-width,initial-scale=1">
-<title>{e(title)} · SecurityCyber Admin Center</title><style>{CSS}</style></head><body>
-<div class=wrap><div class=side>
-<div class=brand>SecurityCyber<small>Admin Center · securitycyber.uk</small></div>
-<div class=nav>{nav}</div></div>
-<div class=main><h1>{e(title)}</h1>{fl}{body}</div></div></body></html>""")
+    return HTMLResponse(PT.shell(e(title), body, nav, fl, bool(_panel_pass()), datetime.now()))
 
 
 def flash_from(req: Request) -> str:
