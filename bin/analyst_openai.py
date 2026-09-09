@@ -112,7 +112,7 @@ def call_openai(api_key: str, model: str, candidates: str, url: str, env: dict[s
                 {"role": "user", "content": instruction},
             ],
             "reasoning": {"effort": "low"},
-            "max_output_tokens": 16000,
+            "max_output_tokens": 32000,
         }
     else:
         payload = {

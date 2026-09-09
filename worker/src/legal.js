@@ -18,10 +18,14 @@ ICO registration number: {{ico}}
 
 ## What we collect
 
+We deliberately collect as little as possible. We do **not** ask for your name,
+your company, a phone number, or a postal address, and there is no field to
+provide them. To run the service we need an email address (or a webhook URL) and
+your delivery preferences — that is close to the whole list.
+
 | Data | Where from | Why |
 |---|---|---|
 | Email address | You, at sign-up / via Stripe Checkout | To deliver alerts and account email; it is your account identifier |
-| Name (optional) | You | To address account correspondence, if you provide it |
 | Delivery channel identifiers — a Discord/Slack webhook URL, a Telegram chat ID, a webhook URL, an ntfy topic URL | You, when you add a channel | To deliver alerts to the channel you chose |
 | Vendor / keyword filter preferences | You, in the preference centre | To send you only the alerts you asked for |
 | IP address and browser user-agent | Automatically, only at the moment you give consent (double opt-in) | To evidence your consent, as required by law, and to prevent sign-up abuse |

@@ -75,6 +75,26 @@ feeds:
   url: https://www.ransomware.live/rss.xml
   weight: 0.45
   enabled: true
+- name: watchTowr Labs
+  url: https://labs.watchtowr.com/rss/
+  weight: 0.92
+  enabled: true
+- name: Huntress Blog
+  url: https://www.huntress.com/blog/rss.xml
+  weight: 0.9
+  enabled: true
+- name: The DFIR Report
+  url: https://thedfirreport.com/feed/
+  weight: 0.85
+  enabled: true
+- name: NCSC UK
+  url: https://www.ncsc.gov.uk/api/1/services/v1/all-rss-feed.xml
+  weight: 0.9
+  enabled: true
+- name: Zero Day Initiative
+  url: https://www.zerodayinitiative.com/rss/published/
+  weight: 0.8
+  enabled: true
 - name: CVEFeed
   type: api
   provider: cvefeed

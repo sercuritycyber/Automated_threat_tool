@@ -15,6 +15,11 @@ scored independently. Non-severe extras past the daily cap are held for review;
 stories at/above publish.severity_override_score post regardless of the cap, so
 a genuinely huge news day goes out in full.
 
+Social delay: if publish.social_delay_hours > 0, new posts are parked in
+state/social_queue.json and only released once that many hours have passed —
+so the paid feed (pushed instantly by push_to_worker.py) genuinely lands first.
+Operator one-offs bypass it. 0 / unset = post immediately.
+
 Targets: settings.publish.targets (default ["linkedin"]) — see bin/publishers.py.
 
 CLI:
@@ -29,7 +34,7 @@ import json
 import os
 import sys
 import textwrap
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import requests  # noqa: F401  (kept for exception typing in publishers)
@@ -56,6 +61,66 @@ def log(msg: str) -> None:
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+SOCIAL_QUEUE = STATE / "social_queue.json"
+
+
+def _parse_iso(s: str):
+    try:
+        return datetime.fromisoformat(s)
+    except (ValueError, TypeError):
+        return None
+
+
+def apply_social_delay(posts: list[dict], decision: dict, settings: dict,
+                       operator: bool) -> list[dict]:
+    """Hold new social posts for `publish.social_delay_hours` so paid subscribers
+    (who are pushed the alert instantly by push_to_worker.py) genuinely get it
+    first, and the post's "paid subscribers had this hours ago" line is true.
+
+    Opt-in: 0 / unset => no queue, posts go out this run unchanged.
+    Operator one-offs (--text / --approve) always bypass the delay.
+    """
+    delay_h = float(settings.get("publish", {}).get("social_delay_hours", 0) or 0)
+    if operator or delay_h <= 0:
+        return posts
+    # note: we still run with posts == [] so ripe items already in the queue
+    # get released on a run where the analyst found nothing new.
+
+    now = datetime.now(timezone.utc)
+    try:
+        queue = json.loads(SOCIAL_QUEUE.read_text()).get("queue", [])
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        queue = []
+
+    due, waiting = [], []
+    for q in queue:
+        after = _parse_iso(q.get("post_after", ""))
+        (due if (after is None or after <= now) else waiting).append(q)
+
+    known = {(q.get("url"), q.get("title")) for q in waiting}
+    added = 0
+    post_after = (now + timedelta(hours=delay_h)).isoformat()
+    for p in posts:
+        if (p.get("url"), p.get("title")) in known:
+            continue
+        waiting.append({**p, "post_after": post_after, "queued_at": now.isoformat(),
+                        "queued_reason": decision.get("reason", "")})
+        added += 1
+
+    try:
+        SOCIAL_QUEUE.write_text(json.dumps({"updated": now.isoformat(),
+                                            "queue": waiting}, indent=2))
+    except OSError as e:
+        log(f"could not write social queue ({e}) — posting this run without delay")
+        return posts
+
+    log(f"social delay {delay_h}h: +{added} queued, {len(due)} now due, "
+        f"{len(waiting)} still waiting")
+    return [{k: v for k, v in d.items()
+             if k not in ("post_after", "queued_at", "queued_reason")}
+            for d in due]
 
 
 def queue_manual(posts: list[dict], decision: dict, reason: str = "") -> None:
@@ -253,7 +318,18 @@ def main() -> int:
     min_score = int(decision.get("min_score", settings.get("scoring", {}).get("min_score", 65)))
     archive_draft(decision, posts)
 
-    if decision.get("decision") != "post" or not posts:
+    had_new_posts = decision.get("decision") == "post" and bool(posts)
+    # apply_social_delay parks new posts and returns whatever is now due for
+    # release (which may be items queued on an earlier run, even if this run's
+    # decision is "skip").
+    posts = apply_social_delay(posts, decision, settings, operator)
+
+    if not posts:
+        if had_new_posts:
+            log("social posts held by delay — none due yet; paid feed already went out")
+            write_last_run(decision="queued", published=False,
+                           note="social post(s) queued for delayed release")
+            return 0
         log(f"decision=skip — {decision.get('reason')}")
         write_last_run(decision="skip", published=False, reason=decision.get("reason"))
         return 0
