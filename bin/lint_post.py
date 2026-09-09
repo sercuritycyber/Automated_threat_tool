@@ -28,6 +28,14 @@ BANNED = [
     r"(?:like|share|comment|repost)\b.{0,20}\bif you",
     r"#PatchNow\b", r"#StaySafe\b", r"#MustRead\b",
     r"\bgame[- ]chang", r"\bunprecedented\b",
+    # sales clichés — security practitioners tune out hard-sell
+    r"\bless than (?:the price of )?a (?:cup of )?coffee\b",
+    r"\bmorning coffee\b",
+    r"\benterprise[- ]grade\b",
+    r"\bpeace of mind\b",
+    r"\bdelve\b", r"\bunlock\b(?! the)", r"\bseamless(?:ly)?\b",
+    r"\bcutting[- ]edge\b", r"\bworld[- ]class\b", r"\bbest[- ]in[- ]class\b",
+    r"\brest easy\b", r"\bsleep (?:easy|soundly)\b",
 ]
 ALLCAPS_OK = {
     "CVE", "CVSS", "RCE", "KEV", "SOC", "IOC", "IOCS", "MFA", "VPN", "EDR", "XDR",
@@ -72,13 +80,13 @@ def lint(text: str, cve_ids: list[str] | None = None) -> dict:
                       f"'…more'; keep it under 200")
     elif len(hook) > 200:
         warnings.append(f"hook is {len(hook)} chars — trim toward 150")
-    if CVE.search(hook):
-        warnings.append("hook leads with a CVE id — lead with the stake for the reader instead")
+    if not CVE.search(hook):
+        warnings.append("hook has no CVE id — name the product and the CVE in line 1")
 
     # bullets
     bullets = [ln for ln in lines if ln.lstrip().startswith(("•", "-", "*"))]
     if len(bullets) < 3:
-        warnings.append(f"{len(bullets)} bullet lines — the format expects 3 (Vulnerability/Affected/Do now)")
+        warnings.append(f"{len(bullets)} bullet lines — the breakdown expects 4 (CVSS/Impact/Affected/Action)")
     for b in bullets:
         if len(b) > 200:
             errors.append(f"bullet is {len(b)} chars (max ~180) — one line, one idea: “{b[:60]}…”")
@@ -89,9 +97,11 @@ def lint(text: str, cve_ids: list[str] | None = None) -> dict:
 
     # labelled bullets present?
     joined = t.lower()
-    for want in ("vulnerability", "affected", "do now"):
+    for want in ("cvss", "impact", "affected", "action"):
         if want not in joined:
-            warnings.append(f"no “{want.title()}:” takeaway found")
+            warnings.append(f"no “{want.title()}:” line in the breakdown")
+    if "what to look for" not in joined and "what to hunt" not in joined:
+        warnings.append("no “What to look for:” hunt hint")
 
     # sentence length
     for s in split_sentences(t):
@@ -101,20 +111,25 @@ def lint(text: str, cve_ids: list[str] | None = None) -> dict:
         elif wc > 25:
             warnings.append(f"sentence is {wc} words (aim ≤25): “{s[:70]}…”")
 
-    # links
+    # links — a raw URL in the body throttles LinkedIn reach; it belongs in the
+    # first comment (the `comment` field), which this linter doesn't see.
     urls = URL.findall(t)
-    if not urls:
-        errors.append("no source URL")
-    elif len(urls) > 2:
-        warnings.append(f"{len(urls)} links — one source link is enough")
+    if urls:
+        errors.append(f"URL in the post body ({urls[0][:40]}…) — links go in the first comment only")
+    if "in the comments" not in t.lower():
+        warnings.append("no “(link in the comments)” marker")
 
     # hashtags
     tags = HASHTAG.findall(t)
     low = {x.lower() for x in tags}
-    if len(tags) < 2:
-        errors.append("fewer than 2 hashtags")
+    if len(tags) < 3:
+        warnings.append(f"{len(tags)} hashtags — aim for 4–5")
     elif len(tags) > 6:
-        warnings.append(f"{len(tags)} hashtags — 3–4 is the sweet spot")
+        warnings.append(f"{len(tags)} hashtags — 4–5 is the sweet spot")
+    # truncated / malformed tag (the "#VulnerabilityManage" problem)
+    for tag in tags:
+        if tag.lower() in {"#vulnerabilitymanage", "#vulnmanage", "#threatint", "#cybersec"}:
+            errors.append(f"truncated hashtag “{tag}” — use the full tag or drop it")
     if "#blueteam" not in low:
         warnings.append("missing #BlueTeam")
     if "#cybersecurity" not in low:

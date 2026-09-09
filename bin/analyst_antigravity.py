@@ -7,7 +7,8 @@ posts), this actually reads and scores the stories so it can post when
 something genuinely warrants it.
 
 Requires:  GEMINI_API_KEY in config/env  (or the environment)
-Model:     gemini-2.5-pro  (falls back to gemini-2.0-flash on quota error)
+Model:     gemini-3.6-flash first (high-volume pipeline — Flash is fast, cheap,
+           1M-token context); falls through to 2.5-flash, then Pro on quota error.
 
 The analyst prompt is read from prompts/analyst.md — identical to Claude's.
 Output schema is identical to what claude -p writes to state/decision.json.
@@ -32,10 +33,17 @@ ROOT = Path(__file__).resolve().parent.parent
 STATE = ROOT / "state"
 PROMPT_FILE = ROOT / "prompts" / "analyst.md"
 
-# Model preference order — fall through on 429/503
+# Model preference order — fall through on 429/503.
+# Flash first: this is a high-volume daily pipeline, not a one-off deep
+# reasoning task. Flash is faster and far cheaper per token, handles the
+# whole candidate set in one 1M-token context, and the analyst prompt is
+# tightly constrained so it doesn't need a frontier model. Pro is the
+# fallback if a Flash model is unavailable.
 MODELS = [
-    "gemini-3.1-pro-preview",
     "gemini-3.6-flash",
+    "gemini-2.5-flash",
+    "gemini-3.1-pro-preview",
+    "gemini-2.5-pro",
 ]
 API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 TIMEOUT = 300  # seconds per attempt

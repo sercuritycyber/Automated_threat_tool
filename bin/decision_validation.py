@@ -1,9 +1,10 @@
 """Safety checks for model-produced analyst decisions.
 
 Model output is untrusted: a post must reference a URL that was actually in this
-run's candidate set, and its post_text must carry that URL. But a validation
-failure must NOT sink the whole pipeline — `sanitize_decision` drops the
-offending social posts and lets the run continue so subscribers still get served.
+run's candidate set, that URL must appear in `comment` (the first-comment text),
+and `post_text` must contain no URL at all. But a validation failure must NOT
+sink the whole pipeline — `sanitize_decision` drops the offending social posts
+and lets the run continue so subscribers still get served.
 """
 from __future__ import annotations
 
@@ -74,9 +75,15 @@ def _post_problems(post: dict, allowed: set[str], operator: bool) -> list[str]:
             out.append("score must be 0-100")
     except (TypeError, ValueError):
         out.append("score is not numeric")
-    text = str(post.get("post_text") or "")
-    if url and url not in {normalise_url(u) for u in URL_RE.findall(text)}:
-        out.append("post_text is missing its source URL")
+    # The source link lives in `comment` (posted as the first comment), not in
+    # post_text — a raw URL in the LinkedIn body throttles reach.
+    body = str(post.get("post_text") or "")
+    comment = str(post.get("comment") or "")
+    if url and url not in {normalise_url(u) for u in URL_RE.findall(comment)}:
+        out.append("comment is missing the source URL")
+    body_urls = {normalise_url(u) for u in URL_RE.findall(body)}
+    if body_urls:
+        out.append("post_text contains a URL — links belong in `comment` only")
     return out
 
 

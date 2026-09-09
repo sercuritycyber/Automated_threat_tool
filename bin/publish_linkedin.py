@@ -438,7 +438,8 @@ def main() -> int:
             continue
         log(f"posting “{p.get('title','')[:50]}” (score {p.get('score')}) → {', '.join(tset)}")
         results = publishers.post_all(p.get("post_text", ""), C, settings,
-                                      short_text=p.get("short_text"), only=tset, log=log)
+                                      short_text=p.get("short_text"),
+                                      comment=p.get("comment"), only=tset, log=log)
         for r in results:
             tag = "ok" if r["ok"] else f"FAIL {r['error']}"
             log(f"  {r['provider']}: {tag}  {r.get('url', '')}")

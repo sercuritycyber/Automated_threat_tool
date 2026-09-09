@@ -148,7 +148,27 @@ def _li_with_plug(text: str) -> str:
     return combined if len(combined) <= 2950 else t
 
 
-def post_linkedin(text: str, creds: dict, settings: dict, short_text=None, log=print) -> dict:
+def _li_comment(token: str, author: str, share_urn: str, text: str, version: str, log) -> bool:
+    """Post `text` as the first comment on a share. Non-fatal: the main post has
+    already succeeded, so a comment failure is logged, not raised."""
+    if not (text and share_urn.startswith("urn:li:")):
+        return False
+    from urllib.parse import quote
+    url = f"https://api.linkedin.com/rest/socialActions/{quote(share_urn, safe='')}/comments"
+    try:
+        r = requests.post(url, headers={
+            "Authorization": f"Bearer {token}", "Content-Type": "application/json",
+            "X-Restli-Protocol-Version": "2.0.0", "LinkedIn-Version": version,
+        }, json={"actor": author, "object": share_urn, "message": {"text": text[:1200]}}, timeout=20)
+        if r.status_code in (200, 201):
+            return True
+        log(f"linkedin: first comment failed HTTP {r.status_code}: {r.text[:200]}")
+    except requests.RequestException as e:
+        log(f"linkedin: first comment error ({e})")
+    return False
+
+
+def post_linkedin(text: str, creds: dict, settings: dict, short_text=None, log=print, *, comment=None) -> dict:
     token = creds.get("LINKEDIN_ACCESS_TOKEN")
     if not token:
         return _res("linkedin", False, error="no LINKEDIN_ACCESS_TOKEN")
@@ -157,12 +177,14 @@ def post_linkedin(text: str, creds: dict, settings: dict, short_text=None, log=p
     visibility = pub.get("visibility", "PUBLIC")
 
     def _do(tok, version):
+        # Pure text, no link-preview card: a raw URL or an outbound card in the
+        # body throttles reach. The source + subscribe links go in the first
+        # comment (see `comment`). The analyst's own plug line is already in `text`.
         payload = {
-            "author": _li_author(tok, creds, log), "commentary": _li_with_plug(text), "visibility": visibility,
+            "author": _li_author(tok, creds, log), "commentary": text, "visibility": visibility,
             "distribution": {"feedDistribution": "MAIN_FEED", "targetEntities": [],
                              "thirdPartyDistributionChannels": []},
             "lifecycleState": "PUBLISHED", "isReshareDisabledByAuthor": False,
-            "content": LI_CARD,
         }
         return requests.post(_LI_POSTS, headers={
             "Authorization": f"Bearer {tok}", "Content-Type": "application/json",
@@ -170,7 +192,9 @@ def post_linkedin(text: str, creds: dict, settings: dict, short_text=None, log=p
         }, json=payload, timeout=30)
 
     resp = None
+    used_version = pinned
     for version in _li_versions(pinned):
+        used_version = version
         resp = _do(token, version)
         if resp.status_code == 401:
             new = _li_refresh(creds, log)
@@ -187,6 +211,13 @@ def post_linkedin(text: str, creds: dict, settings: dict, short_text=None, log=p
         return _res("linkedin", False, error=f"HTTP {code}: {body}")
     urn = resp.headers.get("x-restli-id") or resp.headers.get("x-linkedin-id") or ""
     url = f"https://www.linkedin.com/feed/update/{urn}/" if urn.startswith("urn:li:") else ""
+    if comment and urn.startswith("urn:li:"):
+        try:
+            author = _li_author(token, creds, log)
+            if _li_comment(token, author, urn, comment, used_version, log):
+                log("linkedin: link posted as first comment")
+        except Exception as e:  # noqa — never let a comment failure sink a good post
+            log(f"linkedin: first comment skipped ({e})")
     return _res("linkedin", True, id=urn, url=url)
 
 
@@ -435,13 +466,18 @@ def resolve_targets(settings: dict, creds: dict, only=None) -> list[str]:
 
 
 def post_all(text: str, creds: dict, settings: dict, *, short_text: str | None = None,
-             only=None, log=print) -> list[dict]:
-    """Post `text` to every resolved target. Returns one result dict per target."""
+             comment: str | None = None, only=None, log=print) -> list[dict]:
+    """Post `text` to every resolved target. Returns one result dict per target.
+    `comment` (if given) is posted as the first comment on LinkedIn — that's
+    where the links go."""
     out = []
     for name in resolve_targets(settings, creds, only):
         fn = PROVIDERS[name]
         try:
-            out.append(fn(text, creds, settings, short_text, log))
+            if name == "linkedin":
+                out.append(fn(text, creds, settings, short_text, log, comment=comment))
+            else:
+                out.append(fn(text, creds, settings, short_text, log))
         except Exception as e:  # noqa — a broken provider must not kill the others
             out.append(_res(name, False, error=f"{type(e).__name__}: {e}"[:300]))
     return out
