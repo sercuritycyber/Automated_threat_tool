@@ -3,9 +3,17 @@
 **What this is:** thought-leadership / educational posts for the SecurityCyber
 company page (LinkedIn, Bluesky, Mastodon). Each one teaches a real detection in
 a few lines, then points at something on securitycyber.uk — the **Packet Hunter**
-drill or the **CTI** free tier. These are *not* CTI alerts and *not* the
+drill or the **CTI** 7-day trial. These are *not* CTI alerts and *not* the
 pure-promo autoposter bank (`bin/marketing_content.json`); post them by hand,
 roughly one a week, spaced away from the promo slots.
+
+**Positioning (the whole company runs on this):** the free social feed is the
+hook — major CVSS 9.0+ criticals only, high-level, delayed a few hours. The paid
+feed (£2/week, email + Discord) is the operational tool — every vector, the full
+"do this now" with build numbers and hunting queries, pushed instantly. Every
+emergency the analyst posts publicly ends with a line that the paid feed already
+had the full brief. The 7-day trial (no card) lets a defender see the gap. When
+you write CTA copy, drive to the trial, not a "free plan".
 
 **House rules** (same as the marketing voice): British spelling, short lines,
 facts only, no fabricated metrics, no "comment below" bait. One clear link.

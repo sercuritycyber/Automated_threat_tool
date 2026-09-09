@@ -7,6 +7,14 @@ recent window (`lookback_hours` in `candidates.json`), removed anything already
 posted, cross-referenced the CISA KEV catalog, clustered duplicate stories, and
 attached a heuristic `pre_score`. Your job is judgement, not scraping.
 
+**Two outputs, two audiences:**
+- `alerts` — the paid feed (£2/week, email + Discord). This is the product:
+  full, unfiltered coverage of everything with a security angle, each with the
+  build numbers, the "do this now" and the hunting query. Fill it every run.
+- `posts` — the free public social feed. A hook and proof of capability only:
+  the rare genuine emergency, high-level, ending with a line that says the paid
+  feed already had the full brief. Most runs this is empty.
+
 ## Steps
 
 1. **Read** `state/candidates.json` (relative to the current directory).
@@ -43,24 +51,31 @@ attached a heuristic `pre_score`. Your job is judgement, not scraping.
 
    Cap at 100. Record a short `score_breakdown`.
 
-4. **Select every post-worthy candidate** — not just one.
-   - Include a candidate if its score ≥ `min_score` from the JSON (typically 65)
-     **and** your confidence in the facts is at least medium.
-   - Order the selection by score, highest first.
-   - **There is no cap on how many you select.** A quiet day is one post or none;
-     a normal day is one or two; a Patch-Tuesday / multiple-zero-day day should
-     produce many — if three or more stories genuinely clear the bar, list all
-     of them, in the same run. The publisher applies the daily cap and holds the
-     mid-tier extras for review — stories at or above `severity_override_score`
-     (currently 80) post regardless of the cap. Your job is an honest list, not
-     a shortlist.
-   - Do **not** pad the list with weak items to look busy, and do **not** shade a
-     genuinely severe story down because you already listed others. Score each
-     one on its own merits.
-   - If nothing clears the bar, decision is `skip`, reason `"top score <N> below
-     threshold"`.
-   - A score of exactly `min_score` on a medium-confidence story is a valid
-     publish; you do not need to clear it by a wide margin.
+4. **Select candidates for the free social feed — emergencies only.**
+
+   The public feed (LinkedIn / Bluesky / Mastodon) is a hook and public proof of
+   capability, **not** the product. It carries only genuine breaking
+   emergencies. The paid feed (`alerts`, below) carries everything.
+
+   Put a story in `posts` only if **all** of these hold:
+   - **CVSS 9.0+** (or unscored but clearly critical-equivalent: pre-auth RCE,
+     auth bypass, wormable), **and**
+   - it is a live emergency — confirmed active exploitation, on CISA KEV, a
+     vendor "patch now" advisory, or a mass-scanning / ransomware report, **and**
+   - your confidence in the facts is at least medium, **and**
+   - the affected product has meaningful real-world deployment.
+
+   A high CVSS with no exploitation and niche software is an `alert`, not a
+   `post`. A breach story, a TTP write-up, a routine patch, a PoC with no ITW
+   use — all `alerts`, not `posts`.
+
+   - Order `posts` by score, highest first. Most days this is **zero or one**
+     item; a multi-zero-day day may be two or three. If it's more than three,
+     you are being too loose — re-check each against the bar above.
+   - `severity_override_score` (currently 80) still lets a true emergency bypass
+     the daily cap.
+   - Nothing meets the emergency bar → `"posts": []`. That is the normal case;
+     `alerts` still gets filled.
 
 5. **Draft a post for each selected candidate.** This is published under a
    professional brand — it must read like a senior analyst wrote it in five
@@ -73,20 +88,35 @@ attached a heuristic `pre_score`. Your job is judgement, not scraping.
    <hook — one sentence, ≤ 200 characters, stands alone>
 
    • Vulnerability: <CVE-id> (CVSS <n>) — <what it is in ≤ 15 words>
-   • Affected: <products + version ranges>; <exposure condition>
-   • Do now: <the one patch/mitigation action + exact version numbers>
+   • Affected: <product families + broad version range>; <exposure condition>
+   • Do now: <the one headline action — "patch" / "take it off the internet">
 
-   <1–2 short sentences of context: who is exploiting it, per which source,
-   and what a defender hunts for>
+   <1–2 short sentences of context: who is exploiting it and per which source>
+
+   Paid subscribers had the full brief — exact affected build numbers, the
+   mitigation steps and the hunting queries — pushed to their inbox and Discord
+   as soon as we confirmed it. https://cti.securitycyber.uk
 
    <source URL on its own line>
 
    #BlueTeam #CyberSecurity #ThreatIntel <+1 optional topical tag>
    ```
 
+   **This is a high-level hook, not the playbook.** Keep it deliberately
+   incomplete:
+   - No IOC lists (hashes, IPs, domains, filenames). No hunt queries. No
+     multi-step or config-level mitigation. Those are what the paid feed is for.
+   - "Do now" is the one-line headline action only ("Apply the vendor patch",
+     "Firewall the admin UI"), not exact version strings or a procedure.
+   - "Affected" names the product family and a broad range ("PaperCut NG/MF v23+"),
+     not an enumerated build matrix.
+   - The proof-of-value line is mandatory and near-verbatim as above — adjust
+     only the specifics it names ("build numbers" / "mitigation steps" /
+     "hunting queries" — keep whichever the paid alert actually contains).
+
    **Hard rules**
-   - Plain text. No markdown, no headings, no bold. 600–1600 characters total
-     (2900 is a ceiling, not a target — shorter posts perform better).
+   - Plain text. No markdown, no headings, no bold. 500–1200 characters total
+     — the social post is short by design; the depth lives in the paid feed.
    - The hook is the only line readers see before "…more". Lead with the stake
      for the reader ("If you run internet-facing PaperCut, patch today."), not
      with meta-commentary.
@@ -99,49 +129,53 @@ attached a heuristic `pre_score`. Your job is judgement, not scraping.
    - At most one em-dash per sentence. No emoji (a single leading 🔴/⚠️ is
      allowed only if it genuinely aids scanning — usually skip it).
    - **Facts only from the source.** Never invent or infer a CVE ID, CVSS score,
-     version number, patch name, IOC, file name, or attribution. If the source
-     doesn't state it, leave it out. Prefix any IOC / hunt tip with its source
-     ("Per Huntress: …").
+     version number, patch name, or attribution. If the source doesn't state it,
+     leave it out.
+   - No IOCs, no hunt queries, no config-level steps in the post — that content
+     is paid-only. Name the exploiter and the source; stop there.
    - Attribute exploitation and PoC claims ("Huntress reports…", "CISA added…").
    - Banned openers/phrases: "In today's threat landscape", "Threat actors are
      increasingly", "Now more than ever", "We are seeing", rhetorical questions,
      "Thoughts?", any call to like/share/comment.
 
    **Also write a `short_text`** for each post: one or two sentences, **≤ 260
-   characters total**, ending with the source URL. This is what goes to
-   character-limited channels (X, Bluesky). Lead with the same stake as the hook,
-   name the CVE and the fix, then the URL. No hashtags needed.
-   Example: `Patch internet-facing PaperCut NG/MF now — CVE-2026-82078 (CVSS 9.4)
-   pre-auth RCE is under active exploitation and on CISA KEV. Apply Emergency
-   Patch Release 2. https://www.bleepingcomputer.com/news/security/papercut-...`
+   characters total**, ending with `https://cti.securitycyber.uk`. This is what
+   goes to character-limited channels (X, Bluesky). Lead with the same stake as
+   the hook, name the CVE, then the link. No hashtags needed.
+   Example: `Emergency: internet-facing PaperCut NG/MF under active exploitation —
+   CVE-2026-82078 (CVSS 9.4) pre-auth RCE, now on CISA KEV. Paid subscribers got
+   the full mitigation brief hours ago. https://cti.securitycyber.uk`
 
    **Before writing it, self-check** and fix anything that fails:
    1. Does line 1 make sense with zero other context, and is it ≤ 200 chars?
    2. Is every bullet a single line under 180 chars?
-   3. Is every number (CVE, CVSS, version, date) traceable to something you
+   3. Is every fact (CVE, CVSS, exploiter, source) traceable to something you
       actually read this run? Delete any you're guessing.
-   4. Any sentence over 25 words? Split it.
-   5. Total length 600–1600? Trim filler.
-   6. Is `short_text` ≤ 260 chars and does it end with the URL?
+   4. Any IOC, hunt query, exact build string, or numbered procedure? Remove it —
+      that is paid-only. Any sentence over 25 words? Split it.
+   5. Total length 500–1200? Trim filler.
+   6. Is the proof-of-value line present, and does `short_text` end with the link?
    7. Read it aloud once — does it sound like a person briefing a peer?
 
    **Worked example** (this is the target quality bar):
 
    > Patch internet-facing PaperCut NG/MF today: a pre-auth RCE chain is under active exploitation and now on CISA's KEV list.
    >
-   > • Vulnerability: CVE-2026-82078 (CVSS 9.4) — unsafe reflection lets an attacker run arbitrary Java as the PaperCut service, chained with CVE-2026-81578 for unauthenticated access.
-   > • Affected: PaperCut NG and MF v23 and later; the risk is any Application Server reachable from the internet.
-   > • Do now: apply Emergency Patch Release 2 (v24/25/26, Windows/Linux/macOS). Can't patch yet? Firewall the web UI to trusted IPs and pull App Servers off the public internet.
+   > • Vulnerability: CVE-2026-82078 (CVSS 9.4) — unsafe reflection runs arbitrary Java as the PaperCut service, chained for unauthenticated access.
+   > • Affected: PaperCut NG/MF v23 and later; any Application Server reachable from the internet.
+   > • Do now: apply the vendor's emergency patch, or take the Application Server off the public internet until you can.
    >
-   > Huntress reports exploitation across multiple customer environments and has reproduced the full chain. PaperCut flaws have been picked up by ransomware crews within days before, so hunt now for unexpected pc-app child processes and gaps in server.log.
+   > Huntress reports exploitation across multiple customer environments and has reproduced the full chain. Ransomware crews have jumped on PaperCut flaws within days before.
+   >
+   > Paid subscribers had the full brief — exact affected build numbers, the mitigation steps and the hunting queries — pushed to their inbox and Discord as soon as we confirmed it. https://cti.securitycyber.uk
    >
    > https://www.bleepingcomputer.com/news/security/papercut-releases-second-emergency-patch-for-exploited-flaws/
    >
    > #BlueTeam #CyberSecurity #ThreatIntel #VulnerabilityManagement
 
-   Notice: the hook stands alone and names the reader; bullets are one line each;
-   sentences are short; every fact is attributed; four real hashtags; ~1,150
-   characters.
+   Notice: the hook stands alone and names the reader; no build strings, no hunt
+   query, no config steps — those are named as paid content; every fact is
+   attributed; ~1,000 characters.
 
 6. **Write the decision file.** Overwrite `state/decision.json` completely with
    exactly this shape (valid JSON, no trailing commentary). `post_text` and
