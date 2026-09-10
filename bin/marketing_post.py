@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import os
 import random
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -35,7 +36,61 @@ STATE = ROOT / "state"
 BANK = ROOT / "bin" / "marketing_content.json"
 ROT = STATE / "marketing_rotation.json"
 LOG = STATE / "marketing_posts.jsonl"
-HASHTAGS = "#CyberSecurity #ThreatIntelligence #BlueTeam #SECURITYCYBERUK"
+# Three complete tags reach further than five on LinkedIn; more reads as
+# tag-stuffing and gets down-ranked. Matches prompts/analyst.md.
+HASHTAGS = "#CyberSecurity #ThreatIntel #BlueTeam"
+SITE = "https://securitycyber.uk/cti"
+URL_RE = re.compile(r"https?://\S+")
+# Local windows where a UK working audience is actually on the feed. A promo
+# post at 21:00 spends a slot for almost no reach.
+WINDOWS = ((7, 0, 9, 30), (11, 30, 13, 30), (16, 30, 18, 30))
+
+
+def _in_window(now: datetime) -> bool:
+    hm = (now.hour, now.minute)
+    return any((a, b) <= hm <= (c, d) for a, b, c, d in WINDOWS)
+
+
+def _strip_urls(text: str) -> str:
+    """LinkedIn body copy carries no links — they go in the first comment.
+
+    A line like "Free for 7 days, no card: <url>" would be left as a dangling
+    "…no card:", so a trailing colon becomes the call-to-action instead.
+    """
+    out = []
+    for ln in text.splitlines():
+        stripped = URL_RE.sub("", ln).rstrip()
+        if stripped.endswith(":") and stripped != ln:
+            stripped = stripped[:-1].rstrip() + " \u2014 link in the comments."
+        out.append(stripped)
+    while out and not out[-1].strip():
+        out.pop()
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(out)).strip()
+
+
+def intel_lure(limit: int = 3) -> tuple[str, str] | None:
+    """A proof-of-work post built from the briefs we actually shipped today.
+
+    The strongest lure we have is not a claim about the product, it is the
+    product's output: real headlines, real scores, and the count of what the
+    reader is not seeing. Titles and scores only — the analysis stays paid.
+    """
+    dec = _load(STATE / "decision.json", {})
+    alerts = [a for a in (dec.get("alerts") or []) if a.get("title")]
+    if len(alerts) < 6:
+        return None                      # too thin to be impressive; use the bank
+    top = sorted(alerts, key=lambda a: int(a.get("score") or 0), reverse=True)[:limit]
+    lines = [f"\u2022 {str(a['title']).strip()[:105]} \u2014 {int(a.get('score') or 0)}/100"
+             for a in top]
+    rest = len(alerts) - len(top)
+    return (
+        "What went out to subscribers today, top three by impact:\n\n"
+        + "\n".join(lines)
+        + f"\n\nPlus {rest} more, each with the affected versions, how to check "
+          "whether you are exposed, and the one action to take.\n\n"
+          "Seven days free, no card \u2014 link in the comments.",
+        f"Start the free trial: {SITE}",
+    )
 
 
 def _load(p: Path, default):
@@ -87,6 +142,13 @@ def main() -> int:
     creds = _creds()
     dry = _truthy(os.environ.get("CTI_DRY_RUN", settings.get("publish", {}).get("dry_run", True)))
 
+    # Outside the windows a promo post reaches almost nobody. Skip the slot
+    # rather than spend a bank entry on it.
+    if _truthy(mk.get("respect_windows", True)) and not _in_window(datetime.now()):
+        print(f"[marketing] {datetime.now():%H:%M} local is outside the posting "
+              f"windows \u2014 skipping this slot")
+        return 0
+
     # don't stack on top of a CTI post
     gap = int(mk.get("min_gap_minutes", 45))
     hist = STATE / "history.jsonl"
@@ -103,12 +165,32 @@ def main() -> int:
             pass
 
     bank = _load(BANK, {})
-    idx, text = pick_post(bank)
-    if idx < 0:
-        print("[marketing] content bank is empty", file=sys.stderr)
-        return 1
+    # Every third slot is a proof-of-work lure built from today's real briefs —
+    # far more persuasive than another feature pitch, and it costs nothing to
+    # produce. Falls back to the bank when the run was too thin to show off.
+    rot = _load(ROT, {})
+    since = int(rot.get("since_lure", 0)) + 1
+    lure = intel_lure() if since >= 3 else None
+    if lure:
+        text, comment = lure
+        idx = -1
+        since = 0
+        print("[marketing] slot -> intel lure (today's shipped briefs)")
+    else:
+        idx, text = pick_post(bank)
+        if idx < 0:
+            print("[marketing] content bank is empty", file=sys.stderr)
+            return 1
+        comment = f"Start the free trial: {bank.get('url', SITE)}"
+    rot = _load(ROT, {})          # pick_post rewrote it; keep its `used` list
+    rot["since_lure"] = since
+    ROT.write_text(json.dumps(rot))
+
+    # LinkedIn gets no link in the body (it throttles reach) — the URL goes in
+    # the first comment. Every other network keeps it inline.
+    body_li = _strip_urls(text).rstrip() + "\n\n" + HASHTAGS
     body = text.rstrip() + "\n\n" + HASHTAGS
-    short = (text.split("\n", 1)[0].strip()[:230] + " " + bank.get("url", "")).strip()
+    short = (text.split("\n", 1)[0].strip()[:230] + " " + bank.get("url", SITE)).strip()
 
     targets = publishers.resolve_targets(settings, creds)
     targets = [t for t in targets if t in publishers.configured(creds)]
@@ -119,10 +201,19 @@ def main() -> int:
         with LOG.open("a") as fh:
             fh.write(json.dumps({"at": datetime.now(timezone.utc).isoformat(), "idx": idx,
                                  "dry_run": True, "targets": targets, "text": text[:120]}) + "\n")
-        print(text)
+        print(body_li if "linkedin" in targets else body)
+        print(f"[marketing] first comment -> {comment}")
         return 0
 
-    results = publishers.post_all(body, creds, settings, short_text=short, only=targets, log=print)
+    li = [t for t in targets if t == "linkedin"]
+    others = [t for t in targets if t != "linkedin"]
+    results = []
+    if li:
+        results += publishers.post_all(body_li, creds, settings, short_text=short,
+                                       comment=comment, only=li, log=print)
+    if others:
+        results += publishers.post_all(body, creds, settings, short_text=short,
+                                       only=others, log=print)
     ok = [r["provider"] for r in results if r.get("ok")]
     fail = [f"{r['provider']}: {r['error']}" for r in results if not r.get("ok")]
     with LOG.open("a") as fh:

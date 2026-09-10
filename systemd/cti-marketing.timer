@@ -1,10 +1,17 @@
 [Unit]
-Description=SecurityCyber marketing autoposter — 4x/day
+Description=SecurityCyber marketing autoposter — 3x/day, inside the posting windows
 
 [Timer]
-OnCalendar=*-*-* 09,13,17,21:00:00
+# Offset ~65min after the in-window CTI runs (08/12/17) so the two never stack:
+# marketing_post.py also self-skips within marketing.min_gap_minutes of a CTI
+# post, and skips entirely outside the windows. Jitter kept small so a slot
+# cannot drift out of its window.
+OnCalendar=*-*-* 09:20:00
+OnCalendar=*-*-* 13:20:00
+OnCalendar=*-*-* 18:20:00
 Persistent=true
-RandomizedDelaySec=900
+RandomizedDelaySec=300
+AccuracySec=1min
 
 [Install]
 WantedBy=timers.target

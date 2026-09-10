@@ -205,6 +205,15 @@ def fetch_kev(timeout: int) -> dict:
     return {"all": all_cves, "recent": recent, "meta": meta}
 
 
+# A feed at or above this weight is a PRIMARY source — a vendor PSIRT, a CERT,
+# a research lab publishing its own finding (CISA, watchTowr, Huntress, NCSC,
+# ZDI, Talos, Project Zero, DFIR Report). Below it are the wires that write up
+# what those sources published. Catching a primary source before the wire picks
+# it up is the whole first-mover edge: subscribers get lead time, and the public
+# post lands while the story is still fresh instead of hours behind everyone.
+PRIMARY_WEIGHT = 0.85
+
+
 def prescore(item: dict, kev: dict) -> dict:
     text = f"{item['title']} \n {item['summary']}"
     # Base lifted from 8 -> 11: a substantive story from a trusted feed with no
@@ -233,6 +242,24 @@ def prescore(item: dict, kev: dict) -> dict:
     if any(kev["meta"].get(c, {}).get("ransomware") for c in kev_hits):
         score += 8
         reasons.append("+8 KEV flagged for ransomware use")
+
+    # First-mover bonus. Age is measured against the source's own publish time,
+    # so this rewards reaching a story early rather than reaching it at all.
+    age_h = None
+    primary = float(item.get("source_weight", 0)) >= PRIMARY_WEIGHT
+    pub = item.get("published")
+    if pub is not None:
+        age_h = max(0.0, (datetime.now(timezone.utc) - pub).total_seconds() / 3600.0)
+        if primary and age_h <= 2:
+            score += 10
+            reasons.append("+10 primary source, broke <2h ago")
+        elif primary and age_h <= 6:
+            score += 5
+            reasons.append("+5 primary source, broke <6h ago")
+        elif age_h <= 3:
+            score += 3
+            reasons.append("+3 published <3h ago")
+
     score = max(0.0, min(100.0, score))
     return {
         "cve_ids": cves,
@@ -240,6 +267,8 @@ def prescore(item: dict, kev: dict) -> dict:
         "kev_recent_cves": kev_recent,
         "pre_score": round(score, 1),
         "pre_score_reasons": reasons,
+        "age_hours": None if age_h is None else round(age_h, 1),
+        "primary_source": primary,
     }
 
 
@@ -348,6 +377,17 @@ def main() -> int:
             "kev_meta": {c: kev["meta"][c] for c in best["kev_cves"] if c in kev["meta"]},
             "pre_score": best["pre_score"],
             "pre_score_reasons": best["pre_score_reasons"],
+            # Timing signals the analyst uses to pick the social lane: a fresh
+            # primary-source story nobody else has written up yet is the one
+            # worth posting now. `corroborations` counts the other feeds that
+            # already carried it — 0 means we are ahead of the wire, several
+            # means it is already mainstream and the post adds nothing.
+            "age_hours": best.get("age_hours"),
+            "primary_source": bool(best.get("primary_source")),
+            "corroborations": len(members) - 1,
+            "breaking": bool(best.get("primary_source")
+                             and (best.get("age_hours") if best.get("age_hours") is not None else 99) <= 3
+                             and len(members) - 1 <= 1),
             "also_reported_by": [
                 {"source": m["source"], "url": m["url"]} for m in members[1:]
             ],

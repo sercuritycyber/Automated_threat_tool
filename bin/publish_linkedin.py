@@ -36,6 +36,7 @@ import sys
 import textwrap
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import requests  # noqa: F401  (kept for exception typing in publishers)
 import yaml
@@ -45,7 +46,7 @@ sys.path.insert(0, str(ROOT / "bin"))
 try:
     from lint_post import lint as lint_text
 except ImportError:
-    def lint_text(_t, _c=None):
+    def lint_text(_t, _c=None, _lane="intel"):
         return {"ok": True, "errors": [], "warnings": []}
 from postlog import count_last_24h
 import publishers
@@ -73,54 +74,199 @@ def _parse_iso(s: str):
         return None
 
 
-def apply_social_delay(posts: list[dict], decision: dict, settings: dict,
-                       operator: bool) -> list[dict]:
-    """Hold new social posts for `publish.social_delay_hours` so paid subscribers
-    (who are pushed the alert instantly by push_to_worker.py) genuinely get it
-    first, and the post's "paid subscribers had this hours ago" line is true.
+LANES = ("breaking", "intel", "trend")
+_QKEYS = ("post_after", "queued_at", "queued_reason")
+LONDON = ZoneInfo("Europe/London")
+# Nobody reads a company page at 03:00. An item posted outside these local
+# windows burns the story for no reach, so it waits for the next opening.
+POST_WINDOWS_DEFAULT = ["07:00-09:30", "11:30-13:30", "16:30-18:30"]
 
-    Opt-in: 0 / unset => no queue, posts go out this run unchanged.
-    Operator one-offs (--text / --approve) always bypass the delay.
+
+def lane_of(p: dict) -> str:
+    lane = str(p.get("lane") or "intel").strip().lower()
+    return lane if lane in LANES else "intel"
+
+
+def substitute_tokens(text: str, decision: dict) -> str:
+    """Fill publish-time tokens the analyst is instructed to use.
+
+    `{alerts_today}` is the number of subscriber briefs this run produced. It is
+    substituted here rather than written by the model, so a volume claim in a
+    public post is always literally true.
     """
-    delay_h = float(settings.get("publish", {}).get("social_delay_hours", 0) or 0)
-    if operator or delay_h <= 0:
-        return posts
-    # note: we still run with posts == [] so ripe items already in the queue
-    # get released on a run where the analyst found nothing new.
+    if not text or "{" not in text:
+        return text
+    alerts = decision.get("alerts") or []
+    n = len(alerts)
+    cves = len({str(c).upper() for a in alerts for c in (a.get("cve_ids") or []) if c})
+    # "We wrote 0 briefs today" is worse than saying nothing.
+    return (text.replace("{alerts_today}", str(n) if n >= 3 else "a full set of")
+                .replace("{cves_today}", str(cves)))
 
-    now = datetime.now(timezone.utc)
+
+def _read_queue() -> list[dict]:
     try:
-        queue = json.loads(SOCIAL_QUEUE.read_text()).get("queue", [])
+        return json.loads(SOCIAL_QUEUE.read_text()).get("queue", [])
     except (FileNotFoundError, json.JSONDecodeError, OSError):
-        queue = []
+        return []
 
-    due, waiting = [], []
-    for q in queue:
-        after = _parse_iso(q.get("post_after", ""))
-        (due if (after is None or after <= now) else waiting).append(q)
 
-    known = {(q.get("url"), q.get("title")) for q in waiting}
-    added = 0
-    post_after = (now + timedelta(hours=delay_h)).isoformat()
-    for p in posts:
-        if (p.get("url"), p.get("title")) in known:
-            continue
-        waiting.append({**p, "post_after": post_after, "queued_at": now.isoformat(),
-                        "queued_reason": decision.get("reason", "")})
-        added += 1
-
+def _write_queue(waiting: list[dict], now: datetime) -> bool:
     try:
         SOCIAL_QUEUE.write_text(json.dumps({"updated": now.isoformat(),
                                             "queue": waiting}, indent=2))
+        return True
     except OSError as e:
-        log(f"could not write social queue ({e}) — posting this run without delay")
-        return posts
+        log(f"could not write social queue ({e})")
+        return False
 
-    log(f"social delay {delay_h}h: +{added} queued, {len(due)} now due, "
-        f"{len(waiting)} still waiting")
-    return [{k: v for k, v in d.items()
-             if k not in ("post_after", "queued_at", "queued_reason")}
-            for d in due]
+
+def _strip_queue_keys(d: dict) -> dict:
+    return {k: v for k, v in d.items() if k not in _QKEYS}
+
+
+def schedule_social(posts: list[dict], decision: dict, settings: dict,
+                    operator: bool) -> list[dict]:
+    """Release what is due and hold what is not.
+
+    `publish.social_delay_hours` buys paid subscribers real lead time: they are
+    pushed the full brief in stage 3, the public teaser follows later, so "our
+    subscribers had this first" is literally true. A live emergency skips the
+    hold — lane `breaking`, or a score at/above `publish.social_delay_bypass_score`
+    — because being first to an actively-exploited RCE is worth more than the
+    lead time.
+
+    The queue is drained on EVERY run, including when the delay is 0, so items
+    parked by pace_posts() for spacing or for a posting window are always
+    released. (The old version returned early when the delay was 0 and could
+    strand them indefinitely.)
+    """
+    now = datetime.now(timezone.utc)
+    pub = settings.get("publish", {})
+    delay_h = float(pub.get("social_delay_hours", 0) or 0)
+    bypass = float(pub.get("social_delay_bypass_score", 10 ** 6) or 10 ** 6)
+
+    due, waiting = [], []
+    for q in _read_queue():
+        after = _parse_iso(q.get("post_after", ""))
+        (due if (after is None or after <= now) else waiting).append(q)
+
+    if operator:
+        immediate = list(posts)
+    else:
+        immediate = []
+        known = {(q.get("url"), q.get("title")) for q in waiting}
+        post_after = (now + timedelta(hours=delay_h)).isoformat()
+        for p in posts:
+            score = int(p.get("score", 0) or 0)
+            if delay_h <= 0 or lane_of(p) == "breaking" or score >= bypass:
+                immediate.append(p)
+                continue
+            if (p.get("url"), p.get("title")) in known:
+                continue
+            waiting.append({**p, "post_after": post_after, "queued_at": now.isoformat(),
+                            "queued_reason": f"subscriber lead time {delay_h}h"})
+
+    _write_queue(waiting, now)
+    released = [{**_strip_queue_keys(d), "from_queue": True} for d in due]
+    if released or waiting or immediate:
+        log(f"social queue: {len(released)} released, {len(waiting)} waiting, "
+            f"{len(immediate)} clear to go now "
+            f"(lead {delay_h}h, emergency bypass >= {bypass:g})")
+    return released + immediate
+
+
+# ------------------------------------------------------------------ pacing
+def _windows(settings: dict) -> list[tuple[tuple[int, int], tuple[int, int]]]:
+    raw = settings.get("publish", {}).get("post_windows", POST_WINDOWS_DEFAULT)
+    out = []
+    for w in raw or []:
+        try:
+            a, b = str(w).split("-", 1)
+            ah, am = (int(x) for x in a.strip().split(":"))
+            bh, bm = (int(x) for x in b.strip().split(":"))
+            out.append(((ah, am), (bh, bm)))
+        except (ValueError, TypeError):
+            log(f"ignoring malformed publish.post_windows entry {w!r}")
+    return sorted(out)
+
+
+def _in_window(t: datetime, wins) -> bool:
+    hm = (t.hour, t.minute)
+    return any(a <= hm <= b for a, b in wins)
+
+
+def _next_window(t: datetime, wins) -> datetime:
+    for a, _ in wins:
+        cand = t.replace(hour=a[0], minute=a[1], second=0, microsecond=0)
+        if cand > t:
+            return cand
+    a = wins[0][0]
+    return (t + timedelta(days=1)).replace(hour=a[0], minute=a[1],
+                                           second=0, microsecond=0)
+
+
+def pace_posts(to_post: list[dict], settings: dict, operator: bool) -> list[dict]:
+    """Post one now, park the rest — spacing and posting windows.
+
+    Two posts from the same page in the same window compete with each other:
+    the second suppresses the first while it is still gathering engagement. So
+    only the top-ranked post goes out per run and the rest are parked
+    `publish.min_post_gap_minutes` apart. Outside `publish.post_windows` (local
+    time) everything is parked until the next opening — a 03:00 post spends the
+    story for no reach.
+
+    A `breaking` post ignores both rules: an actively-exploited RCE goes out
+    when it is confirmed, not when the calendar says so.
+    """
+    pub = settings.get("publish", {})
+    gap = int(pub.get("min_post_gap_minutes", 0) or 0)
+    wins = _windows(settings)
+    if operator or not to_post:
+        return to_post
+
+    now_utc = datetime.now(timezone.utc)
+    now_local = now_utc.astimezone(LONDON)
+    urgent = [p for p in to_post if lane_of(p) == "breaking"]
+    rest = [p for p in to_post if lane_of(p) != "breaking"]
+
+    keep = list(urgent)
+    defer: list[dict] = []
+    base_local = now_local
+    if wins and not _in_window(now_local, wins):
+        base_local = _next_window(now_local, wins)
+        if rest:
+            log(f"outside posting windows ({now_local:%H:%M} local) — "
+                f"holding {len(rest)} post(s) until {base_local:%a %H:%M}")
+        slot = 0
+        for q in rest:
+            defer.append((q, base_local + timedelta(minutes=gap * slot)))
+            slot += 1
+    else:
+        # At most ONE non-breaking post per run, and none at all on a run that
+        # is already carrying a `breaking` post — an emergency should stand on
+        # its own. Items released from the queue are preferred, since they have
+        # already waited; everything else is parked a gap apart, so a run that
+        # finds four good stories spreads them instead of bursting.
+        rest.sort(key=lambda q: (not q.get("from_queue"),
+                                 -int(q.get("score", 0) or 0)))
+        allow = 0 if urgent else 1
+        for i, q in enumerate(rest):
+            if i < allow or gap <= 0:
+                keep.append(q)
+            else:
+                defer.append((q, now_local + timedelta(minutes=gap * (i - allow + 1))))
+
+    if defer:
+        parked = [{**_strip_queue_keys(q),
+                   "post_after": when.astimezone(timezone.utc).isoformat(),
+                   "queued_at": now_utc.isoformat(),
+                   "queued_reason": f"pacing: gap {gap}m / posting windows"}
+                  for q, when in defer]
+        _write_queue(_read_queue() + parked, now_utc)
+        log(f"pacing: {len(keep)} posting now, {len(defer)} parked "
+            f"({gap}m apart, next from {base_local:%H:%M} local)")
+    return keep
 
 
 def queue_manual(posts: list[dict], decision: dict, reason: str = "") -> None:
@@ -257,6 +403,7 @@ def record_real(p: dict, results: list[dict]) -> dict:
         "posted_at": now, "dry_run": False,
         "title": p.get("title"), "url": p.get("url"), "source": p.get("source"),
         "score": p.get("score"), "cve_ids": p.get("cve_ids", []),
+        "lane": str(p.get("lane") or "intel").strip().lower(),
         "targets": [r["provider"] for r in results],
         "results": results,
         "post_id": (ok[0]["id"] if ok else ""),
@@ -313,16 +460,23 @@ def main() -> int:
     max_day = int(pub.get("max_per_day", 5))
     sev = int(pub.get("severity_override_score", 90))
     runaway = int(pub.get("runaway_guard", 20))
+    lane_floor = pub.get("lane_min_score") or {}
 
     decision, posts, operator = load_decision(args)
     min_score = int(decision.get("min_score", settings.get("scoring", {}).get("min_score", 65)))
     archive_draft(decision, posts)
 
     had_new_posts = decision.get("decision") == "post" and bool(posts)
-    # apply_social_delay parks new posts and returns whatever is now due for
-    # release (which may be items queued on an earlier run, even if this run's
-    # decision is "skip").
-    posts = apply_social_delay(posts, decision, settings, operator)
+    # Publish-time tokens ({alerts_today}) are filled from THIS decision, so the
+    # numbers a public post quotes are the ones we actually shipped.
+    for _p in posts:
+        for _f in ("post_text", "short_text", "comment"):
+            if _p.get(_f):
+                _p[_f] = substitute_tokens(_p[_f], decision)
+    # schedule_social parks new posts and returns whatever is due for release
+    # (which may be items queued on an earlier run, even if this run's decision
+    # is "skip").
+    posts = schedule_social(posts, decision, settings, operator)
 
     if not posts:
         if had_new_posts:
@@ -354,11 +508,15 @@ def main() -> int:
         if len(text) > limit:
             log(f"skip “{title[:50]}” — {len(text)} chars > {limit}")
             continue
-        if not operator and score < min_score:
-            log(f"skip “{title[:50]}” — score {score} < {min_score}")
+        lane = lane_of(p)
+        # Per-lane floor. A single global min_score (60) silently muted the intel
+        # and trend lanes, which is why the public feed was one post a day.
+        floor = int(lane_floor.get(lane, min_score))
+        if not operator and score < floor:
+            log(f"skip “{title[:50]}” — {lane} score {score} < {floor}")
             continue
 
-        ql = lint_text(text, p.get("cve_ids") or [])
+        ql = lint_text(text, p.get("cve_ids") or [], lane)
         if ql.get("warnings"):
             log(f"“{title[:40]}” quality nits: " + " | ".join(ql["warnings"][:4]))
         if ql.get("errors") and not operator:
@@ -379,6 +537,9 @@ def main() -> int:
 
     log(f"{len(posts)} candidate(s): {len(to_post)} to post, {len(held)} held "
         f"(cap {used}/{max_day}, severe overrides)")
+    if to_post:
+        to_post.sort(key=lambda q: (LANES.index(lane_of(q)), -int(q.get("score", 0) or 0)))
+        to_post = pace_posts(to_post, settings, operator)
 
     # ---- review mode: hold everything for a human -----------------------------
     if mode == "review" and not operator and to_post:

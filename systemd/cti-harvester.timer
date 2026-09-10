@@ -1,8 +1,13 @@
 [Unit]
-Description=Run the Blue Team CTI harvester 7x/day (extra midday run at 14:00)
+Description=SecurityCyber CTI harvester — 7x/day (subscribers served on every run)
 
 [Timer]
-OnCalendar=*-*-* 00,04,08,12,14,16,20:00:00
+# Subscribers are pushed on EVERY run, around the clock — the paid feed is not
+# gated by anyone algorithm. The 08/12/17 runs also land inside
+# publish.post_windows, so those are the ones whose social post goes out live;
+# posts drafted on the off-window runs are parked and released by the next
+# in-window run. 16:00 moved to 17:00 to serve the 16:30-18:30 window.
+OnCalendar=*-*-* 00,04,08,12,14,17,20:00:00
 # catch up if the machine was asleep at the scheduled time
 Persistent=true
 # spread load / avoid every box firing on the dot

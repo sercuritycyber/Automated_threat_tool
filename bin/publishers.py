@@ -120,32 +120,45 @@ def _li_refresh(creds: dict, log):
 
 
 
-# Posting as Charlie's personal profile until the company-page token has
-# w_organization_social — so every post plugs the company page explicitly.
-LI_COMPANY_PLUG = (
-    "\n\n\u2014\u2014\u2014\n"
-    "SecurityCyber \u00b7 UK threat intelligence for small teams \u00b7 #SECURITYCYBERUK"
-)
+# Posts now go out as the company page (urn:li:organization:…) and the analyst
+# writes its own gap + plug lines, so the old appended plug block is gone.
+
+_TAG_RE = re.compile(r"#\w+")
+LI_MAX_TAGS = 3
 
 
+def _li_shape(text: str) -> str:
+    """Last-mile deterministic shaping, so a model slip cannot cost us reach.
 
-LI_CARD = {
-    "article": {
-        "source": "https://securitycyber.uk/cti",
-        "title": "SecurityCyber CTI \u2014 threat intelligence alerts for defenders",
-        "description": ("Public advisories cross-referenced against CISA KEV, a plain-English "
-                        "brief and an impact score on each one. Free plan, no card."),
-    }
-}
-
-
-def _li_with_plug(text: str) -> str:
-    """Append the company-page plug once, staying under LinkedIn's hard cap."""
+    * trims hashtags past LI_MAX_TAGS (3 reaches further than 5; more is
+      down-ranked as tag-stuffing)
+    * collapses runs of blank lines to a single blank line
+    Content is never rewritten — only over-tagging and whitespace are fixed.
+    """
     t = (text or "").rstrip()
-    if "#SECURITYCYBERUK" in t:
-        return t
-    combined = t + LI_COMPANY_PLUG
-    return combined if len(combined) <= 2950 else t
+    tags = _TAG_RE.findall(t)
+    if len(tags) > LI_MAX_TAGS:
+        keep, seen = [], set()
+        for tag in tags:
+            low = tag.lower()
+            if low not in seen:
+                seen.add(low)
+                keep.append(tag)
+        keep = keep[:LI_MAX_TAGS]
+        lines = t.splitlines()
+        # rebuild only the trailing hashtag lines; body text is untouched
+        while lines and (not lines[-1].strip() or _is_tag_line(lines[-1])):
+            if not lines[-1].strip():
+                lines.pop()
+                continue
+            lines.pop()
+        t = "\n".join(lines).rstrip() + "\n\n" + " ".join(keep)
+    return re.sub(r"\n{3,}", "\n\n", t)
+
+
+def _is_tag_line(line: str) -> bool:
+    toks = line.split()
+    return bool(toks) and all(tok.startswith("#") for tok in toks)
 
 
 def _li_comment(token: str, author: str, share_urn: str, text: str, version: str, log) -> bool:
@@ -181,7 +194,7 @@ def post_linkedin(text: str, creds: dict, settings: dict, short_text=None, log=p
         # body throttles reach. The source + subscribe links go in the first
         # comment (see `comment`). The analyst's own plug line is already in `text`.
         payload = {
-            "author": _li_author(tok, creds, log), "commentary": text, "visibility": visibility,
+            "author": _li_author(tok, creds, log), "commentary": _li_shape(text), "visibility": visibility,
             "distribution": {"feedDistribution": "MAIN_FEED", "targetEntities": [],
                              "thirdPartyDistributionChannels": []},
             "lifecycleState": "PUBLISHED", "isReshareDisabledByAuthor": False,
