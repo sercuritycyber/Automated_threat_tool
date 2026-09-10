@@ -236,15 +236,19 @@ export const kvSet = (db, key, value) =>
 export async function logPost(db, p) {
   await run(db,
     `INSERT INTO posts_log(post_key, title, url, source, score, cve_ids, post_text, short_text,
-                           subscriber_text, action, seen_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                           subscriber_text, action, category, exposure, confidence, seen_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(post_key) DO UPDATE SET
        -- a later run may add depth to a story we first saw as a bare post
        subscriber_text = COALESCE(NULLIF(excluded.subscriber_text, ''), posts_log.subscriber_text),
-       action          = COALESCE(NULLIF(excluded.action, ''), posts_log.action)`,
+       action          = COALESCE(NULLIF(excluded.action, ''), posts_log.action),
+       category        = COALESCE(NULLIF(excluded.category, ''), posts_log.category),
+       exposure        = COALESCE(NULLIF(excluded.exposure, ''), posts_log.exposure),
+       score           = MAX(excluded.score, posts_log.score)`,
     p.post_key, p.title || "", p.url || "", p.source || "", p.score || 0,
     JSON.stringify(p.cve_ids || []), p.post_text || "", p.short_text || "",
-    p.subscriber_text || "", p.action || "", nowIso());
+    p.subscriber_text || "", p.action || "", p.category || "", p.exposure || "",
+    p.confidence || "", nowIso());
 }
 export async function postsSince(db, hours) {
   const rows = await many(db, "SELECT * FROM posts_log WHERE seen_at >= ? ORDER BY score DESC", isoDaysAgo(hours / 24));

@@ -1173,7 +1173,13 @@ async function deliverDigest(env, cfg, sub, allPosts) {
   const tierCfg = cfg.tiers[sub.tier] || {};
   const verified = deliverableChannels(sub, tierCfg);
   if (!verified.length) return;
-  let matched = allPosts.filter((p) => wants(p, sub, tierCfg, "digest")).sort((a, b) => b.score - a.score);
+  const ACTIONABLE = new Set(["exploitation", "breach", "campaign", "supply-chain",
+                             "fraud-trend", "exec-protection", "malware", "ttp"]);
+  const digestFloor = Number(cfg.digest_min_score ?? 30);
+  let matched = allPosts
+    .filter((p) => wants(p, sub, tierCfg, "digest"))
+    .filter((p) => Number(p.score || 0) >= digestFloor || ACTIONABLE.has(p.category || ""))
+    .sort((a, b) => b.score - a.score);
   if (!matched.length) return;
   // Per-item, not one-digest-per-day: keep only what this subscriber has never
   // been sent (by instant or an earlier digest). Lets the digest run several

@@ -49,8 +49,19 @@ attached a heuristic `pre_score`. Your job is judgement, not scraping.
    | Penalty: vendor marketing, opinion, roundup, or rehash | −40 |
    | Penalty: unconfirmed / rumor / single unreliable source | −20 |
    | Penalty: same story as anything in `recently_posted` | set score to 0 |
+   | Penalty: **pure news, not intelligence** — a sentencing / arrest / indictment / guilty plea / lawsuit, a policy or regulation announcement, a funding round / acquisition, a product launch, an "N years on" retrospective, a data-point with no threat behind it | **cap the item at 12** |
+   | Penalty: **no live threat to defend against** — the reader cannot patch, hunt, block, or brief anyone as a result | **cap the item at 18** |
 
    Cap at 100. Record a short `score_breakdown`.
+
+   A court case about a crime committed months ago is not actionable
+   intelligence. A defender pays to know what is *actively* threatening their
+   attack surface — vulnerabilities, exploitation, actors, TTPs, campaigns,
+   breaches with follow-on risk. If an item is only "interesting", it scores
+   low and is tagged `category: news`; it earns a real write-up only when a
+   defender would change a control, a training message, or a watchlist because
+   of it — and then `subscriber_text` says exactly that, framed around the
+   attacker behaviour, not the news event.
 
 4. **Select candidates for the free social feed — emergencies only.**
 
@@ -228,7 +239,9 @@ attached a heuristic `pre_score`. Your job is judgement, not scraping.
       "cve_ids": ["..."],
       "score": <int 0-100>,
       "confidence": "high" | "medium" | "low",
-      "action": "<one imperative line: the single thing to do now>",
+      "category": "exploitation" | "vulnerability" | "breach" | "malware" | "campaign" | "ttp" | "advisory" | "supply-chain" | "fraud-trend" | "exec-protection" | "awareness" | "news",
+      "exposure": "<one line: what a subscriber checks to know if THEY are affected — a version, a port, a config key, a product. Or 'no direct technical exposure' plus why it still matters. Or 'none' for pure news.>",
+      "action": "<one imperative line: the single thing to do now — or 'Awareness only — no action' when there is nothing to do>",
       "subscriber_text": "<the paid write-up, with real newlines — see below>"
     }
   ],
@@ -258,16 +271,24 @@ with the analysis they can act on — not a shortlist. Volume here is a feature,
 not clutter, because every subscriber filters it down with their own score
 threshold and vendor list. Your job is to make sure nothing real is missing.
 
-   - Include **every** story with a genuine security angle — a vulnerability,
-     active exploitation, a breach, a malware or campaign report, a notable
-     advisory, a new PoC, a threat-actor TTP writeup, a significant patch.
-     Use `subscriber_min_score` from `candidates.json` (default 10) only to
-     drop pure noise: vendor marketing, opinion pieces, conference fluff,
-     recycled year-old news with nothing new. **When in doubt, include it.**
-   - Aim to turn **most of the candidate list** into alerts. On a normal day
-     that is 15-30 entries; a busy day is 30-40. Producing only a handful when
-     the candidate list is long means a subscriber is paying for a feed that
-     is nearly empty — that is the failure mode to avoid.
+   - Include every story that is genuinely **actionable threat intelligence** —
+     a vulnerability, active exploitation, a breach with follow-on risk, a
+     malware or campaign report, a notable advisory, a new PoC, a threat-actor
+     TTP writeup, a significant patch. For each, the reader can do something:
+     patch, hunt, block, tighten a control, or brief their people.
+   - **Drop, do not soft-include:** vendor marketing, opinion, conference
+     fluff, recycled year-old news, product announcements, and pure-news items
+     (sentencings, arrests, funding, policy) *unless* they carry a real trend
+     or awareness signal — and then tag them `category: news` or `fraud-trend`
+     / `exec-protection` / `awareness`, score them honestly (usually 12-25),
+     and make `subscriber_text` about what defenders should DO, not the event.
+   - Use `subscriber_min_score` from `candidates.json` as a hard floor: nothing
+     below it becomes an alert. When in doubt whether an item is *actionable*,
+     it is `category: news` and scores low — not "include it anyway".
+   - A normal day is **8-20 solid alerts**; a busy day 20-35. If the candidate
+     list is long but thin, a short, sharp feed of real threats beats a long
+     one padded with news — the subscriber pays for signal, not volume. Note
+     in `reason` when you dropped a lot of low-signal items.
    - Write-up length scales with impact, and the whole `alerts` array must fit
      one response without truncating the JSON:
        * the ~8 you verified: the full 120-220 word brief.
@@ -285,6 +306,9 @@ threshold and vendor list. Your job is to make sure nothing real is missing.
          fixed version. Name them; this is the part a defender needs most.
        * **Are you exposed** — how to check quickly: the version command, the
          port, the config key, the log line. Concrete, not "review your estate".
+         If there is no direct technical exposure (a trend, an awareness item),
+         say so plainly and state who in the org this is actually for
+         (execs, help-desk, security-awareness owner) and why.
        * **Do this now** — patch/mitigation, and the workaround if no patch.
        * **How you'd spot it** — a log source, artefact, IOC or query. Say
          "no public detection guidance yet" rather than inventing one.

@@ -114,6 +114,12 @@ CREATE TABLE IF NOT EXISTS posts_log (
   -- post reworded.
   subscriber_text TEXT,
   action     TEXT,
+  -- how a defender acts on it: an actionable category + the exposure line
+  -- gate whether it belongs in the digest EMAIL (the fatigue vector) vs
+  -- only the private RSS feed.
+  category   TEXT,
+  exposure   TEXT,
+  confidence TEXT,
   seen_at    TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_posts_seen ON posts_log(seen_at);

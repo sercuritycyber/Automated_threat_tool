@@ -109,6 +109,7 @@ CONFIG = """
       "max_channels": 7
     }
   },
+  "digest_min_score": 30,
   "discord_channel_min_score": 0
 }
 """

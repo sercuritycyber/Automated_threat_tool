@@ -24,6 +24,11 @@ const DEFAULTS = {
   retention_days_cancelled: 180,
   retention_days_unconfirmed: 7,
   digest_window_hours: 24,
+  // The digest EMAIL only carries score >= this OR an actionable category
+  // (exploitation / breach / campaign / supply-chain / fraud-trend /
+  // exec-protection). Low-signal items (news, minor advisories) still land
+  // in the private RSS feed above the tier floor — just not the inbox.
+  digest_min_score: 30,
   // The private RSS feed carries everything above a subscriber's floor; the
   // daily digest email is the top slice of that, so it stays readable on a
   // heavy day. Raise if subscribers want the whole list in the email too.

@@ -38,8 +38,8 @@ ROOT = Path(__file__).resolve().parent.parent
 
 # Sent for every alert. `subscriber_text` is the paid write-up; `post_text` is
 # the social hook and is only a fallback body.
-FIELDS = ("title", "url", "source", "score", "cve_ids",
-          "subscriber_text", "action", "post_text", "short_text")
+FIELDS = ("title", "url", "source", "score", "cve_ids", "category", "exposure",
+          "confidence", "subscriber_text", "action", "post_text", "short_text")
 
 
 def _clean(item: dict) -> dict:
