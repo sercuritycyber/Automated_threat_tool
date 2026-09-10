@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Blue Team Podcast — CTI harvest + publish orchestrator.
+# SecurityCyber — CTI harvest + publish orchestrator.
 # Stages: ingest (python) -> analyst -> publish (python).
 set -euo pipefail
 

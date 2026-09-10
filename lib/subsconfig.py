@@ -16,7 +16,7 @@ SETTINGS = ROOT / "config" / "settings.yaml"
 DEFAULTS: dict = {
     "enabled": False,
     "live": False,
-    "brand_name": "Blue Team Podcast",
+    "brand_name": "SecurityCyber",
     "site_url": "http://localhost:8080",
     "public_bind": "127.0.0.1:8080",
     "from_email": "",

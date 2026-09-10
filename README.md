@@ -1,4 +1,4 @@
-# Blue Team Podcast — Automated CTI → Social
+# SecurityCyber — Automated CTI → Social
 
 Unattended cyber-threat-intelligence pipeline. Every few hours it pulls the major
 security feeds, cross-references the CISA KEV catalog, uses **Claude Code**

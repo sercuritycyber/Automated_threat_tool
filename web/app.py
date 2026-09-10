@@ -986,17 +986,50 @@ def review_reject_all():
     return RedirectResponse("/review?m=Queue+cleared", 303)
 
 
-REWRITE_PROMPT = """You are the social editor for Blue Team Podcast (securitycyber.uk).
-Rewrite the security post below to a professional standard. Keep every fact,
-CVE id, version number and the source link exactly as given — do not add facts.
+REWRITE_PROMPT = """You are the social editor for SecurityCyber (securitycyber.uk),
+an independent UK blue-team advisory. Rewrite the security post below to a
+professional standard. Keep every fact, CVE id and version number exactly as
+given - do not add facts.
 
-Rules:
-- First line: one sentence, <= 200 chars, leads with the stake for the reader.
-- Then 3 bullets, each ONE line <= 180 chars: "• Vulnerability:", "• Affected:", "• Do now:".
-- Blank line between every block.
-- Every sentence <= 25 words, active voice, British spelling. At most one em-dash per sentence.
-- 1-2 short sentences of attributed context, then the URL on its own line,
-  then exactly 3-4 real hashtags including #BlueTeam and #CyberSecurity (no hype tags).
+Structure (blank line between every block):
+
+   <hook: ONE sentence, HARD LIMIT 140 chars, active voice, second person. Lead
+   with what goes wrong if the reader does nothing. Never open with the patch
+   ("Critical flaws have been patched" is banned) and never with a vendor name.>
+
+   <one sentence of why it lands on the reader's desk today>
+
+   The quick breakdown:
+
+   . What: <flaw class or activity, with CVE/CVSS if there is one>
+   . Impact: <what the attacker actually gets>
+   . Affected: <exact versions, and the fixed version>
+   . Do this: <the patch, plus the stop-gap if patching is slow>
+
+   What to look for: <1-2 plain-English lines. NOT a detection query, NOT IOCs.>
+
+   <GAP LINE: one factual line naming what the subscriber brief on this story
+   carries that this post does not - the detection rule, the IOC set, the
+   runbook, the lead time. Never promise something the brief does not contain.>
+
+   <PLUG: one plain line ending with the bare domain cti.securitycyber.uk>
+
+   #CyberSecurity #ThreatIntel <+1 topical>
+
+Hard rules:
+- NO "https://" URL anywhere in the body. A link in the body gets the post's
+  reach suppressed. The bare domain cti.securitycyber.uk is the only route -
+  it is not auto-linked, so it costs nothing.
+- Never write "link in the comments": our token cannot create one.
+- EXACTLY 3 hashtags, all on the last line, each a complete real tag.
+  #CyberSecurity and #ThreatIntel always, plus one topical (#BlueTeam,
+  #VulnerabilityManagement, #SysAdmin, #MSP, #ICS). Three reach further than five.
+- Each bullet is one idea under 160 chars. Every sentence under 25 words.
+  Active voice, British spelling, second person. No emoji, no markdown.
+- Banned: "in today's threat landscape", "attackers are increasingly", "threat
+  actors are increasingly", "now more than ever", "less than a coffee",
+  "enterprise-grade", "peace of mind", "Thoughts?", "Agree?", and any
+  like/share/comment ask.
 - 600-1600 characters total.
 
 Output ONLY the rewritten post text, nothing else.
@@ -1018,10 +1051,14 @@ def _rewrite_text(cur: str) -> str:
         new = proc.stdout.strip()
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return ""
-    return new if len(new) >= 200 and "http" in new else ""
+    # The new format carries no "https://" by design, so the old
+    # `"http" in new` guard would reject every good rewrite. Accept on
+    # length plus either the route domain or the breakdown block.
+    ok = len(new) >= 200 and ("securitycyber.uk" in new or "breakdown" in new.lower())
+    return new if ok else ""
 
 
-DRAFT_ONE_PROMPT = """You are the CTI analyst and social editor for Blue Team Podcast (securitycyber.uk).
+DRAFT_ONE_PROMPT = """You are the CTI analyst and social editor for SecurityCyber (securitycyber.uk).
 The operator has hand-picked ONE story to publish now. Verify it, then draft the post.
 
 STORY
@@ -1043,34 +1080,57 @@ STEPS
    or critical infrastructure, +15 supply-chain / MSP / identity blast radius,
    +10 public PoC or named ransomware use, +5 clear patch exists. Penalties: -40
    vendor marketing or roundup, -20 unconfirmed. Cap at 100.
-3. Draft the LinkedIn post. Plain text, 600-1600 chars, blank line between every block:
+3. Pick a lane: "breaking" (live emergency - CVSS 9+ with confirmed
+   exploitation, KEV, or a vendor patch-now advisory), "intel" (a real
+   vulnerability, campaign, breach or TTP a defender can act on - the usual
+   case), or "trend" (one pattern across several stories, not one story).
 
-      <hook: one sentence, <=200 chars, leads with the reader's stake>
+4. Draft the LinkedIn post. Plain text, 600-1600 chars, blank line between
+   every block:
 
-      • Vulnerability: <CVE> (CVSS <n>) - <what it is, <=15 words>
-      • Affected: <products + version ranges>; <exposure condition>
-      • Do now: <the one patch/mitigation action + exact versions>
+      <hook: ONE sentence, HARD LIMIT 140 chars, active voice, second person.
+      Lead with what goes wrong if the reader does nothing. Never open with the
+      patch, never with a vendor name, never with meta-commentary.>
 
-      <1-2 short attributed sentences: who is exploiting it per which source, what a defender hunts for>
+      <one sentence of why it lands on the reader's desk today>
 
-      <source url on its own line>
+      The quick breakdown:
 
-      #BlueTeam #CyberSecurity #ThreatIntel <+1 optional real tag>
+      . What: <flaw class, with CVE and CVSS if there is one>
+      . Impact: <what the attacker actually gets>
+      . Affected: <products + version ranges, and the fixed version>
+      . Do this: <the one patch/mitigation action, plus the stop-gap>
 
-   Every sentence <=25 words, active voice, British spelling. Exactly 3-4 real
-   community hashtags (#BlueTeam and #CyberSecurity always; never hype tags like
-   #PatchNow). At most one em-dash per sentence. No emoji, no markdown. Facts ONLY
-   from the source - never invent a CVE, CVSS, version, IOC or attribution.
-   Attribute exploitation and PoC claims ("Huntress reports...", "CISA added...").
-   Banned openers: "In today's threat landscape", "Threat actors are increasingly",
-   "Now more than ever", rhetorical questions, "Thoughts?", any ask to like/share/comment.
+      What to look for: <1-2 plain-English lines a defender can act on. NOT a
+      detection query, NOT an IOC list - those stay paid-only.>
+
+      <GAP LINE: one factual line naming what the subscriber brief on this
+      story carries that this post does not. Be specific and true.>
+
+      <PLUG: one plain line ending with the bare domain cti.securitycyber.uk>
+
+      #CyberSecurity #ThreatIntel <+1 topical>
+
+   NO "https://" URL anywhere in the body - it suppresses the post's reach. The
+   bare domain cti.securitycyber.uk is the route, and it is not auto-linked.
+   Never write "link in the comments": our token cannot create one.
+   EXACTLY 3 complete hashtags on the last line (#CyberSecurity and
+   #ThreatIntel always, plus one topical). Three reach further than five.
+   Every sentence <=25 words, active voice, British spelling, second person.
+   At most one em-dash per sentence. No emoji, no markdown. Facts ONLY from the
+   source - never invent a CVE, CVSS, version, IOC or attribution. Attribute
+   exploitation and PoC claims ("Huntress reports...", "CISA added...").
+   Banned: "In today's threat landscape", "attackers are increasingly", "threat
+   actors are increasingly", "Now more than ever", "Thoughts?", "Agree?", and
+   any ask to like/share/comment.
 
    Also write a `short_text`: one or two sentences, <= 260 characters, ending
-   with the source URL — this goes to X / Bluesky.
+   with https://cti.securitycyber.uk - this goes to X / Bluesky, which do not
+   penalise links.
 
 OUTPUT
 Print ONLY this JSON on one line - no code fence, no commentary:
-{"title":"...","url":"...","source":"...","published":"...","cve_ids":["..."],"score":<int>,"score_breakdown":["+40 ...","..."],"confidence":"high|medium|low","post_text":"<full post, real \\n newlines>","short_text":"<= 260 chars, ends with the URL"}
+{"title":"...","url":"...","source":"...","published":"...","cve_ids":["..."],"score":<int>,"score_breakdown":["+40 ...","..."],"confidence":"high|medium|low","lane":"breaking|intel|trend","post_text":"<full post, real \\n newlines, NO https:// in it>","short_text":"<= 260 chars, ends with https://cti.securitycyber.uk"}
 """
 
 
