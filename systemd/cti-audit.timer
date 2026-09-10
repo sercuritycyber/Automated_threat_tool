@@ -1,0 +1,16 @@
+[Unit]
+Description=SecurityCyber CTI post-run audit — after each in-window harvest
+
+[Timer]
+# ~40min after the 08:00 / 12:00 / 17:00 harvests, so the run has finished and
+# any queue release has settled. Writes reports/post-run-audit-<date>.md and
+# pings the operator on any FAIL.
+OnCalendar=*-*-* 08:40:00
+OnCalendar=*-*-* 12:40:00
+OnCalendar=*-*-* 17:40:00
+Persistent=true
+RandomizedDelaySec=120
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

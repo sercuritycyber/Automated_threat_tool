@@ -1,0 +1,12 @@
+[Unit]
+Description=SecurityCyber CTI emergency sweep — every 20 minutes
+
+[Timer]
+# A KEV-listed RCE that breaks at 09:30 must not wait for the 12:00 harvest.
+OnCalendar=*:0/20
+Persistent=false
+RandomizedDelaySec=120
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

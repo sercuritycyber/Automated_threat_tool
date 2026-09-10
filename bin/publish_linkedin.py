@@ -10,6 +10,12 @@ Deliberately dumb: it executes what the analyst (or the operator) decided.
   * DRY-RUN simulations go to state/dry_runs.jsonl, never history.jsonl
   * real posts append history.jsonl + seen.jsonl and clear the review queue
 
+Emergencies: a verified `breaking` post (see is_emergency) publishes
+immediately and unconditionally — no lead time, no posting window, no spacing,
+no daily cap, no runaway guard, no review-mode hold, and style errors are
+downgraded to warnings. An actively exploited critical is worth more to the
+public as a warning than to us as a subscriber exclusive.
+
 Multi-post: the analyst may hand us several stories in `posts: [...]`. Each is
 scored independently. Non-severe extras past the daily cap are held for review;
 stories at/above publish.severity_override_score post regardless of the cap, so
@@ -87,6 +93,29 @@ def lane_of(p: dict) -> str:
     return lane if lane in LANES else "intel"
 
 
+def is_emergency(p: dict, pub: dict) -> bool:
+    """Is this a live emergency that must go out now, regardless of policy?
+
+    A KEV-listed, actively-exploited critical has more public value as a warning
+    than it has commercial value as a subscriber exclusive, so once it is
+    verified nothing procedural is allowed to hold it — no daily cap, no runaway
+    guard, no review mode, no style nit, no posting window, no lead time.
+
+    "Verified" is not the model's say-so alone. Every post reaching this point
+    has already passed decision_validation.sanitize_decision(), which drops any
+    post whose URL was not in this run's candidate set or whose body does not
+    reference its own source. On top of that we require the analyst not to be
+    hedging: confidence `low` means it could not confirm the facts, and an
+    unconfirmed emergency is a rumour, so it takes the normal path.
+    """
+    score = int(p.get("score", 0) or 0)
+    if lane_of(p) == "breaking":
+        return str(p.get("confidence", "")).strip().lower() != "low"
+    # A non-breaking story can still be an emergency if it scored high enough
+    # that the rubric can only have got there via confirmed exploitation.
+    return score >= int(pub.get("emergency_score", 90))
+
+
 def substitute_tokens(text: str, decision: dict) -> str:
     """Fill publish-time tokens the analyst is instructed to use.
 
@@ -159,7 +188,7 @@ def schedule_social(posts: list[dict], decision: dict, settings: dict,
         post_after = (now + timedelta(hours=delay_h)).isoformat()
         for p in posts:
             score = int(p.get("score", 0) or 0)
-            if delay_h <= 0 or lane_of(p) == "breaking" or score >= bypass:
+            if delay_h <= 0 or is_emergency(p, pub) or score >= bypass:
                 immediate.append(p)
                 continue
             if (p.get("url"), p.get("title")) in known:
@@ -222,13 +251,14 @@ def pace_posts(to_post: list[dict], settings: dict, operator: bool) -> list[dict
     pub = settings.get("publish", {})
     gap = int(pub.get("min_post_gap_minutes", 0) or 0)
     wins = _windows(settings)
+    # An emergency ignores the windows entirely — see is_emergency().
     if operator or not to_post:
         return to_post
 
     now_utc = datetime.now(timezone.utc)
     now_local = now_utc.astimezone(LONDON)
-    urgent = [p for p in to_post if lane_of(p) == "breaking"]
-    rest = [p for p in to_post if lane_of(p) != "breaking"]
+    urgent = [p for p in to_post if is_emergency(p, pub)]
+    rest = [p for p in to_post if not is_emergency(p, pub)]
 
     keep = list(urgent)
     defer: list[dict] = []
@@ -509,6 +539,7 @@ def main() -> int:
             log(f"skip “{title[:50]}” — {len(text)} chars > {limit}")
             continue
         lane = lane_of(p)
+        emergency = is_emergency(p, pub)
         # Per-lane floor. A single global min_score (60) silently muted the intel
         # and trend lanes, which is why the public feed was one post a day.
         floor = int(lane_floor.get(lane, min_score))
@@ -519,16 +550,22 @@ def main() -> int:
         ql = lint_text(text, p.get("cve_ids") or [], lane)
         if ql.get("warnings"):
             log(f"“{title[:40]}” quality nits: " + " | ".join(ql["warnings"][:4]))
-        if ql.get("errors") and not operator:
+        if ql.get("errors") and not operator and not emergency:
             log(f"hold “{title[:40]}” — quality: " + " | ".join(ql["errors"][:4]))
             held.append({**p, "held_because": "quality", "min_score": min_score, "lint": ql})
             continue
+        if ql.get("errors") and emergency:
+            # Shipping an awkwardly-worded warning about an actively exploited
+            # critical beats shipping a polished one tomorrow. Log loudly so the
+            # nits still get seen, then publish.
+            log(f"EMERGENCY “{title[:40]}” — publishing despite {len(ql['errors'])} "
+                f"style error(s): " + " | ".join(ql["errors"][:4]))
 
-        severe = score >= sev
+        severe = score >= sev or emergency
         if not operator and not severe and (used + would_post) >= max_day:
             held.append({**p, "held_because": "cap", "min_score": min_score})
             continue
-        if not operator and would_post >= runaway:
+        if not operator and not emergency and would_post >= runaway:
             log(f"runaway guard ({runaway}/run) — holding the rest for review")
             held.append({**p, "held_because": "runaway", "min_score": min_score})
             continue
@@ -543,8 +580,15 @@ def main() -> int:
 
     # ---- review mode: hold everything for a human -----------------------------
     if mode == "review" and not operator and to_post:
-        held = to_post + held
-        to_post = []
+        # Review mode holds everything for a human — except a verified
+        # emergency, which is the one case where waiting for a human is the
+        # more dangerous option.
+        urgent_now = [q for q in to_post if is_emergency(q, pub)]
+        held = [q for q in to_post if not is_emergency(q, pub)] + held
+        to_post = urgent_now
+        if urgent_now:
+            log(f"review mode: {len(urgent_now)} verified emergency post(s) "
+                f"going out anyway")
         for h in held:
             h.setdefault("held_because", "review")
             h.setdefault("min_score", min_score)
@@ -608,6 +652,17 @@ def main() -> int:
             posted_rows.append(record_real(p, results))
         else:
             failures.append(f"{p.get('title','')[:40]}: " + "; ".join(r["error"] for r in results)[:200])
+
+    urgent_titles = [r["title"] for r in posted_rows
+                     if str(r.get("lane", "")).lower() == "breaking"]
+    if urgent_titles:
+        try:
+            import subprocess
+            subprocess.run(["python3", str(ROOT / "bin" / "notify.py"),
+                            f"CTI EMERGENCY published: {urgent_titles[0][:120]}",
+                            "high"], timeout=20, check=False)
+        except Exception:  # noqa: BLE001 — never let a ping sink a good post
+            pass
 
     if posted_rows:
         reconcile_queue({r["title"] for r in posted_rows},

@@ -43,7 +43,7 @@ chk("lane breaking", P.lane_of({"lane": " Breaking "}), "breaking")
 # ---- schedule_social: emergency bypasses the lead time -----------------
 P.SOCIAL_QUEUE.unlink(missing_ok=True)
 out = P.schedule_social(
-    [{"title": "brk", "url": "u1", "lane": "breaking", "score": 70},
+    [{"title": "brk", "url": "u1", "lane": "breaking", "confidence": "high", "score": 70},
      {"title": "hi", "url": "u2", "lane": "intel", "score": 90},
      {"title": "norm", "url": "u3", "lane": "intel", "score": 50}],
     DEC, S, operator=False)
@@ -91,31 +91,37 @@ chk("malformed window ignored",
     [((7, 0), (9, 30))])
 
 # ---- pace_posts -------------------------------------------------------
+# pace_posts branches on whether *now* is inside a posting window, so these
+# assertions must not depend on the clock. ALWAYS_OPEN keeps the in-window
+# branch under test; the out-of-window branch is covered in test_emergency.py.
+ALWAYS_OPEN = {"publish": dict(S["publish"], post_windows=["00:00-23:59"])}
 P.SOCIAL_QUEUE.unlink(missing_ok=True)
 three = [{"title": "a", "lane": "intel", "score": 70},
          {"title": "b", "lane": "intel", "score": 60},
          {"title": "c", "lane": "trend", "score": 40}]
-kept = P.pace_posts([dict(x) for x in three], S, operator=False)
+kept = P.pace_posts([dict(x) for x in three], ALWAYS_OPEN, operator=False)
 parked = json.loads(P.SOCIAL_QUEUE.read_text())["queue"] if P.SOCIAL_QUEUE.exists() else []
 chk("only one post goes out per run", len(kept), 1)
 chk("the other two are parked", sorted(x["title"] for x in parked), ["b", "c"])
 chk("parked items carry post_after", all(x.get("post_after") for x in parked), True)
 
 P.SOCIAL_QUEUE.unlink(missing_ok=True)
-kept = P.pace_posts([{"title": "brk", "lane": "breaking", "score": 95},
-                     {"title": "a", "lane": "intel", "score": 70}], S, operator=False)
+kept = P.pace_posts([{"title": "brk", "lane": "breaking", "confidence": "high", "score": 95},
+                     {"title": "a", "lane": "intel", "score": 70}],
+                    ALWAYS_OPEN, operator=False)
 chk("breaking always goes, intel parked alongside it",
     sorted(x["title"] for x in kept), ["brk"])
 
 P.SOCIAL_QUEUE.unlink(missing_ok=True)
 kept = P.pace_posts([{"title": "op1", "lane": "intel", "score": 70},
-                     {"title": "op2", "lane": "intel", "score": 60}], S, operator=True)
+                     {"title": "op2", "lane": "intel", "score": 60}],
+                    ALWAYS_OPEN, operator=True)
 chk("operator not paced", len(kept), 2)
 
 P.SOCIAL_QUEUE.unlink(missing_ok=True)
 kept = P.pace_posts([{"title": "q1", "lane": "intel", "score": 70, "from_queue": True},
                      {"title": "q2", "lane": "intel", "score": 60, "from_queue": True}],
-                    S, operator=False)
+                    ALWAYS_OPEN, operator=False)
 chk("one non-breaking post per run, even from the queue", len(kept), 1)
 chk("the queue-released item is preferred", kept[0]["title"], "q1")
 reparked = json.loads(P.SOCIAL_QUEUE.read_text())["queue"]
@@ -123,9 +129,9 @@ chk("the surplus is re-parked, not dropped", [x["title"] for x in reparked], ["q
 
 # a run carrying a breaking post posts nothing else alongside it
 P.SOCIAL_QUEUE.unlink(missing_ok=True)
-kept = P.pace_posts([{"title": "brk", "lane": "breaking", "score": 95},
+kept = P.pace_posts([{"title": "brk", "lane": "breaking", "confidence": "high", "score": 95},
                      {"title": "i1", "lane": "intel", "score": 70, "from_queue": True}],
-                    S, operator=False)
+                    ALWAYS_OPEN, operator=False)
 chk("breaking post stands alone", [x["title"] for x in kept], ["brk"])
 chk("its companion is parked",
     [x["title"] for x in json.loads(P.SOCIAL_QUEUE.read_text())["queue"]], ["i1"])
