@@ -120,8 +120,15 @@ attached a heuristic `pre_score`. Your job is judgement, not scraping.
    of the analysis is what sells the subscription, never a pitch. It must read
    like a senior analyst briefing a peer in five minutes.
 
-   **No URL anywhere in `post_text`.** A link in the body throttles reach on
-   LinkedIn. Every link goes in the `comment` field, posted as the first comment.
+   **No `https://` URL anywhere in `post_text`.** A full link in the body gets
+   the post's reach suppressed. Instead the plug line names the domain WITHOUT
+   a scheme — `cti.securitycyber.uk` — which LinkedIn does not auto-link, so the
+   post keeps its distribution and the reader still has a route. The full
+   clickable URL goes in the `comment` field.
+
+   (Our organization token currently cannot create the first comment — the API
+   returns 403 — so the in-body domain is the only route that actually works.
+   Never write "link in the comments"; it would be a promise we cannot keep.)
 
    ### The hook (line 1) decides whether anything else gets read
 
@@ -212,13 +219,14 @@ attached a heuristic `pre_score`. Your job is judgement, not scraping.
    ### The plug line
 
    One plain line, near the end, before the hashtags. Vary it; never stack two.
-   Use `{alerts_today}` (substituted at publish time) when quoting volume:
-   - "We wrote {alerts_today} briefs like this for subscribers today — the
-     signal, without the bloat."
-   - "This is one of {alerts_today} items our subscribers got today, filtered
-     to what actually needs action."
-   - "Full briefs land in a private feed, an inbox or a Discord channel — link
-     in the comments."
+   Use `{alerts_today}` (substituted at publish time) when quoting volume, and
+   **end the plug line with the bare domain `cti.securitycyber.uk`**:
+   - "We wrote {alerts_today} briefs like this for defenders today — the signal,
+     without the bloat: cti.securitycyber.uk"
+   - "This is one of {alerts_today} items our subscribers got today, filtered to
+     what actually needs action: cti.securitycyber.uk"
+   - "Full briefs land in a private feed, an inbox or a Discord channel:
+     cti.securitycyber.uk"
 
    **Hard rules**
    - Plain text. No markdown headings or bold. No emoji anywhere.
@@ -238,7 +246,8 @@ attached a heuristic `pre_score`. Your job is judgement, not scraping.
      increasingly", "game-changer", "Thoughts?", "Agree?", and any
      like/share/comment ask. The gap line and the plug line are the only
      commercial content, and both stay factual.
-   - No URL anywhere in `post_text`.
+   - No `https://` URL in `post_text` — the bare domain
+     `cti.securitycyber.uk` on the plug line instead.
 
    **Write a `comment`** for each post — posted as the first comment, where the
    links belong:
@@ -260,8 +269,10 @@ attached a heuristic `pre_score`. Your job is judgement, not scraping.
    2. Is every `•` line one idea under 160 chars?
    3. Is every fact (CVE, CVSS, version, hotfix, exploiter) traceable to
       something you actually read this run? Delete any you are guessing.
-   4. Any raw URL in `post_text`? Move it to `comment`. Any full detection query
-      or IOC list? That is paid-only — keep the plain-English hunt hint.
+   4. Any `https://` URL in `post_text`? Move it to `comment` and leave the
+      bare domain on the plug line. Does the plug line actually end with
+      `cti.securitycyber.uk`? Any full detection query or IOC list? That is
+      paid-only — keep the plain-English hunt hint.
    5. Is the gap line true of this story's `alerts` entry? If not, rewrite it.
    6. Exactly 3 complete hashtags on the last line? Any sales cliché? Cut it.
    7. In range for the lane, and is `comment` filled?
@@ -285,7 +296,7 @@ attached a heuristic `pre_score`. Your job is judgement, not scraping.
    >
    > Subscribers had this at 08:12, with the full affected-build list and a detection rule for the child-process chain.
    >
-   > We wrote {alerts_today} briefs like this for defenders today — the signal, without the bloat.
+   > We wrote {alerts_today} briefs like this for defenders today — the signal, without the bloat: cti.securitycyber.uk
    >
    > #CyberSecurity #ThreatIntel #VulnerabilityManagement
 

@@ -125,35 +125,53 @@ def _li_refresh(creds: dict, log):
 
 _TAG_RE = re.compile(r"#\w+")
 LI_MAX_TAGS = 3
+# Scheme-less on purpose. LinkedIn suppresses reach on posts carrying a
+# detectable outbound link; a bare domain is not auto-linked, so the post keeps
+# its distribution and the reader still gets the route. The full clickable URL
+# goes in the first comment when the token is ever allowed to post one.
+LI_LINK_HINT = "cti.securitycyber.uk"
+# Copy that promises a first comment we cannot currently create.
+_COMMENT_PROMISE = re.compile(
+    r"[(\u2014-]*\s*\b(?:link|links|full write-up|source)\b[^\n.]{0,40}"
+    r"in the comments\.?\s*\)?", re.I)
 
 
-def _li_shape(text: str) -> str:
+def _li_shape(text: str, link_hint: str = LI_LINK_HINT) -> str:
     """Last-mile deterministic shaping, so a model slip cannot cost us reach.
 
+    * strips copy promising a first comment (the API 403s on this token, so the
+      promise would be a lie and the post a dead end)
+    * guarantees the body names `link_hint`, so there is always a route to the
+      site even with no comment
     * trims hashtags past LI_MAX_TAGS (3 reaches further than 5; more is
       down-ranked as tag-stuffing)
-    * collapses runs of blank lines to a single blank line
-    Content is never rewritten — only over-tagging and whitespace are fixed.
+    * collapses runs of blank lines
+    Wording is otherwise never rewritten.
     """
-    t = (text or "").rstrip()
-    tags = _TAG_RE.findall(t)
-    if len(tags) > LI_MAX_TAGS:
-        keep, seen = [], set()
-        for tag in tags:
-            low = tag.lower()
-            if low not in seen:
-                seen.add(low)
-                keep.append(tag)
-        keep = keep[:LI_MAX_TAGS]
-        lines = t.splitlines()
-        # rebuild only the trailing hashtag lines; body text is untouched
-        while lines and (not lines[-1].strip() or _is_tag_line(lines[-1])):
-            if not lines[-1].strip():
-                lines.pop()
-                continue
-            lines.pop()
-        t = "\n".join(lines).rstrip() + "\n\n" + " ".join(keep)
-    return re.sub(r"\n{3,}", "\n\n", t)
+    t = _COMMENT_PROMISE.sub("", (text or "").rstrip()).rstrip()
+
+    # peel the trailing hashtag block off, if there is one
+    lines = t.splitlines()
+    tail: list[str] = []
+    while lines and (not lines[-1].strip() or _is_tag_line(lines[-1])):
+        ln = lines.pop()
+        if ln.strip():
+            tail.insert(0, ln)
+    body = "\n".join(lines).rstrip()
+
+    keep: list[str] = []
+    seen: set[str] = set()
+    for tag in _TAG_RE.findall(" ".join(tail)):
+        if tag.lower() not in seen:
+            seen.add(tag.lower())
+            keep.append(tag)
+    keep = keep[:LI_MAX_TAGS]
+
+    if link_hint and link_hint.lower() not in body.lower():
+        body = body.rstrip() + f"\n\n\u2192 {link_hint}"
+
+    out = body if not keep else body.rstrip() + "\n\n" + " ".join(keep)
+    return re.sub(r"\n{3,}", "\n\n", out).strip()
 
 
 def _is_tag_line(line: str) -> bool:
@@ -175,7 +193,13 @@ def _li_comment(token: str, author: str, share_urn: str, text: str, version: str
         }, json={"actor": author, "object": share_urn, "message": {"text": text[:1200]}}, timeout=20)
         if r.status_code in (200, 201):
             return True
-        log(f"linkedin: first comment failed HTTP {r.status_code}: {r.text[:200]}")
+        if r.status_code == 403:
+            log("linkedin: first comment DENIED (403) — the org token lacks the "
+                "socialActions permission. The post still carries the domain in "
+                "its body, so the route is intact; grant Community Management "
+                "comment access to get a clickable link.")
+        else:
+            log(f"linkedin: first comment failed HTTP {r.status_code}: {r.text[:200]}")
     except requests.RequestException as e:
         log(f"linkedin: first comment error ({e})")
     return False

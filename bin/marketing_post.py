@@ -51,18 +51,17 @@ def _in_window(now: datetime) -> bool:
     return any((a, b) <= hm <= (c, d) for a, b, c, d in WINDOWS)
 
 
-def _strip_urls(text: str) -> str:
-    """LinkedIn body copy carries no links — they go in the first comment.
+def _delink(text: str) -> str:
+    """De-hyperlink for LinkedIn: drop the scheme, keep the domain.
 
-    A line like "Free for 7 days, no card: <url>" would be left as a dangling
-    "…no card:", so a trailing colon becomes the call-to-action instead.
+    A full `https://…` URL in the body gets the post's reach suppressed, but
+    stripping the link outright leaves the post with no route to the site at all
+    (our token cannot post the first comment — it 403s). `securitycyber.uk/cti`
+    is not auto-linked, so the post keeps its distribution and the reader can
+    still act on it.
     """
-    out = []
-    for ln in text.splitlines():
-        stripped = URL_RE.sub("", ln).rstrip()
-        if stripped.endswith(":") and stripped != ln:
-            stripped = stripped[:-1].rstrip() + " \u2014 link in the comments."
-        out.append(stripped)
+    out = [URL_RE.sub(lambda m: re.sub(r"^https?://(?:www\.)?", "", m.group(0)), ln)
+           for ln in text.splitlines()]
     while out and not out[-1].strip():
         out.pop()
     return re.sub(r"\n{3,}", "\n\n", "\n".join(out)).strip()
@@ -88,7 +87,10 @@ def intel_lure(limit: int = 3) -> tuple[str, str] | None:
         + "\n".join(lines)
         + f"\n\nPlus {rest} more, each with the affected versions, how to check "
           "whether you are exposed, and the one action to take.\n\n"
-          "Seven days free, no card \u2014 link in the comments.",
+          # Bare domain, no scheme: LinkedIn does not auto-link it, so the post
+          # keeps its reach and the reader still has a route (our token cannot
+          # post the first comment - it 403s).
+          "Seven days free, no card: cti.securitycyber.uk",
         f"Start the free trial: {SITE}",
     )
 
@@ -188,7 +190,7 @@ def main() -> int:
 
     # LinkedIn gets no link in the body (it throttles reach) — the URL goes in
     # the first comment. Every other network keeps it inline.
-    body_li = _strip_urls(text).rstrip() + "\n\n" + HASHTAGS
+    body_li = _delink(text).rstrip() + "\n\n" + HASHTAGS
     body = text.rstrip() + "\n\n" + HASHTAGS
     short = (text.split("\n", 1)[0].strip()[:230] + " " + bank.get("url", SITE)).strip()
 
