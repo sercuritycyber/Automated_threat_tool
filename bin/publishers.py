@@ -181,23 +181,31 @@ def _is_tag_line(line: str) -> bool:
 
 def _li_comment(token: str, author: str, share_urn: str, text: str, version: str, log) -> bool:
     """Post `text` as the first comment on a share. Non-fatal: the main post has
-    already succeeded, so a comment failure is logged, not raised."""
+    already succeeded, so a comment failure is logged, not raised.
+
+    Uses the legacy unversioned `/v2/socialActions` surface, not `/rest/`: our
+    token only carries the older `w_organization_social` / `w_member_social`
+    scopes, not the newer `w_organization_social_feed` that `/rest/socialActions`
+    requires for writes (confirmed live — `/rest/` 403s ACCESS_DENIED with this
+    token, `/v2/` accepts the identical payload with 201). `version` is unused
+    here (no LinkedIn-Version header on `/v2/`) but kept in the signature so the
+    call site doesn't need to change.
+    """
     if not (text and share_urn.startswith("urn:li:")):
         return False
     from urllib.parse import quote
-    url = f"https://api.linkedin.com/rest/socialActions/{quote(share_urn, safe='')}/comments"
+    url = f"https://api.linkedin.com/v2/socialActions/{quote(share_urn, safe='')}/comments"
     try:
         r = requests.post(url, headers={
             "Authorization": f"Bearer {token}", "Content-Type": "application/json",
-            "X-Restli-Protocol-Version": "2.0.0", "LinkedIn-Version": version,
+            "X-Restli-Protocol-Version": "2.0.0",
         }, json={"actor": author, "object": share_urn, "message": {"text": text[:1200]}}, timeout=20)
         if r.status_code in (200, 201):
             return True
         if r.status_code == 403:
-            log("linkedin: first comment DENIED (403) — the org token lacks the "
-                "socialActions permission. The post still carries the domain in "
-                "its body, so the route is intact; grant Community Management "
-                "comment access to get a clickable link.")
+            log("linkedin: first comment DENIED (403) — token scope no longer "
+                "covers this. The post still carries the domain in its body, so "
+                "the route is intact; re-check granted scopes with introspectToken.")
         else:
             log(f"linkedin: first comment failed HTTP {r.status_code}: {r.text[:200]}")
     except requests.RequestException as e:
