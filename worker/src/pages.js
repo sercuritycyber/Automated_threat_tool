@@ -256,15 +256,19 @@ when the answer is "yes — act".</p>
 
 <div class=section id=how>
 <h2>How it works</h2>
+<p class=muted>An AI analyst does the reading — continuously, across every source, at a volume no
+human could sustain — held to the same discipline a good human analyst would follow: check the
+primary source, never invent a fact, say "not stated" rather than guess.</p>
 <div class=steps>
-<div class=step><b>We watch, around the clock.</b>
+<div class=step><b>It watches, around the clock.</b>
 <p class=muted>Vendor advisories, national catalogues and reputable research — the sources a
 good analyst would check — pulled in continuously, de-duplicated so the same story from five
 outlets counts once.</p></div>
-<div class=step><b>We verify against the primary source.</b>
+<div class=step><b>It verifies against the primary source.</b>
 <p class=muted>Every candidate is checked back to the vendor bulletin or the researcher's
-write-up. No headline-only alerts. If the facts don't hold up, it doesn't go out.</p></div>
-<div class=step><b>We score it for real-world impact.</b>
+write-up. No headline-only alerts, no invented CVEs or version numbers. If the facts don't
+hold up, it doesn't go out.</p></div>
+<div class=step><b>It scores it for real-world impact.</b>
 <p class=muted>Confirmed exploitation in the wild, presence on CISA's Known Exploited
 Vulnerabilities catalogue, how widely the software is deployed, blast radius through
 supply chains and identity providers, whether a fix exists. Vibes don't get a vote.</p></div>
@@ -364,10 +368,14 @@ Change it any time from your preferences page.</p></details>
 <details><summary>Which channels can I use?</summary>
 <p>Email, Discord, Slack, Telegram, ntfy, or a plain webhook (which covers Microsoft Teams and
 most SOAR/ticketing tools). Team plan can use several at once.</p></details>
-<details><summary>Who writes the alerts?</summary>
-<p>They come out of a process built and run by Charlie Collins — a working blue-teamer, ISC2
-Certified in Cybersecurity, focused on SOC and detection — as part of SecurityCyber's
-intelligence work. Every alert is checked back to its primary source before it goes out.</p></details>
+<details><summary>Who writes the alerts — is it AI?</summary>
+<p>Yes, honestly: an AI analyst does the first pass — reading every source, cross-checking
+CISA KEV, scoring impact, and drafting the brief — built, tuned and supervised by Charlie
+Collins, a working blue-teamer and ISC2 Certified in Cybersecurity. It runs to a strict rule:
+facts only from the source, never an invented CVE, version number or exploitation claim — if a
+detail isn't stated, the brief says so rather than guessing. That discipline is what lets one
+person run analyst-grade coverage around the clock instead of the one or two stories a day a
+single human could write up.</p></details>
 <details><summary>How fast is "instant"?</summary>
 <p>Minutes from the point a story is confirmed against the source, not minutes from when it
 was first published somewhere. We'd rather be right than first.</p></details>
