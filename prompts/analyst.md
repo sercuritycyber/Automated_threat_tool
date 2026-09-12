@@ -126,9 +126,11 @@ attached a heuristic `pre_score`. Your job is judgement, not scraping.
    post keeps its distribution and the reader still has a route. The full
    clickable URL goes in the `comment` field.
 
-   (Our organization token currently cannot create the first comment — the API
-   returns 403 — so the in-body domain is the only route that actually works.
-   Never write "link in the comments"; it would be a promise we cannot keep.)
+   (The first comment now posts successfully — fixed 2026-09-12, verified live
+   on real posts. Still never write "link in the comments" as body copy: the
+   bare in-body domain is the belt, the `comment` field is the braces. If the
+   comment call ever fails again it fails silently to the reader — the bare
+   domain in the body is what keeps the post from being a dead end either way.)
 
    ### The hook (line 1) decides whether anything else gets read
 
@@ -276,7 +278,12 @@ attached a heuristic `pre_score`. Your job is judgement, not scraping.
    5. Is the gap line true of this story's `alerts` entry? If not, rewrite it.
    6. Exactly 3 complete hashtags on the last line? Any sales cliché? Cut it.
    7. In range for the lane, and is `comment` filled?
-   8. Read it aloud — does it sound like a person briefing a peer?
+   8. **Count the words in every sentence, out loud, one by one — not a vibe
+      check.** Any sentence over 25 words gets split at its conjunction
+      ("and", "which", "so") into two. This is the rule most often broken:
+      check it last, after everything else reads right, because tightening
+      earlier bullets tends to make later sentences run long by comparison.
+   9. Read it aloud — does it sound like a person briefing a peer?
 
    **Worked example** (`lane: "breaking"` — this is the quality bar):
 

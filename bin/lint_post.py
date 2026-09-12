@@ -47,6 +47,7 @@ ALLCAPS_OK = {
     "AWS", "GCP", "SaaS", "CI", "CD", "PR", "URL", "URLS", "ASAP", "FYI",
     "FMC", "ASA", "FTD", "EPMM", "ITSM", "NAS", "VPNS", "SSH", "RDP", "SMB",
     "PHP", "IIS", "WAF", "MDM", "PSIRT", "CERT", "KQL", "NDR", "MSP", "MSPS",
+    "LLM", "LLMS", "RAT", "AI", "GPT", "SOAR", "MDR", "IAM", "SAML", "OTP",
 }
 EMOJI = re.compile(
     "[\U0001F000-\U0001FAFF☀-➿⬀-⯿️←-⇿]"
@@ -117,10 +118,12 @@ def lint(text: str, cve_ids: list[str] | None = None, lane: str = "intel") -> di
                       f"before '…more'; hard cap is 200, aim under 140")
     elif len(hook) > 140:
         warnings.append(f"hook is {len(hook)} chars — mobile truncates around 140")
-    # Only ask for a CVE in the hook when the story actually has one; campaign,
-    # breach and trend posts legitimately have none.
-    if breakdown and (cve_ids or []) and not CVE.search(hook):
-        warnings.append("hook has no CVE id — name the product and the CVE in line 1")
+    # Deliberately no "hook should name the CVE" check: the current analyst
+    # prompt's own worked example for a strong hook — "If your IOS XR edge
+    # routers are unpatched, a single crafted packet reboots them" — carries
+    # no CVE id on purpose. Stake-first beats CVE-first for a cold reader on
+    # mobile; a lint rule that fought that produced false positives on
+    # exactly the posts written to spec.
 
     # bullets
     bullets = [ln for ln in lines if ln.lstrip().startswith(("•", "-", "*"))]
