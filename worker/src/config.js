@@ -57,17 +57,17 @@ const DEFAULTS = {
     // the daily lifecycle cron lapses the account when it passes. Set
     // promo_days > 0 on any tier to make every signup to it an N-day promo.
     free: {
-      // Permanent free tier, not a trial. Self-serve via the £0 Stripe
-      // Payment Link (email, no card, no charge); promo_days 0 means nothing
-      // ever lapses — this is the product now, not a funnel into a paid one.
+      // 7-day free trial of the full Individual experience. Self-serve via the
+      // £0 Stripe Payment Link; promo_days sets term_ends_at at activation and
+      // the daily lifecycle cron lapses the account to 'cancelled' when it passes.
       monthly_link: "https://buy.stripe.com/eVqbJ07lZ4Pf8IXfxX3ks04",
       weekly_link: "",
       monthly_price_id: "", weekly_price_id: "",
-      monthly_display: "Free", weekly_display: "",
+      monthly_display: "Free trial", weekly_display: "",
       monthly_pence: 0, weekly_pence: 0,
       free: true,
-      promo_days: 0,
-      blurb: "Every real threat, scored and explained — instant alerts plus the daily digest, to email, RSS, Discord, Telegram or ntfy. No card, free for good.",
+      promo_days: 7,
+      blurb: "A 7-day run of the full Individual plan — instant alerts plus the daily digest, to email, RSS, Discord, Telegram or ntfy. No card. Keep it going for £8/month or £2/week.",
       instant_min_score: 70, attach_json: false,
       min_score: 15,
       channels: ["email", "rss", "discord", "telegram", "ntfy"], max_channels: 3,
