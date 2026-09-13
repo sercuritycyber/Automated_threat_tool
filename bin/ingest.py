@@ -41,6 +41,7 @@ HEADERS = {
     "Accept-Language": "en-GB,en;q=0.9",
 }
 KEV_URL = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
+EPSS_URL = "https://api.first.org/data/v1/epss"
 CVE_RE = re.compile(r"CVE-\d{4}-\d{4,7}", re.I)
 
 TRACKING_PARAMS = {
@@ -226,6 +227,31 @@ def fetch_kev(timeout: int) -> dict:
 PRIMARY_WEIGHT = 0.85
 
 
+def fetch_epss(cve_ids: list[str], timeout: int) -> dict:
+    """FIRST.org EPSS scores (probability of exploitation in the next 30 days).
+    Free, no API key. Batched at 90 CVEs/request per their documented limits."""
+    out: dict[str, float] = {}
+    ids = sorted(set(cve_ids))
+    for i in range(0, len(ids), 90):
+        chunk = ids[i:i + 90]
+        try:
+            r = requests.get(
+                EPSS_URL, params={"cve": ",".join(chunk)}, headers=HEADERS, timeout=timeout
+            )
+            r.raise_for_status()
+            for row in r.json().get("data", []):
+                cid = row.get("cve", "").upper()
+                try:
+                    out[cid] = float(row["epss"])
+                except (KeyError, ValueError):
+                    pass
+        except (requests.RequestException, ValueError) as e:
+            print(f"  ! EPSS: {e}", file=sys.stderr)
+    if ids:
+        print(f"  - EPSS: {len(out)}/{len(ids)} CVEs scored")
+    return out
+
+
 def prescore(item: dict, kev: dict) -> dict:
     text = f"{item['title']} \n {item['summary']}"
     # Base lifted from 8 -> 11: a substantive story from a trusted feed with no
@@ -374,6 +400,9 @@ def main() -> int:
         if not placed:
             clusters.append({"members": [it], "fp": set(fp), "cves": set(cve_set)})
 
+    all_cves = sorted({c for cl in clusters for c in cl["cves"]})
+    epss = fetch_epss(all_cves, timeout)
+
     candidates = []
     for cl in clusters:
         members = sorted(
@@ -382,6 +411,16 @@ def main() -> int:
             reverse=True,
         )
         best = members[0]
+        epss_meta = {c: epss[c] for c in best["cve_ids"] if c in epss}
+        pre_score = best["pre_score"]
+        reasons = list(best["pre_score_reasons"])
+        top_epss = max(epss_meta.values(), default=0.0)
+        if top_epss >= 0.5:
+            pre_score = min(100.0, pre_score + 15)
+            reasons.append(f"+15 EPSS {top_epss:.2f} (high near-term exploitation probability)")
+        elif top_epss >= 0.1:
+            pre_score = min(100.0, pre_score + 7)
+            reasons.append(f"+7 EPSS {top_epss:.2f}")
         candidates.append({
             "title": best["title"],
             "url": best["url"],
@@ -392,8 +431,9 @@ def main() -> int:
             "kev_cves": best["kev_cves"],
             "kev_recent_cves": best["kev_recent_cves"],
             "kev_meta": {c: kev["meta"][c] for c in best["kev_cves"] if c in kev["meta"]},
-            "pre_score": best["pre_score"],
-            "pre_score_reasons": best["pre_score_reasons"],
+            "epss_meta": epss_meta,
+            "pre_score": round(pre_score, 1),
+            "pre_score_reasons": reasons,
             # Timing signals the analyst uses to pick the social lane: a fresh
             # primary-source story nobody else has written up yet is the one
             # worth posting now. `corroborations` counts the other feeds that

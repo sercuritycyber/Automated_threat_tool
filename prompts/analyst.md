@@ -43,6 +43,8 @@ attached a heuristic `pre_score`. Your job is judgement, not scraping.
    |---|---|
    | Confirmed active exploitation in the wild / zero-day | +40 |
    | On CISA KEV, added within `kev_recent_days` | +25 (or +12 if older KEV) |
+   | EPSS ≥ 0.5 in `epss_meta` (FIRST.org, probability of exploitation in 30 days) | +15 |
+   | EPSS 0.1–0.5 in `epss_meta` | +7 |
    | CVSS ≥ 9.0 or vendor-rated Critical | +15 |
    | Widely deployed enterprise/consumer software, or critical infrastructure | +15 |
    | Supply-chain / MSP / identity-provider / CI-CD blast radius | +15 |
