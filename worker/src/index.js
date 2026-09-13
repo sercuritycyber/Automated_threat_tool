@@ -35,6 +35,30 @@ export default {
     // (Cloudflare rejects `0`), and an exact-string compare would silently
     // turn every retention run into a second digest.
     const isRetention = /^\s*30\s+3\s/.test(event.cron || "");
+    // Monthly free-for-life draw: 08:00 UTC on the 1st. Entry is automatic —
+    // anyone who signed up last month on any tier, including free, is in the
+    // pool. See db.pickMonthlyDrawWinners for why that matters legally.
+    const isMonthlyDraw = /^\s*0\s+8\s+1\s/.test(event.cron || "");
+    if (isMonthlyDraw) {
+      try {
+        const result = await db.pickMonthlyDrawWinners(D, cfg.forever_free_emails, 5);
+        for (const w of result.winners) {
+          await send(env, cfg, "email", w.email,
+            "You've won a free-for-life SecurityCyber CTI subscription",
+            `Good news — your address was picked in this month's free-for-life draw.\n\n`
+            + `Your account is now on the Team plan, permanently, at no cost. Nothing to do — `
+            + `it's already active.\n\nEveryone who signs up (any plan, including the free one) `
+            + `is automatically entered into next month's draw too.`);
+        }
+        if (result.winners.length) {
+          await discord.postToChannel(env,
+            `🎉 This month's free-for-life draw: ${result.winners.length} subscriber(s) just got `
+            + `bumped to the Team plan, permanently, at no cost. Sign up (any plan — free included) `
+            + `for a chance to be next month's winner. <${cfg.site_url}>`);
+        }
+        console.log(`monthly draw: ${result.winners.length}/${result.pool_size} eligible picked for ${result.month}`);
+      } catch (e) { console.error("monthly draw", e); }
+    }
     if (isRetention) {
       await db.ensureForeverFree(D, cfg.forever_free_emails).catch((e) => console.error("forever-free", e));
       const a = await db.purgeUnconfirmed(D, cfg.retention_days_unconfirmed, cfg.forever_free_emails);

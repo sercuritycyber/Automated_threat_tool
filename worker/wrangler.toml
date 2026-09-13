@@ -23,7 +23,7 @@ database_id = "2d514521-9be2-4c8e-8bf0-73c68bcaeafd"
 
 [triggers]
 # digests 06:15 / 11:15 / 16:15 UTC = 07:15 / 12:15 / 17:15 BST · 03:30 UTC Sunday retention + intent purge.
-crons = ["15 6 * * *", "15 11 * * *", "15 16 * * *", "30 3 * * SUN"]
+crons = ["15 6 * * *", "15 11 * * *", "15 16 * * *", "30 3 * * SUN", "0 8 1 * *"]
 
 [observability]
 enabled = true

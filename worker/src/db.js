@@ -412,3 +412,46 @@ export async function stats(db) {
 }
 
 export { mask };
+
+// ---- monthly free-for-life draw -------------------------------
+// Compliant prize-draw design: entry is automatic for anyone who signed up
+// last calendar month on ANY tier, including the free one — so there is
+// always a no-purchase-necessary route, which keeps this outside UK gambling
+// law's definition of a lottery (payment-to-enter would need Gambling
+// Commission registration; a genuinely free entry route does not).
+// Previous winners and the forever-free operator address(es) are excluded so
+// the same account can't win twice or double up on an already-free account.
+export async function pickMonthlyDrawWinners(db, foreverFreeEmails = [], count = 5) {
+  const now = new Date();
+  const prevMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1));
+  const monthKey = prevMonth.toISOString().slice(0, 7); // YYYY-MM
+  const startIso = prevMonth.toISOString();
+  const endIso = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString();
+
+  const pool = await many(db,
+    `SELECT * FROM subscribers
+     WHERE status IN ('active','paused','past_due')
+       AND created_at >= ? AND created_at < ?
+       AND (notes IS NULL OR notes NOT LIKE '%monthly_draw_winner%')`,
+    startIso, endIso);
+
+  const ff = new Set((foreverFreeEmails || []).map((e) => String(e).toLowerCase()));
+  const eligible = pool.filter((s) => !ff.has(String(s.email || "").toLowerCase()));
+
+  // Fisher-Yates shuffle, then take the front — an unbiased random sample.
+  for (let i = eligible.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [eligible[i], eligible[j]] = [eligible[j], eligible[i]];
+  }
+  const winners = eligible.slice(0, count);
+
+  for (const w of winners) {
+    const note = `${w.notes ? w.notes + " " : ""}monthly_draw_winner:${monthKey}`;
+    await run(db,
+      `UPDATE subscribers SET tier='team', status='active', source='free',
+       term_ends_at=NULL, cancelled_at=NULL, notes=? WHERE id=?`,
+      note, w.id);
+    await logEvent(db, "draw:winner", w.id, { month: monthKey });
+  }
+  return { month: monthKey, pool_size: eligible.length, winners };
+}
