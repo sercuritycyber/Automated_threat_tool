@@ -1,7 +1,7 @@
 """Minimal, dependency-free RSS 2.0 / Atom 1.0 parser.
 
 Only needs the stdlib. Returns a list of normalised entry dicts:
-    {title, link, summary, published (aware datetime, UTC), source}
+    {title, link, summary, published (aware datetime, UTC), source, category}
 
 This exists so the ingest step is deterministic and does not rely on
 feedparser being installed system-wide on Fedora's externally-managed Python.
@@ -93,9 +93,10 @@ def parse(content: bytes | str, source: str = "") -> list[dict]:
             title = _text(_first(it, "title"))
             link = _text(_first(it, "link"))
             summary = _text(_first(it, "description", "summary", "encoded"))
+            category = _text(_first(it, "category"))
             date_el = _first(it, "pubdate", "date", "published", "updated")
             published = _parse_date(_text(date_el)) if date_el is not None else None
-            entries.append(_mk(title, link, summary, published, source))
+            entries.append(_mk(title, link, summary, published, source, category))
     elif root_tag == "feed":  # Atom
         nodes = [c for c in root if _local(c.tag) == "entry"]
         for it in nodes:
@@ -109,11 +110,12 @@ def parse(content: bytes | str, source: str = "") -> list[dict]:
     return [e for e in entries if e["title"] and e["link"]]
 
 
-def _mk(title, link, summary, published, source) -> dict:
+def _mk(title, link, summary, published, source, category="") -> dict:
     return {
         "title": title,
         "link": link,
         "summary": summary[:1200],
         "published": published,
         "source": source,
+        "category": category,
     }

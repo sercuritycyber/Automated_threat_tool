@@ -74,6 +74,18 @@ SIGNALS = [
     (re.compile(r"CVSS[^0-9]{0,6}(?:9\.\d|10(?:\.0)?)|\bcritical(?:ity)?\b.{0,12}(?:flaw|vuln|bug|rating)|rated critical", re.I), 14, "critical severity"),
     (re.compile(r"\b(Fortinet|FortiOS|FortiGate|Cisco|Ivanti|Citrix|NetScaler|Palo Alto|PAN-OS|GlobalProtect|VMware|ESXi|vCenter|Exchange|SharePoint|Outlook|Chrome|Firefox|Windows|Active Directory|Entra|Okta|SolarWinds|MOVEit|Confluence|Jira|Bitbucket|GitLab|GitHub|Kubernetes|SonicWall|WatchGuard|Zyxel|QNAP|Synology|Jenkins|Apache|Tomcat|nginx|OpenSSL|OpenSSH|PostgreSQL|MongoDB|Elastic|Docker|Zoom|Atlassian|Veeam|Zimbra|Roundcube|F5|BIG-IP|pfSense|OPNsense|OpenVPN|WireGuard|1Password|LastPass|Bitwarden|JetBrains|TeamCity|PaperCut|ScreenConnect|ConnectWise|AnyDesk|Cleo|CrushFTP|GoAnywhere|Rockwell|Siemens|Schneider Electric|Moxa|Advantech|Mitsubishi Electric|Honeywell)\b", re.I), 8, "widely deployed / high-value vendor"),
 ]
+# Ransomware.live's RSS <category> is an ISO-3166 country code for the
+# victim. Charlie's editorial call: US/UK/EU victims are the priority — that
+# is the audience most subscribers can act on (report to their own board,
+# check a shared supplier, brief a client), where a victim in an unrelated
+# region rarely is.
+PRIORITY_COUNTRIES = {
+    "US", "GB", "UK",
+    "DE", "FR", "IT", "ES", "NL", "BE", "SE", "NO", "DK", "FI", "IE", "PT",
+    "AT", "CH", "PL", "CZ", "GR", "HU", "RO", "BG", "HR", "SK", "SI", "LT",
+    "LV", "EE", "LU", "MT", "CY", "IS",
+}
+
 NEGATIVE = [
     (re.compile(r"\bwebinar\b|\bsponsored\b|\bwhitepaper\b|register (?:now|today|here)|save your seat|\be-?book\b|\[?virtual event\]?|\[?webcast\]?|on-demand (?:webinar|session)|join us (?:for|on)", re.I), -40, "marketing / event"),
     (re.compile(r"weekly (?:recap|roundup|review)|news roundup|in case you missed|week in (?:review|security)|this week in|monthly (?:recap|roundup)|newsletter", re.I), -25, "roundup / newsletter"),
@@ -259,6 +271,11 @@ def prescore(item: dict, kev: dict) -> dict:
         elif age_h <= 3:
             score += 3
             reasons.append("+3 published <3h ago")
+
+    category = str(item.get("category", "")).strip().upper()
+    if category in PRIORITY_COUNTRIES:
+        score += 12
+        reasons.append(f"+12 priority region victim ({category})")
 
     score = max(0.0, min(100.0, score))
     return {
