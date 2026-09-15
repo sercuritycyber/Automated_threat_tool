@@ -461,6 +461,29 @@ def post_telegram(text: str, creds: dict, settings: dict, short_text=None, log=p
     return _res("telegram", True, id=str(mid), url=url)
 
 
+# ---------------------------------------------------------------- Discord (general/community channel)
+def post_discord(text: str, creds: dict, settings: dict, short_text=None, log=print) -> dict:
+    """Mirror a post to the public/community Discord channel via its incoming
+    webhook. This is the growth channel — separate from the Worker's own
+    DISCORD_ALERT_WEBHOOK, which is the paid-subscriber intel broadcast."""
+    url = creds.get("DISCORD_WEBHOOK_GENERAL")
+    if not url:
+        return _res("discord", False, error="no DISCORD_WEBHOOK_GENERAL")
+    # LinkedIn's post_text keeps the domain bare (no scheme) to dodge its own
+    # outbound-link penalty — Discord has no such penalty, so give the plug
+    # line back its scheme here so it actually renders as a clickable link.
+    body = re.sub(r"(?<![\w./])cti\.securitycyber\.uk\b(?!/)", "https://cti.securitycyber.uk", text)
+    body = body if len(body) <= 2000 else teaser(body, 1970, short_text)
+    try:
+        r = requests.post(url, json={"content": body, "allowed_mentions": {"parse": []}},
+                          headers={"User-Agent": UA}, timeout=20)
+    except requests.RequestException as e:
+        return _res("discord", False, error=str(e)[:300])
+    if r.status_code not in (200, 204):
+        return _res("discord", False, error=f"HTTP {r.status_code}: {r.text[:200]}")
+    return _res("discord", True, id="", url="")
+
+
 PROVIDERS = {
     "linkedin": post_linkedin,
     "mastodon": post_mastodon,
@@ -468,10 +491,12 @@ PROVIDERS = {
     "x": post_x,
     "email": post_email,
     "telegram": post_telegram,
+    "discord": post_discord,
 }
 
 PROVIDER_LABELS = {"linkedin": "LinkedIn", "mastodon": "Mastodon", "bluesky": "Bluesky",
-                   "x": "X / Twitter", "email": "Email", "telegram": "Telegram"}
+                   "x": "X / Twitter", "email": "Email", "telegram": "Telegram",
+                   "discord": "Discord"}
 
 # (env key, label, hint) — drives the Secrets page and the credential check
 PROVIDER_KEYS: dict[str, list[tuple[str, str, str]]] = {
@@ -501,6 +526,9 @@ PROVIDER_KEYS: dict[str, list[tuple[str, str, str]]] = {
         ("TELEGRAM_BOT_TOKEN", "Bot token", "from @BotFather"),
         ("TELEGRAM_CHANNEL", "Channel", "@username or numeric id — the bot must be a channel admin"),
     ],
+    "discord": [
+        ("DISCORD_WEBHOOK_GENERAL", "General channel webhook", "Server Settings → Integrations → Webhooks"),
+    ],
     "email": [
         ("EMAIL_SMTP_HOST", "SMTP host", "e.g. smtp.gmail.com"),
         ("EMAIL_SMTP_PORT", "SMTP port", "587 STARTTLS (default) or 465 SSL"),
@@ -519,6 +547,7 @@ _REQUIRED = {
     "x": ["X_API_KEY", "X_API_SECRET", "X_ACCESS_TOKEN", "X_ACCESS_SECRET"],
     "email": ["EMAIL_SMTP_HOST", "EMAIL_TO"],
     "telegram": ["TELEGRAM_BOT_TOKEN", "TELEGRAM_CHANNEL"],
+    "discord": ["DISCORD_WEBHOOK_GENERAL"],
 }
 
 
