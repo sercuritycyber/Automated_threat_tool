@@ -217,7 +217,8 @@ Once the image builds:
    then `npx wrangler deploy`.
 3. **Stripe webhook secret mismatch** (separate from #1): the Worker's
    `STRIPE_WEBHOOK_SECRET` must match the Stripe endpoint
-   `we_1UBJNlCCcmRAgupcAi1OLf4S` (snapshot payload, `whsec_WHIIbnctzvGZaxsthk2l8RlXFasbcYhP`).
+   `we_1UBJNlCCcmRAgupcAi1OLf4S` (snapshot payload, secret redacted — see
+   `config/env` on the VM; this was a historical mismatch, resolved).
    Until fixed, paid customers are charged and never provisioned.
 4. **Discord secrets not set on the Worker:** `DISCORD_ALERT_WEBHOOK`,
    `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, `DISCORD_BOT_TOKEN`,
