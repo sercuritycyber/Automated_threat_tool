@@ -1,7 +1,8 @@
-# Edited by the web UI — inline comments are not preserved.
-# Field reference: README.md · Blue Team CTI control panel
+# Template only — copy to config/settings.yaml and fill in real values.
+# config/settings.yaml is gitignored (never commit it): it carries the
+# owner's canarytoken as notify.ntfy_url. Never fetch or POST that URL.
 brand:
-  name: Blue Team Podcast
+  name: SecurityCyber
   site: securitycyber.uk
   audience: blue team operators, SOC analysts, and enterprise defenders
 ingest:
@@ -10,16 +11,17 @@ ingest:
   kev_recent_days: 21
   max_candidates: 40
 scoring:
-  min_score: 80
+  min_score: 60
+  subscriber_min_score: 12
 analyst:
-  engine: openai
+  engine: claude
   deep_pass: false
 publish:
-  mode: review
-  dry_run: true
+  mode: live
+  dry_run: false
   max_post_chars: 2900
   linkedin_api_version: "202509"   # LinkedIn rotates these ~monthly; publisher auto-bumps on HTTP 426
   visibility: PUBLIC
 notify:
-  ntfy_url: http://canarytokens.com/static/stuff/articles/1uwnoiojzzll5gnsf3d545ojr/payments.js
+  ntfy_url: https://REPLACE-WITH-YOUR-OWN-CANARYTOKEN-URL
   on_success: true

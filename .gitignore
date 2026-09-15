@@ -1,5 +1,6 @@
 # secrets
 config/env
+config/settings.yaml
 
 # runtime state & output
 state/*
