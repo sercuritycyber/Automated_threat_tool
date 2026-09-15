@@ -40,6 +40,7 @@ LOG = STATE / "marketing_posts.jsonl"
 # tag-stuffing and gets down-ranked. Matches prompts/analyst.md.
 HASHTAGS = "#CyberSecurity #ThreatIntel #BlueTeam"
 SITE = "https://securitycyber.uk/cti"
+DISCORD_INVITE = "https://discord.gg/r5ckQe33B"
 URL_RE = re.compile(r"https?://\S+")
 # Local windows where a UK working audience is actually on the feed. A promo
 # post at 21:00 spends a slot for almost no reach.
@@ -93,6 +94,30 @@ def intel_lure(limit: int = 3) -> tuple[str, str] | None:
           "Seven days free, no card: cti.securitycyber.uk",
         f"Start the free trial: {SITE}",
     )
+
+
+_INVITE_TEXTS = [
+    "We run a live channel where the CTI team and other defenders talk "
+    "through what's actually being exploited today — same feed, more "
+    "back-and-forth on what's worth acting on. Open to anyone:\n\n"
+    f"{DISCORD_INVITE}",
+
+    "A look behind the daily posts: our Discord carries early flags on "
+    "what's heading for the paid brief, plus the reasoning behind why "
+    "something scores the way it does. Come see it:\n\n"
+    f"{DISCORD_INVITE}",
+
+    "CVSS isn't the whole story on most of what we post — the Discord is "
+    "where that gets discussed properly, with other people doing the same "
+    "job you are. No pitch, just the conversation:\n\n"
+    f"{DISCORD_INVITE}",
+]
+
+
+def community_invite() -> tuple[str, str]:
+    """A soft, low-frequency nudge toward the Discord community — value and a
+    link, no ask, no urgency. Never posted back into Discord itself."""
+    return random.choice(_INVITE_TEXTS), f"Join the community: {DISCORD_INVITE}"
 
 
 def _load(p: Path, default):
@@ -167,25 +192,40 @@ def main() -> int:
             pass
 
     bank = _load(BANK, {})
-    # Every third slot is a proof-of-work lure built from today's real briefs —
-    # far more persuasive than another feature pitch, and it costs nothing to
-    # produce. Falls back to the bank when the run was too thin to show off.
     rot = _load(ROT, {})
-    since = int(rot.get("since_lure", 0)) + 1
-    lure = intel_lure() if since >= 3 else None
-    if lure:
-        text, comment = lure
+    is_invite = False
+    # Rarest slot: a soft nudge toward the Discord community. This is growth,
+    # not product pitch, so it gets far less airtime than the lure — every 6th
+    # slot (~4/day cadence -> roughly every day and a half), never back to back
+    # with itself, and it never fires without a real invite link configured.
+    since_invite = int(rot.get("since_invite", 0)) + 1
+    if DISCORD_INVITE and since_invite >= 6:
+        text, comment = community_invite()
         idx = -1
-        since = 0
-        print("[marketing] slot -> intel lure (today's shipped briefs)")
+        since_invite = 0
+        is_invite = True
+        print("[marketing] slot -> community invite")
     else:
-        idx, text = pick_post(bank)
-        if idx < 0:
-            print("[marketing] content bank is empty", file=sys.stderr)
-            return 1
-        comment = f"Start the free trial: {bank.get('url', SITE)}"
-    rot = _load(ROT, {})          # pick_post rewrote it; keep its `used` list
-    rot["since_lure"] = since
+        # Every third remaining slot is a proof-of-work lure built from today's
+        # real briefs — far more persuasive than another feature pitch, and it
+        # costs nothing to produce. Falls back to the bank when the run was
+        # too thin to show off.
+        since_lure = int(rot.get("since_lure", 0)) + 1
+        lure = intel_lure() if since_lure >= 3 else None
+        if lure:
+            text, comment = lure
+            idx = -1
+            since_lure = 0
+            print("[marketing] slot -> intel lure (today's shipped briefs)")
+        else:
+            idx, text = pick_post(bank)
+            if idx < 0:
+                print("[marketing] content bank is empty", file=sys.stderr)
+                return 1
+            comment = f"Start the free trial: {bank.get('url', SITE)}"
+        rot = _load(ROT, {})      # pick_post may have rewritten it; keep `used`
+        rot["since_lure"] = since_lure
+    rot["since_invite"] = since_invite
     ROT.write_text(json.dumps(rot))
 
     # LinkedIn gets no link in the body (it throttles reach) — the URL goes in
@@ -196,6 +236,9 @@ def main() -> int:
 
     targets = publishers.resolve_targets(settings, creds)
     targets = [t for t in targets if t in publishers.configured(creds)]
+    if is_invite:
+        # Never invite people already in the room.
+        targets = [t for t in targets if t != "discord"]
     print(f"[marketing] post #{idx} -> {', '.join(targets) or '(no targets)'}"
           + ("  [DRY-RUN]" if dry else ""))
 
