@@ -136,19 +136,40 @@ _COMMENT_PROMISE = re.compile(
     r"in the comments\.?\s*\)?", re.I)
 
 
+_PAREN_OPEN = re.compile(r"\s*\(\s*")
+_PAREN_CLOSE = re.compile(r"\s*\)")
+
+
+def _li_deparen(text: str) -> str:
+    """Replace "(...)" with ", ...". LinkedIn's commentary renderer silently
+    truncates a post at the first literal "(" — confirmed 2026-09-15 across
+    every recent `breaking`-lane post (live posts read back via the Posts API,
+    and the public page itself, both cut off right before the first paren; the
+    API still returns 201, so nothing warns us). Root cause looks like the
+    little-text-format mention parser (`@[text](urn)`) treating a bare "(" as
+    the start of an annotation target and swallowing the rest on failure to
+    close it — but whatever LinkedIn is doing, never sending a literal "(" is
+    the only reliable fix from our side.
+    """
+    t = _PAREN_CLOSE.sub("", _PAREN_OPEN.sub(", ", text))
+    return re.sub(r",\s*,", ",", t)
+
+
 def _li_shape(text: str, link_hint: str = LI_LINK_HINT) -> str:
     """Last-mile deterministic shaping, so a model slip cannot cost us reach.
 
     * strips copy promising a first comment (the API 403s on this token, so the
       promise would be a lie and the post a dead end)
+    * de-parens the body — see `_li_deparen` (LinkedIn truncates on "(")
     * guarantees the body names `link_hint`, so there is always a route to the
       site even with no comment
     * trims hashtags past LI_MAX_TAGS (3 reaches further than 5; more is
       down-ranked as tag-stuffing)
     * collapses runs of blank lines
-    Wording is otherwise never rewritten.
+    Wording is otherwise never rewritten (beyond the paren swap above).
     """
     t = _COMMENT_PROMISE.sub("", (text or "").rstrip()).rstrip()
+    t = _li_deparen(t)
 
     # peel the trailing hashtag block off, if there is one
     lines = t.splitlines()

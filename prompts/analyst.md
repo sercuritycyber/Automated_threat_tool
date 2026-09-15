@@ -250,6 +250,11 @@ attached a heuristic `pre_score`. Your job is judgement, not scraping.
      commercial content, and both stay factual.
    - No `https://` URL in `post_text` — the bare domain
      `cti.securitycyber.uk` on the plug line instead.
+   - **No parentheses in `post_text`.** LinkedIn silently truncates a post at
+     the first literal `(` — confirmed 2026-09-15 across multiple live posts
+     that stopped mid-sentence with no error. Write `CVE-2026-76461, CVSS 9.8`
+     or `CVE-2026-76461 — CVSS 9.8`, never `CVE-2026-76461 (CVSS 9.8)`. (The
+     shaper also strips any `(`/`)` that slips through, but don't rely on it.)
 
    **Write a `comment`** for each post — posted as the first comment, where the
    links belong:

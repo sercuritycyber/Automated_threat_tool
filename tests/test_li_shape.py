@@ -49,6 +49,13 @@ chk("promise stripped mid-post", o5, lambda x: "in the comments" not in x.lower(
 o6 = _li_shape("Hook.\n\nBody.\n\n#CyberSecurity\n#ThreatIntel\n#BlueTeam\n#MSP")
 chk("multi-line tag block capped at 3", o6, lambda x: x.count("#") == 3)
 
+# LinkedIn silently truncates a post's commentary at the first literal "(" —
+# confirmed 2026-09-15 on multiple live breaking-lane posts (root cause in
+# publishers._li_deparen's docstring). Every "(" must be gone before it ships.
+o7 = _li_shape("Vulnerability: CVE-2026-76461 (CVSS 9.8) — root RCE.\n\n#CyberSecurity")
+chk("no literal parens reach the body", o7, lambda x: "(" not in x and ")" not in x)
+chk("the CVSS detail survives, reworded not dropped", o7, "CVSS 9.8")
+
 # _delink: scheme goes, domain stays — no scheme means no reach penalty, but
 # the reader still has somewhere to go.
 chk("scheme stripped, path kept",

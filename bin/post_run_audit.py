@@ -175,6 +175,9 @@ def check_shaper() -> None:
         problems.append("no route domain injected")
     if "in the comments" in _li_shape("Hi.\n\n(Link in the comments.)\n\n#A #B #C").lower():
         problems.append("dead comment promise not stripped")
+    paren_out = _li_shape("Hook (CVSS 9.8) here.\n\n#A #B #C")
+    if "(" in paren_out or ")" in paren_out:
+        problems.append("literal paren reached the body — LinkedIn truncates on this")
     rec("FAIL" if problems else "PASS", "linkedin shaper",
         "; ".join(problems) or "3 tags + route guaranteed, dead promises stripped")
 
@@ -182,6 +185,7 @@ def check_shaper() -> None:
 # ------------------------------------------- 4. what actually went on the page
 def check_live_posts(limit: int = 3) -> None:
     import requests
+    import publishers
     e = env()
     tok = e.get("LINKEDIN_ACCESS_TOKEN")
     if not tok:
@@ -192,21 +196,32 @@ def check_live_posts(limit: int = 3) -> None:
     if not recent:
         rec("PASS", "live post bodies", "no in-policy posts yet to inspect")
         return
-    H = {"Authorization": f"Bearer {tok}", "X-Restli-Protocol-Version": "2.0.0",
-         "LinkedIn-Version": "202509"}
+    import yaml
+    settings = yaml.safe_load((ROOT / "config" / "settings.yaml").read_text()) or {}
+    pinned = str(settings.get("publish", {}).get("linkedin_api_version", publishers._LI_DEFAULT_VERSION))
     bad: list[str] = []
     manual: list[str] = []
     for r in recent:
         urn = r["post_id"]
+        resp = None
         try:
-            resp = requests.get(
-                f"https://api.linkedin.com/rest/posts/{requests.utils.quote(urn, safe='')}",
-                headers=H, timeout=20)
+            # LinkedIn rotates LinkedIn-Version monthly and 426s the stale one —
+            # same fallback list post_linkedin() uses, so this check doesn't
+            # mistake "our own read-back is stale" for "the post has no route".
+            for version in publishers._li_versions(pinned):
+                resp = requests.get(
+                    f"https://api.linkedin.com/rest/posts/{requests.utils.quote(urn, safe='')}",
+                    headers={"Authorization": f"Bearer {tok}",
+                             "X-Restli-Protocol-Version": "2.0.0",
+                             "LinkedIn-Version": version}, timeout=20)
+                if resp.status_code != 426:
+                    break
         except requests.RequestException as exc:
             rec("WARN", "live post bodies", f"API unreachable ({exc})")
             return
-        if not resp.ok:
-            bad.append(f"{urn[-8:]}: HTTP {resp.status_code}")
+        if resp is None or not resp.ok:
+            code = resp.status_code if resp is not None else "?"
+            bad.append(f"{urn[-8:]}: HTTP {code}")
             continue
         c = resp.json().get("commentary", "") or ""
         tags = len(re.findall(r"\{hashtag\|", c)) or c.count("#")
