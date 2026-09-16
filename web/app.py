@@ -2637,6 +2637,19 @@ def action_approve_next():
     return {"message": f"Post failed — {str(r.get('error'))[:140]}"}
 
 
+@app.post("/api/manual_post/clear")
+def manual_post_clear():
+    """Dismiss the 'queued for manual publishing' attention item. This just
+    clears the flag — state/manual_post.md was informational (the actual
+    post either got published by hand already or the underlying issue is
+    resolved); nothing here re-attempts delivery."""
+    p = STATE / "manual_post.md"
+    if not p.exists():
+        return {"message": "Nothing to dismiss."}
+    p.unlink()
+    return {"message": "Dismissed."}
+
+
 @app.post("/action/sync-stripe-links")
 def action_sync_stripe_links():
     env = load_env()

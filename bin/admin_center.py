@@ -187,8 +187,10 @@ def pulse(root: Path, creds: dict, *, settings: dict | None = None,
                      "do": "Review / approve"})
     man = root / "state" / "manual_post.md"
     if man.exists():
-        attn.append({"level": "warn", "text": "Post(s) queued for manual publishing (delivery failed)",
-                     "do": "state/manual_post.md"})
+        age = _rel(datetime.fromtimestamp(man.stat().st_mtime, tz=timezone.utc).isoformat())
+        attn.append({"level": "warn",
+                     "text": f"Post(s) queued for manual publishing (delivery failed, {age} old)",
+                     "do": "state/manual_post.md", "dismiss": "/api/manual_post/clear"})
 
     return {
         "at": datetime.now(timezone.utc).isoformat(),
@@ -250,6 +252,8 @@ def console_head() -> str:
 .ac .attn .dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
 .ac .dot.bad{background:var(--bad)} .ac .dot.warn{background:var(--warn)} .ac .dot.good{background:var(--good)}
 .ac .attn .do{margin-left:auto;color:var(--dim);font-size:11.5px}
+.ac .attn button.dismiss{font-size:11px;padding:3px 9px;border-radius:6px;border:1px solid var(--line);background:var(--panel);color:var(--dim);cursor:pointer}
+.ac .attn button.dismiss:hover{color:var(--fg);border-color:var(--dim)}
 .ac .ok{color:var(--good);font-size:12.5px;padding:8px 0}
 .ac #acToast{position:fixed;right:20px;bottom:20px;background:var(--panel2);border:1px solid var(--accent);
   border-radius:8px;padding:10px 16px;font-size:13px;display:none;z-index:50}
@@ -289,7 +293,18 @@ def console_head() -> str:
     ].join('');
     if(!p.attention.length){ attn.innerHTML='<div class="ok">✓ Nothing needs your attention.</div>'; }
     else attn.innerHTML=p.attention.map(a=>
-      `<div class="row"><span class="dot ${a.level}"></span><span>${a.text}</span><span class="do">${a.do||''}</span></div>`).join('');
+      `<div class="row"><span class="dot ${a.level}"></span><span>${a.text}</span><span class="do">${a.do||''}</span>`
+      + (a.dismiss?`<button class="dismiss" data-dismiss="${a.dismiss}">Dismiss</button>`:'')
+      + `</div>`).join('');
+    attn.querySelectorAll('button[data-dismiss]').forEach(b=>b.addEventListener('click',async()=>{
+      b.disabled=true;
+      try{
+        const r=await fetch(b.dataset.dismiss,{method:'POST'});
+        let j={}; try{ j=await r.json(); }catch(e){}
+        t(j.message||(r.ok?'dismissed':'failed'));
+      }catch(e){ t('error: '+e); }
+      pulse();
+    }));
   }
   document.querySelectorAll('#ac .bar button[data-a]').forEach(b=>{
     b.addEventListener('click',async()=>{
