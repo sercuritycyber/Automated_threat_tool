@@ -2571,6 +2571,15 @@ def intel_search(q: str = ""):
     return CVE.search(q, load_env().get("CVEFEED_API_KEY", ""))
 
 
+@app.get("/intel/api/latest")
+def intel_latest():
+    key = load_env().get("CVEFEED_API_KEY", "")
+    return {
+        "shipped": CVE.latest_shipped(ROOT),
+        "kev": CVE.latest_kev(key),
+    }
+
+
 @app.get("/intel/api/cve/{cve_id}")
 def intel_cve(cve_id: str):
     return CVE.detail(cve_id, load_env().get("CVEFEED_API_KEY", ""))

@@ -14,6 +14,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from pathlib import Path
 
 BASE = "https://cvefeed.io/api"
 _CACHE: dict[str, tuple[float, dict]] = {}   # q -> (ts, result), 60s TTL — spares the CVEQL quota
@@ -98,6 +99,43 @@ def search(q: str, key: str) -> dict:
         return {"error": f"{type(e).__name__}: {e}"}
 
 
+def latest_kev(key: str, limit: int = 8) -> dict:
+    """Most recent CISA KEV entries from CVEFeed — auto-populates the desk so
+    there's always something useful on screen without typing a query. Goes
+    through the same search()/60s cache as a manual lookup, so opening the
+    page repeatedly doesn't burn extra CVEQL quota."""
+    out = search("is_kev = true", key)
+    if out.get("error"):
+        return out
+    return {**out, "results": out.get("results", [])[:limit]}
+
+
+def latest_shipped(root: Path, limit: int = 8) -> list[dict]:
+    """Our own most-recently-published briefs — free, always available, no
+    CVEFeed call at all. This is the pipeline's own output, not a lookup."""
+    hist = root / "state" / "history.jsonl"
+    if not hist.exists():
+        return []
+    rows = []
+    for line in hist.read_text().splitlines():
+        try:
+            rows.append(json.loads(line))
+        except (json.JSONDecodeError, ValueError):
+            pass
+    rows.sort(key=lambda r: r.get("posted_at", ""), reverse=True)
+    out = []
+    for r in rows[:limit]:
+        out.append({
+            "title": r.get("title", ""),
+            "cve_ids": r.get("cve_ids", []),
+            "score": r.get("score"),
+            "lane": r.get("lane", ""),
+            "posted_at": r.get("posted_at", ""),
+            "url": r.get("post_url") or r.get("url", ""),
+        })
+    return out
+
+
 def detail(cve_id: str, key: str) -> dict:
     if not key:
         return {"error": "CVEFEED_API_KEY is not set"}
@@ -154,6 +192,11 @@ _PAGE = r"""
 .cve .r p{margin:8px 0 0;color:#cbd5e1;font-size:13px}
 .cve .r .act{margin-top:10px;display:flex;gap:8px}
 .cve .meta{color:var(--dim);font-size:11.5px}
+.cve .section{display:flex;align-items:center;gap:10px;margin:22px 0 10px}
+.cve .section h3{margin:0;font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:var(--dim)}
+.cve .section .btn{margin-left:auto;padding:3px 10px;font-size:12px}
+.cve .shipped{display:flex;justify-content:space-between;gap:10px;align-items:baseline;padding:7px 0;border-bottom:1px solid var(--line)}
+.cve .shipped .t{font-size:13px}.cve .shipped .m{color:var(--dim);font-size:11.5px;white-space:nowrap}
 </style>
 <div class="cve">
   <div class="search">
@@ -162,11 +205,46 @@ _PAGE = r"""
   </div>
   <div class="hint">Live from CVEFeed.io (NVD + CISA KEV + vendor advisories). A CVE id opens the record; an expression with an operator runs as CVEQL; anything else is a keyword search.</div>
   <div id="cout"></div>
+
+  <div class="section"><h3>Our latest shipped briefs</h3><button class="btn" onclick="loadLatest()">Refresh</button></div>
+  <div id="shipped"><p class="meta">loading…</p></div>
+
+  <div class="section"><h3>Latest CISA KEV additions</h3></div>
+  <div id="kev"><p class="meta">loading…</p></div>
 </div>
 <script>
 const cq=document.getElementById('cq'),cout=document.getElementById('cout');
 cq.addEventListener('keydown',e=>{if(e.key==='Enter')run();});
 function esc(s){return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+function fmtAge(iso){
+  if(!iso) return '';
+  const ms=Date.now()-new Date(iso).getTime(), h=ms/3600000;
+  if(h<1) return Math.round(ms/60000)+'m ago';
+  if(h<48) return Math.round(h)+'h ago';
+  return Math.round(h/24)+'d ago';
+}
+function shippedRow(r){
+  const cves=(r.cve_ids||[]).join(', ');
+  return `<div class="shipped">
+    <span class="t">${esc(r.title)}${cves?' <span class="meta">('+esc(cves)+')</span>':''}</span>
+    <span class="m">${r.score!=null?r.score+'/100 · ':''}${esc(fmtAge(r.posted_at))}${r.url?' · <a href="'+esc(r.url)+'" target="_blank">open</a>':''}</span>
+  </div>`;
+}
+async function loadLatest(){
+  document.getElementById('shipped').innerHTML='<p class=meta>loading…</p>';
+  document.getElementById('kev').innerHTML='<p class=meta>loading…</p>';
+  let d; try{ d=await (await fetch('/intel/api/latest')).json(); }
+  catch(e){ document.getElementById('shipped').innerHTML='<p class=meta>error loading</p>'; return; }
+  const sh=d.shipped||[];
+  document.getElementById('shipped').innerHTML = sh.length
+    ? sh.map(shippedRow).join('') : '<p class=meta>nothing shipped yet</p>';
+  const kev=d.kev||{};
+  if(kev.error){ document.getElementById('kev').innerHTML='<p class=meta>'+esc(kev.error)+'</p>'; return; }
+  const kr=kev.results||[];
+  document.getElementById('kev').innerHTML = kr.length
+    ? kr.map(card).join('') : '<p class=meta>none returned</p>';
+}
+loadLatest();
 async function run(){
   cout.innerHTML='<p class=meta>searching…</p>';
   let d; try{ d=await (await fetch('/intel/api/search?q='+encodeURIComponent(cq.value))).json(); }
