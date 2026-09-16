@@ -154,6 +154,18 @@ chk("a CVE posted 100h ago has aged out (72h window)", "CVE-2026-99999" in recen
 chk("case-insensitive lookup", "cve-2026-76461".upper() in recent, True)
 hist.unlink()
 
+# Same incident, second half: CVE-2026-90553 posted 4x 11-15s apart in one
+# batch. A pre-loop history.jsonl snapshot can't see this — items accepted
+# earlier in the SAME run must also block later duplicates.
+dup = P._find_dup_cve(["CVE-2026-90553"], {}, {"CVE-2026-90553": "first phrasing"})
+chk("a CVE already accepted this run is caught", dup is not None, True)
+chk("...flagged as 'this run', not '72h'", dup[1] if dup else None, "this run")
+none = P._find_dup_cve(["CVE-2026-1"], {"CVE-2026-2": "x"}, {"CVE-2026-3": "y"})
+chk("an unrelated CVE is never flagged", none, None)
+recent_hit = P._find_dup_cve(["CVE-2026-76461"], {"CVE-2026-76461": "recent title"}, {})
+chk("a 72h-recent CVE takes priority over run_cves and is labelled '72h'",
+    recent_hit[1] if recent_hit else None, "72h")
+
 print()
 print(f"{'ALL PASS' if not fails else str(len(fails)) + ' FAILURES: ' + ', '.join(fails)}")
 sys.exit(1 if fails else 0)

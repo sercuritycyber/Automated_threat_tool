@@ -418,6 +418,21 @@ def load_decision(args) -> tuple[dict, list[dict], bool]:
     return dec, _posts_from(dec), False
 
 
+def _find_dup_cve(this_cves: list[str], recent_cves: dict[str, str],
+                   run_cves: dict[str, str]) -> tuple[str, str, str] | None:
+    """First CVE in `this_cves` (already upper-cased) that's either in
+    `recent_cves` (posted live within the lookback window) or `run_cves`
+    (already accepted earlier in this same batch). Returns
+    (cve, "72h"|"this run", title-of-the-earlier-post) or None."""
+    for c in this_cves:
+        if c in recent_cves:
+            return c, "72h", recent_cves[c]
+    for c in this_cves:
+        if c in run_cves:
+            return c, "this run", run_cves[c]
+    return None
+
+
 def _recently_posted_cves(hours: int = 72) -> dict[str, str]:
     """CVE id -> title of the most recent live post that covered it, within
     `hours`. Deliberately reads history.jsonl fresh every call rather than
@@ -561,7 +576,13 @@ def main() -> int:
     # catches stale items sitting in pending.json that get flushed by a bulk
     # --approve after other runs have already covered the same story — see
     # _recently_posted_cves' docstring for the incident that motivated this.
+    # `run_cves` additionally tracks CVEs accepted EARLIER IN THIS SAME LOOP:
+    # the 2026-09-16 incident also included CVE-2026-90553 posted 4 times
+    # 11-15s apart in one batch — history.jsonl only gets a row once a post
+    # actually goes out, so a pre-loop snapshot alone can't see a duplicate
+    # sitting elsewhere in the very same `posts` list.
     recent_cves = _recently_posted_cves()
+    run_cves: dict[str, str] = {}
 
     for p in posts:
         text = (p.get("post_text") or "").strip()
@@ -573,10 +594,12 @@ def main() -> int:
         if len(text) > limit:
             log(f"skip “{title[:50]}” — {len(text)} chars > {limit}")
             continue
-        dup_cve = next((c for c in (p.get("cve_ids") or []) if str(c).upper() in recent_cves), None)
-        if dup_cve:
-            log(f"skip “{title[:50]}” — {dup_cve} already posted within 72h "
-                f"(“{recent_cves[str(dup_cve).upper()][:50]}”)")
+        this_cves = [str(c).upper() for c in (p.get("cve_ids") or [])]
+        dup = _find_dup_cve(this_cves, recent_cves, run_cves)
+        if dup:
+            cve, where, earlier_title = dup
+            log(f"skip “{title[:50]}” — {cve} already posted ({where}) "
+                f"(“{earlier_title[:50]}”)")
             continue
         lane = lane_of(p)
         emergency = is_emergency(p, pub)
@@ -609,6 +632,8 @@ def main() -> int:
             log(f"runaway guard ({runaway}/run) — holding the rest for review")
             held.append({**p, "held_because": "runaway", "min_score": min_score})
             continue
+        for c in this_cves:
+            run_cves[c] = title
         to_post.append(p)
         would_post += 1
 
