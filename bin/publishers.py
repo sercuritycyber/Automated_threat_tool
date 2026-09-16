@@ -475,13 +475,20 @@ def post_discord(text: str, creds: dict, settings: dict, short_text=None, log=pr
     body = re.sub(r"(?<![\w./])cti\.securitycyber\.uk\b(?!/)", "https://cti.securitycyber.uk", text)
     body = body if len(body) <= 2000 else teaser(body, 1970, short_text)
     try:
-        r = requests.post(url, json={"content": body, "allowed_mentions": {"parse": []}},
+        # ?wait=true makes Discord return the created message (with its id)
+        # instead of a bare 204 — without it a duplicate can never be found
+        # and deleted after the fact (see the 2026-09-16 CVE-2026-90553
+        # incident: 4 copies posted in one run, 3 had to be cleaned up by
+        # hand on Discord because no message id had ever been recorded).
+        r = requests.post(f"{url}?wait=true",
+                          json={"content": body, "allowed_mentions": {"parse": []}},
                           headers={"User-Agent": UA}, timeout=20)
     except requests.RequestException as e:
         return _res("discord", False, error=str(e)[:300])
     if r.status_code not in (200, 204):
         return _res("discord", False, error=f"HTTP {r.status_code}: {r.text[:200]}")
-    return _res("discord", True, id="", url="")
+    msg = r.json() if r.content else {}
+    return _res("discord", True, id=msg.get("id", ""), url="")
 
 
 PROVIDERS = {
