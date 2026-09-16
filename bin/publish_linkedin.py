@@ -418,6 +418,35 @@ def load_decision(args) -> tuple[dict, list[dict], bool]:
     return dec, _posts_from(dec), False
 
 
+def _recently_posted_cves(hours: int = 72) -> dict[str, str]:
+    """CVE id -> title of the most recent live post that covered it, within
+    `hours`. Deliberately reads history.jsonl fresh every call rather than
+    caching — this must catch a CVE posted by a DIFFERENT run than the one
+    holding a stale candidate, which is exactly the gap that let
+    CVE-2026-76461 go out 4 times in <24h on 2026-09-16: items held in
+    state/pending.json for review (quality/cap/runaway-guard) were never
+    re-checked against what shipped elsewhere while they sat there, so a
+    2026-09-16 07:00 backlog flush (--approve) republished a story that had
+    already gone out three times over the previous day.
+    """
+    hist = STATE / "history.jsonl"
+    if not hist.exists():
+        return {}
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+    out: dict[str, str] = {}
+    for line in hist.read_text().splitlines():
+        try:
+            row = json.loads(line)
+            t = datetime.fromisoformat(row["posted_at"].replace("Z", "+00:00"))
+        except (json.JSONDecodeError, KeyError, ValueError):
+            continue
+        if t < cutoff:
+            continue
+        for cve in row.get("cve_ids") or []:
+            out[str(cve).upper()] = row.get("title", "")
+    return out
+
+
 # --------------------------------------------------------------------------- recording
 def record_dry(posts: list[dict]) -> None:
     with (STATE / "dry_runs.jsonl").open("a") as f:
@@ -527,6 +556,12 @@ def main() -> int:
     held: list[dict] = []
     used = count_last_24h()
     would_post = 0
+    # Hard gate, checked before anything else including the operator flag: a
+    # CVE that already went out live in the last 72h never posts again. This
+    # catches stale items sitting in pending.json that get flushed by a bulk
+    # --approve after other runs have already covered the same story — see
+    # _recently_posted_cves' docstring for the incident that motivated this.
+    recent_cves = _recently_posted_cves()
 
     for p in posts:
         text = (p.get("post_text") or "").strip()
@@ -537,6 +572,11 @@ def main() -> int:
             continue
         if len(text) > limit:
             log(f"skip “{title[:50]}” — {len(text)} chars > {limit}")
+            continue
+        dup_cve = next((c for c in (p.get("cve_ids") or []) if str(c).upper() in recent_cves), None)
+        if dup_cve:
+            log(f"skip “{title[:50]}” — {dup_cve} already posted within 72h "
+                f"(“{recent_cves[str(dup_cve).upper()][:50]}”)")
             continue
         lane = lane_of(p)
         emergency = is_emergency(p, pub)

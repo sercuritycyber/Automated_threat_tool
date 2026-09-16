@@ -136,6 +136,24 @@ chk("breaking post stands alone", [x["title"] for x in kept], ["brk"])
 chk("its companion is parked",
     [x["title"] for x in json.loads(P.SOCIAL_QUEUE.read_text())["queue"]], ["i1"])
 
+# ---- CVE repost gate (2026-09-16 incident: CVE-2026-76461 posted 4x in <24h
+# because a backlog flush via --approve never re-checked pending.json items
+# against what had already shipped in the meantime) ----------------------
+P.STATE = tmp
+hist = tmp / "history.jsonl"
+now = datetime.now(timezone.utc)
+hist.write_text(
+    json.dumps({"posted_at": (now - timedelta(hours=1)).isoformat(),
+                "cve_ids": ["CVE-2026-76461"], "title": "already posted"}) + "\n"
+    + json.dumps({"posted_at": (now - timedelta(hours=100)).isoformat(),
+                  "cve_ids": ["CVE-2026-99999"], "title": "too old to count"}) + "\n"
+)
+recent = P._recently_posted_cves()
+chk("a CVE posted 1h ago is in the recent set", "CVE-2026-76461" in recent, True)
+chk("a CVE posted 100h ago has aged out (72h window)", "CVE-2026-99999" in recent, False)
+chk("case-insensitive lookup", "cve-2026-76461".upper() in recent, True)
+hist.unlink()
+
 print()
 print(f"{'ALL PASS' if not fails else str(len(fails)) + ' FAILURES: ' + ', '.join(fails)}")
 sys.exit(1 if fails else 0)
