@@ -2751,5 +2751,6 @@ async def marketing_compose(request: Request):
 if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("CTI_UI_PORT", "8799"))
-    print(f"SecurityCyber Admin Center → http://127.0.0.1:{port}")
-    uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
+    host = os.getenv("CTI_UI_HOST", "127.0.0.1")
+    print(f"SecurityCyber Admin Center -> http://{host}:{port}")
+    uvicorn.run(app, host=host, port=port, log_level="warning")
