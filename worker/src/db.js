@@ -455,3 +455,15 @@ export async function pickMonthlyDrawWinners(db, foreverFreeEmails = [], count =
   }
   return { month: monthKey, pool_size: eligible.length, winners };
 }
+
+// ---- public feed (what actually went live on LinkedIn) ---------------
+export async function logPublicFeed(db, p) {
+  await run(db,
+    `INSERT INTO public_feed(title, text, source_url, linkedin_url, score, posted_at)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    String(p.title || '').slice(0, 300), String(p.text || '').slice(0, 5000),
+    p.source_url || '', p.linkedin_url || '', Number(p.score || 0), nowIso());
+}
+export const listPublicFeed = (db, limit = 20) =>
+  many(db, `SELECT title, text, source_url, linkedin_url, score, posted_at
+             FROM public_feed ORDER BY posted_at DESC LIMIT ?`, limit);

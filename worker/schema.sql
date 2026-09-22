@@ -150,3 +150,14 @@ CREATE TABLE IF NOT EXISTS ratelimit (
   count  INTEGER NOT NULL,
   reset_at INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS public_feed (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  title        TEXT NOT NULL,
+  text         TEXT NOT NULL,
+  source_url   TEXT,
+  linkedin_url TEXT,
+  score        INTEGER DEFAULT 0,
+  posted_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_public_feed_posted ON public_feed(posted_at);

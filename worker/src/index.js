@@ -207,6 +207,29 @@ async function route(request, env, ctx, url, path, cfg) {
   // ---- pipeline -> worker ----
   if (path === "/internal/ingest" && m === "POST") return internalIngest(request, env, cfg, ctx);
 
+  // Records a post at the moment it actually goes live on LinkedIn — used by
+  // both the automated pipeline and manual one-off posts, so it catches
+  // everything the decision.json/posts_log path can miss (held/skipped
+  // drafts, or a manually-fired post that never went through a full run).
+  if (path === "/internal/public-feed" && m === "POST") {
+    const auth = (request.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
+    if (!env.INGEST_SECRET || !timingSafeEqual(auth, env.INGEST_SECRET)) return json({ error: "unauthorized" }, 401);
+    let body; try { body = await request.json(); } catch { return json({ error: "bad json" }, 400); }
+    if (!body.title || !body.text) return json({ error: "title and text required" }, 400);
+    await db.logPublicFeed(D, body);
+    return json({ ok: true });
+  }
+
+  // Public, no auth — this is what securitycyber.uk's own feed page reads.
+  if (path === "/api/public-feed" && m === "GET") {
+    const limit = Math.min(Number(url.searchParams.get("limit")) || 20, 50);
+    const rows = await db.listPublicFeed(D, limit);
+    return json({ posts: rows }, 200, {
+      "Access-Control-Allow-Origin": "https://securitycyber.uk",
+      "Cache-Control": "public, max-age=120",
+    });
+  }
+
   // ---- owner admin API ----
   if (path.startsWith("/admin/")) return adminApi(request, env, cfg, url, path);
 

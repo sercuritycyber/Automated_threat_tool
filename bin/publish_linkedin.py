@@ -693,6 +693,30 @@ def main() -> int:
                        note=f"dry-run — {len(to_post)} post(s) not sent")
         return 0
 
+    def push_public_feed(p, results, log):
+        """Record a post on securitycyber.uk's own feed the moment it lands
+        on LinkedIn — catches manual one-off posts too, not just full runs."""
+        li = next((r for r in results if r.get("provider") == "linkedin" and r.get("ok")), None)
+        if not li:
+            return
+        import os as _os
+        worker_url = _os.getenv("CTI_WORKER_URL", "").rstrip("/")
+        secret = _os.getenv("CTI_INGEST_SECRET", "")
+        if not (worker_url and secret):
+            return
+        try:
+            requests.post(f"{worker_url}/internal/public-feed",
+                headers={"Authorization": f"Bearer {secret}"},
+                json={
+                    "title": p.get("title") or (p.get("post_text") or "")[:80],
+                    "text": p.get("short_text") or p.get("post_text") or "",
+                    "source_url": p.get("url") or "",
+                    "linkedin_url": li.get("url") or "",
+                    "score": p.get("score") or 0,
+                }, timeout=10)
+        except requests.RequestException as e:  # noqa — never let this sink a good post
+            log(f"public-feed record skipped ({e})")
+
     # ---- live -------------------------------------------------------------
     posted_rows: list[dict] = []
     failures: list[str] = []
@@ -715,6 +739,7 @@ def main() -> int:
             log(f"  {r['provider']}: {tag}  {r.get('url', '')}")
         if any(r["ok"] for r in results):
             posted_rows.append(record_real(p, results))
+            push_public_feed(p, results, log)
         else:
             failures.append(f"{p.get('title','')[:40]}: " + "; ".join(r["error"] for r in results)[:200])
 
