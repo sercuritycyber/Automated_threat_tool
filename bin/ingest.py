@@ -229,14 +229,22 @@ PRIMARY_WEIGHT = 0.85
 
 def fetch_epss(cve_ids: list[str], timeout: int) -> dict:
     """FIRST.org EPSS scores (probability of exploitation in the next 30 days).
-    Free, no API key. Batched at 90 CVEs/request per their documented limits."""
+    Free, no API key. Batched at 90 CVEs/request per their documented limits.
+
+    Deliberately does NOT send the shared browser-spoofing HEADERS (UA + Accept +
+    Accept-Language together) used for RSS feeds: that exact combination reliably
+    triggers a 400 "errorNotSupported" from FIRST.org, while no headers, or any
+    one of those three alone, works every time — looks like a bot-heuristic on
+    their side flagging the full browser-header signature from a non-browser TLS
+    stack. A bare, honest UA avoids it."""
     out: dict[str, float] = {}
     ids = sorted(set(cve_ids))
     for i in range(0, len(ids), 90):
         chunk = ids[i:i + 90]
         try:
             r = requests.get(
-                EPSS_URL, params={"cve": ",".join(chunk)}, headers=HEADERS, timeout=timeout
+                EPSS_URL, params={"cve": ",".join(chunk)},
+                headers={"User-Agent": "SecurityCyber-CTI/1.0"}, timeout=timeout
             )
             r.raise_for_status()
             for row in r.json().get("data", []):
