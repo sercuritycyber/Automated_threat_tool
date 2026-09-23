@@ -349,6 +349,16 @@ async function rssFeed(request, env, cfg, path) {
 }
 
 // ---------------------------------------------------------------- subscribe
+async function sendConfirmEmail(env, cfg, res) {
+  const t = await sign(env, { sub: res.subscriber_id, act: "confirm" }, 14 * 86400);
+  const where = res.channel ? chanLabel(res.channel.kind) : "email";
+  await send(env, cfg, "email", res.email, "Confirm your SecurityCyber CTI alerts",
+    `Thanks for subscribing — ${cfg.tiers[res.tier]?.free ? "the free feed" : `${res.tier} plan, billed ${res.cadence}`}.\n\n` +
+    `Confirm your email to switch your alerts on:\n\n${cfg.site_url}/confirm?t=${t}\n\n` +
+    `Your alerts will go to: ${where}.\nThis link works for 14 days. If you didn't subscribe, ignore this and email ${cfg.contact_email}.`);
+  await db.logEvent(env.DB, "confirm_email_sent", res.subscriber_id, { cadence: res.cadence });
+}
+
 async function subscribeSubmit(request, env, cfg) {
   const over = rl(request, "subscribe", cfg, 10); if (over) return over;
   const f = await form(request);
@@ -386,6 +396,19 @@ async function subscribeSubmit(request, env, cfg) {
     ip: clientIp(request), ua: request.headers.get("user-agent") || "",
     terms_version: cfg.terms_version, detail: `accepted at signup (${email})`,
   });
+  // A genuinely free tier has nothing to pay — routing it through Stripe
+  // anyway means inheriting its checkout, tax and address-collection
+  // machinery for no reason, which is real signup friction for zero benefit.
+  // Activate straight from the intent we already created.
+  if (tcfg.free) {
+    const intent = await db.getIntent(env.DB, intentTok);
+    const res = await billing.activateFromIntent(env.DB, {
+      email, tier, cadence, intent, source: "free",
+      eventTag: "free:signup",
+    });
+    if (res.action === "send_confirm") await sendConfirmEmail(env, cfg, res);
+    return redirect(`${cfg.site_url}/welcome`);
+  }
   // Prefer a Stripe Payment Link when one is configured: no API call, no
   // secret key needed, and the intent still rides along on the query string.
   const link = paymentLinkUrl(paymentLink(cfg, tier, cadence), { clientRef: intentTok, email });
@@ -487,13 +510,7 @@ async function stripeWebhook(request, env, cfg) {
   catch (e) { console.error("handleEvent", e); await notifyOwner(env, cfg, `webhook handler error: ${e}`); return json({ received: true, handler_error: String(e).slice(0, 200) }); }
 
   if (res.action === "send_confirm") {
-    const t = await sign(env, { sub: res.subscriber_id, act: "confirm" }, 14 * 86400);
-    const where = res.channel ? chanLabel(res.channel.kind) : "email";
-    await send(env, cfg, "email", res.email, "Confirm your SecurityCyber CTI alerts",
-      `Thanks for subscribing — ${cfg.tiers[res.tier]?.free ? "your 7-day free trial" : `${res.tier} plan, billed ${res.cadence}`}.\n\n` +
-      `Confirm your email to switch your alerts on:\n\n${cfg.site_url}/confirm?t=${t}\n\n` +
-      `Your alerts will go to: ${where}.\nThis link works for 14 days. If you didn't subscribe, ignore this and email ${cfg.contact_email}.`);
-    await db.logEvent(env.DB, "confirm_email_sent", res.subscriber_id, { cadence: res.cadence });
+    await sendConfirmEmail(env, cfg, res);
   } else if (res.action === "brief_purchased") {
     const topic = res.email ? await db.kvGet(env.DB, "brief_topic:" + res.email) : null;
     const amount = res.purchase?.amount_total != null

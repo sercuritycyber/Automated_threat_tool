@@ -181,6 +181,61 @@ function priceFromSubObj(o) {
 }
 
 // ---- event -> store ------------------------------------------
+// Turns a signup intent (already captured before any payment happened) into
+// a real subscriber. Shared by the Stripe webhook (source: "stripe") and the
+// direct free-tier path in index.js (source: "free", no Stripe involved at
+// all) — one activation path, so free and paid can never drift apart.
+export async function activateFromIntent(D, {
+  email, tier, cadence, intent, source, stripeCustomerId = null, stripeSubscriptionId = null,
+  eventTag, eventDetail = {},
+}) {
+  // An already-confirmed subscriber signing up again (upgrading tier,
+  // re-subscribing after pausing, a replayed event) must NOT be knocked back
+  // to 'unconfirmed' — that would cut their alerts until they re-confirmed.
+  // Only a genuinely new / never-confirmed / lapsed account gets the double
+  // opt-in.
+  const prior = await db.getByEmail(D, email);
+  const alreadyLive = prior && ["active", "paused", "past_due"].includes(prior.status);
+  const sid = await db.createPending(D, { email, tier, cadence, source, stripe_customer_id: stripeCustomerId });
+  if (stripeCustomerId || stripeSubscriptionId) {
+    await db.setStripeIds(D, sid, { customer_id: stripeCustomerId, subscription_id: stripeSubscriptionId });
+  }
+  // A real Stripe subscription supersedes any free-promo / timed-comp clock:
+  // Stripe now owns the renewal, so drop the Worker-managed term. A genuinely
+  // free signup has no such clock to begin with.
+  if (stripeSubscriptionId) await db.setTermEnd(D, sid, null);
+  if (eventTag) await db.logEvent(D, eventTag, sid, eventDetail);
+  // Which delivery channel did they pick? An explicit intent kind wins; with
+  // no usable intent, email is the default (it's the address we're about to
+  // confirm). Marking the email row label 'signup' is what turns it from
+  // "just the account id" into a channel alerts actually go to —
+  // activateSubscriber verifies it on confirm.
+  let channel = intent?.channel_kind
+    ? { kind: intent.channel_kind, target: intent.channel_target || "" }
+    : { kind: "email", target: email };
+  if (channel.kind === "email") {
+    await db.addChannel(D, sid, "email", email, alreadyLive, "signup");
+  } else if (channel.target) {
+    await db.addChannel(D, sid, channel.kind, channel.target, alreadyLive, "signup");
+  } else if (channel.kind === "discord" || channel.kind === "telegram") {
+    // Connected after signup via OAuth / a bot deep-link, so there's no
+    // target to store yet — but record the CHOICE as an unverified,
+    // empty-target row so activateSubscriber knows to email them the
+    // one-click connect link instead of silently doing nothing. This row is
+    // never itself a deliverable channel, so it must never be marked
+    // verified — not even for an already-live subscriber re-checking out.
+    await db.addChannel(D, sid, channel.kind, "", false, "signup");
+  }
+  if (intent) await db.consumeIntent(D, intent.token);
+  if (alreadyLive) {
+    // keep them where they were (active stays active; paused stays paused)
+    if (prior.status !== "active") await db.setStatus(D, sid, prior.status, `${source} signup (existing subscriber)`);
+    return { action: "synced", subscriber_id: sid, email, tier, cadence, channel };
+  }
+  await db.setStatus(D, sid, "unconfirmed", `${source} signup`);
+  return { action: "send_confirm", subscriber_id: sid, email, tier, cadence, channel };
+}
+
 export async function handleEvent(env, cfg, event) {
   const D = env.DB;
   const eid = event.id || "";
@@ -237,51 +292,11 @@ export async function handleEvent(env, cfg, event) {
     tier = tier || "individual";
     cadence = ["monthly", "weekly"].includes(cadence) ? cadence : "monthly";
     if (email) {
-      // An already-confirmed subscriber going through checkout again (upgrading
-      // tier, re-subscribing after pausing, a Stripe event replay with a new id)
-      // must NOT be knocked back to 'unconfirmed' — that would cut their alerts
-      // until they re-confirmed. Only a genuinely new / never-confirmed / lapsed
-      // account gets the double opt-in.
-      const prior = await db.getByEmail(D, email);
-      const alreadyLive = prior && ["active", "paused", "past_due"].includes(prior.status);
-      const sid = await db.createPending(D, { email, tier, cadence, source: "stripe", stripe_customer_id: customer });
-      await db.setStripeIds(D, sid, { customer_id: customer, subscription_id: subscription });
-      // A real Stripe subscription supersedes any free-promo / timed-comp clock:
-      // Stripe now owns the renewal, so drop the Worker-managed term.
-      if (subscription) await db.setTermEnd(D, sid, null);
-      await db.logEvent(D, "stripe:checkout_completed", sid, { session: obj.id, cadence });
-      // Which delivery channel did they pick? An explicit intent kind wins;
-      // with no usable intent, email is the default (it's the address we're
-      // about to confirm). Marking the email row label 'signup' is what turns
-      // it from "just the account id" into a channel alerts actually go to —
-      // activateSubscriber verifies it on confirm.
-      let channel = intent?.channel_kind
-        ? { kind: intent.channel_kind, target: intent.channel_target || "" }
-        : { kind: "email", target: email };
-      if (channel.kind === "email") {
-        await db.addChannel(D, sid, "email", email, alreadyLive, "signup");
-      } else if (channel.target) {
-        await db.addChannel(D, sid, channel.kind, channel.target, alreadyLive, "signup");
-      } else if (channel.kind === "discord" || channel.kind === "telegram") {
-        // Connected after checkout via OAuth / a bot deep-link, so there's no
-        // target to store yet — but record the CHOICE as an unverified,
-        // empty-target row so activateSubscriber knows to email them the
-
-        // one-click connect link instead of silently doing nothing. This row
-        // is never itself a deliverable channel, so it must never be marked
-        // verified — not even for an already-live subscriber re-checking out.
-        await db.addChannel(D, sid, channel.kind, "", false, "signup");
-
-      }
-      if (intent) await db.consumeIntent(D, clientRef);
-      if (alreadyLive) {
-        // keep them where they were (active stays active; paused stays paused)
-        if (prior.status !== "active") await db.setStatus(D, sid, prior.status, "checkout complete (existing subscriber)");
-        result = { action: "synced", subscriber_id: sid, email, tier, cadence, channel };
-      } else {
-        await db.setStatus(D, sid, "unconfirmed", "checkout complete");
-        result = { action: "send_confirm", subscriber_id: sid, email, tier, cadence, channel };
-      }
+      result = await activateFromIntent(D, {
+        email, tier, cadence, intent, source: "stripe",
+        stripeCustomerId: customer, stripeSubscriptionId: subscription,
+        eventTag: "stripe:checkout_completed", eventDetail: { session: obj.id, cadence },
+      });
     } else {
       result = { action: "error", detail: "no email on checkout session" };
     }
