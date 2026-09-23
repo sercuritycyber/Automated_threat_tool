@@ -366,13 +366,35 @@ def check_tests() -> None:
         " | ".join(bad) or "all green")
 
 
-# ------------------------------------------- 10. the emergency sweep is armed
-def check_sweep_armed() -> None:
-    r = subprocess.run(["systemctl", "--user", "is-active", "cti-emergency.timer"],
-                       capture_output=True, text=True)
-    state = r.stdout.strip()
-    rec("PASS" if state == "active" else "FAIL", "emergency sweep timer",
-        state or "not installed")
+# ------------------------------------------- 10. every scheduled job is armed AND working
+# An active timer only proves the job is scheduled. cti-emergency sat "active"
+# through 338 consecutive exec failures, so the last run's result is what counts.
+# cti-audit is excluded: it exits non-zero by design whenever it finds a FAIL.
+SCHEDULED_UNITS = ("cti-harvester", "cti-emergency", "cti-digest", "cti-backup",
+                   "cti-marketing", "cti-retention")
+
+
+def check_units() -> None:
+    for unit in SCHEDULED_UNITS:
+        timer = subprocess.run(["systemctl", "--user", "is-active", f"{unit}.timer"],
+                               capture_output=True, text=True).stdout.strip()
+        if timer != "active":
+            rec("FAIL", f"{unit} timer", timer or "not installed")
+            continue
+        props = dict(
+            line.split("=", 1) for line in subprocess.run(
+                ["systemctl", "--user", "show", f"{unit}.service",
+                 "-p", "Result", "-p", "ExecMainStatus", "-p", "ExecMainExitTimestamp"],
+                capture_output=True, text=True).stdout.splitlines() if "=" in line)
+        result, status = props.get("Result", "?"), props.get("ExecMainStatus", "?")
+        last = props.get("ExecMainExitTimestamp", "")
+        if not last:
+            rec("WARN", f"{unit}", "timer armed, no run since boot yet")
+        elif result == "success" and status == "0":
+            rec("PASS", f"{unit}", f"last run ok ({last})")
+        else:
+            rec("FAIL", f"{unit}", f"last run {result} exit {status} ({last}) — "
+                f"journalctl --user -u {unit}.service")
 
 
 def main() -> int:
@@ -382,7 +404,7 @@ def main() -> int:
 
     for fn in (check_settings, check_lint, check_shaper, check_live_posts,
                check_windows, check_queue, check_no_quality_holds,
-               check_emergency, check_tests, check_sweep_armed):
+               check_emergency, check_tests, check_units):
         try:
             fn()
         except Exception as e:  # noqa: BLE001 — one broken check must not hide the rest
