@@ -142,12 +142,12 @@ ${esc(legal)}${ico} · Independent UK blue-team security advisory.<br>
 }
 
 export const CHAN_META = {
-  email: ["Email", "the address to send alerts to", "you@example.com"],
+  email: ["Email", "nothing more to type — alerts go to the email above", ""],
   rss: ["RSS feed", "nothing here — we'll mint you a private feed URL for your reader", ""],
   discord: ["Discord", "nothing here — you'll get a one-click link to join our Discord, and alerts arrive as a DM", ""],
   discord_webhook: ["Discord (your own server)", "a channel webhook URL (Server Settings → Integrations → Webhooks → New Webhook → Copy URL)", "https://discord.com/api/webhooks/…"],
   slack: ["Slack", "an incoming-webhook URL (api.slack.com/messaging/webhooks)", "https://hooks.slack.com/services/…"],
-  telegram: ["Telegram", "nothing here — after payment you'll get a one-tap link to our bot", ""],
+  telegram: ["Telegram", "nothing here — once you confirm your email you'll get a one-tap link to our bot", ""],
   webhook: ["Webhook", "an https:// URL we POST JSON to", "https://example.com/hook"],
   ntfy: ["ntfy", "a full topic URL", "https://ntfy.sh/my-topic"],
 };
@@ -501,15 +501,15 @@ and I want alerts to start straight away.</label>
 <div class=row style="margin-top:16px"><button class=btn>${isFree ? "Start the free trial →" : "Continue to payment →"}</button>
 <a class="btn ghost" href="/">Back</a></div>
 <p class=muted style="margin-top:10px">${isFree
-    ? "7-day free trial, no card. Same secure sign-up (Stripe, £0), then confirm your email and alerts start. It stops after 7 days unless you upgrade — nothing happens automatically."
+    ? "7-day free trial — no card, no payment details, just your email. Confirm it and alerts start. It stops after 7 days unless you upgrade — nothing happens automatically."
     : "Card details are handled by Stripe — they never touch our servers."}
 Questions: <a href="mailto:${esc(contact)}">${esc(contact)}</a>.</p>
 </form>
 <script>(function(){var s=document.getElementById('plat'),h=document.getElementById('hint'),t=document.getElementById('tgt');
 function u(){var o=s.options[s.selectedIndex];h.textContent=o.getAttribute('data-hint')||'';t.placeholder=o.getAttribute('data-ph')||'';
-// telegram, discord and rss need nothing typed — we mint the feed id, deep-link
-// the bot, or run the Discord OAuth after payment. Hide the box for those.
-var noInput=(s.value==='telegram'||s.value==='rss'||s.value==='discord');
+// email reuses the account address above (the server ignores this box for it);
+// telegram, discord and rss need nothing typed either. Hide the box for those.
+var noInput=(s.value==='email'||s.value==='telegram'||s.value==='rss'||s.value==='discord');
 if(noInput){t.style.display='none';t.required=false;t.value='';}else{t.style.display='';t.required=true;}}
 s.addEventListener('change',u);u();})();</script>`;
   return page(cfg, `Subscribe — ${tier}`, body, flash, flashKind);
