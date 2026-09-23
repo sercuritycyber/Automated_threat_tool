@@ -110,6 +110,9 @@ esac
 set -e
 if [[ "$ANALYST_RC" -ne 0 ]]; then
   echo "[run] all analyst engines failed ($ANALYST_RC) — deterministic fallback for subscribers"
+  # Without this, a lapsed claude login stops public posting with no signal —
+  # subscribers still get unverified alerts, so nothing else looks broken.
+  python3 "$ROOT/bin/notify.py" "CTI analyst unavailable (exit $ANALYST_RC) — ran deterministic fallback: unverified subscriber alerts only, no public post. Check 'claude -p' auth on the VM. Log: $LOG" high || true
   python3 "$ROOT/bin/analyst_fallback.py" || echo "[run] analyst_fallback returned $? (non-fatal)"
 fi
 

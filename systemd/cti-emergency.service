@@ -8,7 +8,7 @@ Type=oneshot
 WorkingDirectory=%h/Threatintel
 # Costs no analyst tokens when nothing is burning: it only polls the CISA KEV
 # catalogue and the primary sources, and calls run.sh if something is on fire.
-ExecStart=%h/Threatintel/.venv/bin/python %h/Threatintel/bin/emergency_sweep.py
+ExecStart=/usr/bin/env python3 %h/Threatintel/bin/emergency_sweep.py
 Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 TimeoutStartSec=1500
 Nice=5
