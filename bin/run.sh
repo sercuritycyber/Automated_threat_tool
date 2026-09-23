@@ -71,29 +71,21 @@ fi
 echo "[run] $CAND_COUNT candidates queued for the analyst  ($USED/$MAXDAY posts used today)"
 
 # --- Analyst engine — config/settings.yaml -> analyst.engine ------------
-#   claude       claude -p first (full verified analyst), then Antigravity
-#                (Gemini), then local ollama, then the deterministic fallback.
-#                This is the default: Claude leads, ollama is the safety net.
-#   ollama       local model only; deterministic fallback if it's down.
-#                0 Claude tokens.
-#   antigravity  Antigravity (Gemini) first, then ollama, then deterministic.
-#   openai       OpenAI API first, then ollama, then deterministic.
-#   auto         ollama triage, then a NARROW claude -p deep pass on just the
-#                KEV/high-score items (state/escalate.json) when
-#                analyst.deep_pass; full claude -p if ollama triage fails.
+#   claude       claude -p (full verified analyst), then Antigravity (Gemini)
+#                as the sole backup, then the deterministic fallback. This is
+#                the default.
+#   antigravity  Antigravity (Gemini) first, then deterministic.
 ENGINE="$(python3 - <<'PYEOF'
 import pathlib
 try:
     import yaml
     s = yaml.safe_load(pathlib.Path("config/settings.yaml").read_text()) or {}
     a = s.get("analyst") or {}
-    print((a.get("engine") or "claude").strip().lower(),
-          "1" if a.get("deep_pass") else "0")
+    print((a.get("engine") or "claude").strip().lower())
 except Exception:
-    print("claude 0")
+    print("claude")
 PYEOF
 )"
-DEEP="${ENGINE##* }"; ENGINE="${ENGINE%% *}"
 echo "[run] stage 2/4 : analyst (engine=$ENGINE)"
 
 run_claude_analyst() {
@@ -104,54 +96,14 @@ run_claude_analyst() {
 set +e
 ANALYST_RC=1
 case "$ENGINE" in
-  ollama|auto)
-    python3 "$ROOT/bin/analyst_ollama.py"; ANALYST_RC=$?
-    if [[ "$ANALYST_RC" -eq 0 && "$ENGINE" == "auto" && "$DEEP" == "1" && -s "$ROOT/state/escalate.json" ]]; then
-      HOT=$(python3 -c 'import json;print(len(json.load(open("state/escalate.json")).get("candidates",[])))' 2>/dev/null || echo 0)
-      if [[ "${HOT:-0}" -gt 0 ]]; then
-        echo "[run] auto: $HOT high-impact item(s) -> claude -p deep pass"
-        claude -p "$(cat "$ROOT/prompts/analyst.md")
-
-DEEP-PASS MODE: state/escalate.json lists the only stories to work this run.
-WebFetch and write a full verified brief for each, MERGE them into the existing
-state/decision.json (keep the ollama alerts for everything else, replace or add
-the escalated ones with your verified version, and you MAY set decision=post
-for any that clearly warrant it). Leave all other fields intact." \
-          --allowedTools "Read,Write,WebFetch" --permission-mode acceptEdits || echo "[run] deep pass returned $? (kept the ollama triage)"
-      fi
-    fi
-    if [[ "$ANALYST_RC" -ne 0 && "$ENGINE" == "auto" ]]; then
-      echo "[run] ollama triage failed ($ANALYST_RC) — full claude -p analyst"
-      run_claude_analyst; ANALYST_RC=$?
-    fi
-    ;;
   antigravity)
     python3 "$ROOT/bin/analyst_antigravity.py"; ANALYST_RC=$?
-    if [[ "$ANALYST_RC" -ne 0 ]]; then
-      echo "[run] Antigravity unavailable ($ANALYST_RC) — trying local ollama"
-      python3 "$ROOT/bin/analyst_ollama.py"; ANALYST_RC=$?
-    fi
-    ;;
-  openai)
-    python3 "$ROOT/bin/analyst_openai.py"; ANALYST_RC=$?
-    if [[ "$ANALYST_RC" -ne 0 ]]; then
-      echo "[run] OpenAI unavailable ($ANALYST_RC) — trying local ollama"
-      python3 "$ROOT/bin/analyst_ollama.py"; ANALYST_RC=$?
-    fi
     ;;
   claude|*)
     run_claude_analyst; ANALYST_RC=$?
     if [[ "$ANALYST_RC" -ne 0 ]]; then
       echo "[run] claude analyst exited $ANALYST_RC — trying Antigravity (Gemini) backup"
       python3 "$ROOT/bin/analyst_antigravity.py"; ANALYST_RC=$?
-    fi
-    if [[ "$ANALYST_RC" -ne 0 ]]; then
-      echo "[run] Gemini unavailable ($ANALYST_RC) — trying OpenAI backup"
-      python3 "$ROOT/bin/analyst_openai.py"; ANALYST_RC=$?
-    fi
-    if [[ "$ANALYST_RC" -ne 0 ]]; then
-      echo "[run] Antigravity unavailable ($ANALYST_RC) — trying local ollama backup"
-      python3 "$ROOT/bin/analyst_ollama.py"; ANALYST_RC=$?
     fi
     ;;
 esac
