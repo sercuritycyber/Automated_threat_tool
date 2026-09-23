@@ -51,6 +51,7 @@ We do no automated decision-making with legal effect, do not advertise to you, a
 | Stripe Payments Europe, Ltd. | Payments, subscription billing, the billing portal | Ireland / USA — Stripe DPA + SCCs / UK Addendum |
 | Cloudflare, Inc. | Hosting the service and its database (Workers + D1) | Global edge; Cloudflare DPA + SCCs. UK data centres available in-region |
 | Resend (Plane, Inc.) | Sending alert and account emails | USA — DPA + SCCs |
+| Google LLC (Google Analytics 4) | Aggregate website usage statistics on our public pages — see [Cookies](/cookies). Never receives your account details or the tokens in your account links | USA — Google Ads Data Processing Terms + SCCs |
 | Discord / Slack / Telegram | Only if you choose those channels — they receive the alert content you asked us to send there | Per their own terms; you control this by adding/removing the channel |
 
 ## International transfers
@@ -151,11 +152,18 @@ These terms are governed by the law of England and Wales, and the courts of Engl
 
 const COOKIES = `# Cookies
 
-**Last updated:** {{terms_version}}
+**Last updated:** 2026-09-23
 
-The {{brand}} CTI site at {{site}} does **not** set any cookies and does not use analytics, tracking pixels, fingerprinting or third-party advertising scripts.
+## Analytics (Google Analytics 4)
 
-The only state we keep about you is your account record in our database, created when you subscribe. Preference and unsubscribe links are signed tokens in the URL, not cookies.
+We use Google Analytics on {{site}}, the same as on our main site, to see which pages help people and where the sign-up process loses them.
+
+- **Until you click "Accept"**, Google Analytics runs in consent mode with analytics cookies **switched off**: no cookie is set and nothing is stored on your device. It sends cookieless, aggregate measurement pings (page viewed, sign-up completed) that do not identify you.
+- **If you click "Accept"**, it sets Google Analytics cookies (\`_ga\`, \`_ga_*\`, up to 2 years) so repeat visits can be counted, plus one cookie of ours, \`sc_cookie_ok\` (1 year), to remember your choice. That choice is shared with securitycyber.uk so you are only asked once.
+- To withdraw consent, clear your cookies for securitycyber.uk.
+- We never send your email, account details, or the signed tokens in your account links to Google, and we use no advertising features, tracking pixels or fingerprinting.
+
+Your account itself uses no cookies: preference and unsubscribe links are signed tokens in the URL.
 
 ## Payment pages
 

@@ -113,6 +113,39 @@ border-radius:var(--radius-lg);padding:32px;text-align:center;margin:44px 0}
 .who b{color:var(--white);font-family:var(--display);display:block;margin-bottom:3px}
 `;
 
+// GA4 in consent mode, same as securitycyber.uk: loads everywhere, analytics
+// cookies stay denied until the visitor accepts. Consent is a cookie on
+// .securitycyber.uk (not localStorage) so one "Accept" covers both sites.
+// Signed account tokens travel in ?t= (confirm/manage/unsubscribe) — the page
+// URL and referrer are rebuilt from an allowlist so a token can never reach GA.
+function gaHead(cfg) {
+  const id = cfg.ga_measurement_id || "";
+  if (!/^G-[A-Z0-9]+$/.test(id)) return "";
+  return `<script async src="https://www.googletagmanager.com/gtag/js?id=${id}"></script>
+<script>(function(){window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}window.gtag=gtag;
+var ok=/(?:^|; )sc_cookie_ok=1(?:;|$)/.test(document.cookie);
+gtag('consent','default',{analytics_storage:ok?'granted':'denied',ad_storage:'denied',ad_user_data:'denied',ad_personalization:'denied'});
+var KEEP=['tier','cadence','utm_source','utm_medium','utm_campaign','utm_term','utm_content'];
+function clean(u){try{var x=new URL(u),k=new URLSearchParams();KEEP.forEach(function(p){var v=x.searchParams.get(p);if(v)k.set(p,v);});var s=k.toString();return x.origin+x.pathname+(s?'?'+s:'');}catch(e){return '';}}
+gtag('js',new Date());
+gtag('config','${id}',{page_location:clean(location.href),page_referrer:document.referrer?clean(document.referrer):''});
+var q=new URLSearchParams(location.search);
+if(location.pathname==='/welcome')gtag('event','sign_up');
+if(location.pathname==='/subscribe'&&q.get('k')==='bad')gtag('event','signup_error',{tier:q.get('tier')||'',reason:(q.get('m')||'').slice(0,100)});
+})();</script>`;
+}
+
+function consentBanner(cfg) {
+  if (!/^G-[A-Z0-9]+$/.test(cfg.ga_measurement_id || "")) return "";
+  return `<div id=ck style="display:none;position:fixed;left:12px;right:12px;bottom:12px;max-width:560px;margin:0 auto;z-index:50;background:var(--card,#111827);border:1px solid var(--line,#1f2937);border-radius:10px;padding:12px 14px;font-size:14px;align-items:center;gap:12px">
+<span style="flex:1">We use a Google Analytics cookie to see which pages help people, only if you accept. <a href="/cookies">Cookies</a>.</span>
+<button class=btn type=button id=ckok style="padding:6px 14px">Accept</button></div>
+<script>(function(){var b=document.getElementById('ck');if(/(?:^|; )sc_cookie_ok=1(?:;|$)/.test(document.cookie))return;b.style.display='flex';
+document.getElementById('ckok').onclick=function(){var d=/(^|\\.)securitycyber\\.uk$/.test(location.hostname)?'; Domain=.securitycyber.uk':'';
+document.cookie='sc_cookie_ok=1; Path=/; Max-Age=31536000; SameSite=Lax; Secure'+d;
+if(window.gtag)gtag('consent','update',{analytics_storage:'granted'});b.style.display='none';};})();</script>`;
+}
+
 export function page(cfg, title, body, flash = "", flashKind = "", noindex = false) {
   const fl = flash ? `<div class="flash ${flashKind}">${esc(flash)}</div>` : "";
   const ico = cfg.ico_reg ? ` · ICO registration ${esc(cfg.ico_reg)}` : "";
@@ -123,7 +156,7 @@ export function page(cfg, title, body, flash = "", flashKind = "", noindex = fal
 <meta name=viewport content="width=device-width,initial-scale=1">
 <meta name=robots content="${robots}"><meta name=color-scheme content="dark">
 <title>${esc(title)} · SecurityCyber CTI</title><link rel=icon href="/logo.svg">
-<style>${CSS}</style></head><body><div class=wrap>
+<style>${CSS}</style>${gaHead(cfg)}</head><body><div class=wrap>
 <nav><a class=brand href="/">${LOGO_SVG}<b>Security<span>Cyber</span></b> <span class=tag style="font:400 12px var(--mono);color:var(--dim)">/ CTI</span></a>
 <span class=links>
 <a href="${esc(cfg.main_site)}/services">Services</a>
@@ -138,7 +171,7 @@ ${esc(legal)}${ico} · Independent UK blue-team security advisory.<br>
 <a href="${esc(cfg.main_site)}/services">Services</a> ·
 <a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="/cookies">Cookies</a> ·
 <a href="mailto:${esc(contact)}">${esc(contact)}</a></footer>
-</div></body></html>`;
+</div>${consentBanner(cfg)}</body></html>`;
 }
 
 export const CHAN_META = {

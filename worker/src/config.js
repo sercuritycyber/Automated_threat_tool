@@ -134,6 +134,9 @@ export function config(env) {
   c.brand = env.BRAND || "SecurityCyber";
   c.site_url = (env.SITE_URL || "").replace(/\/$/, "");
   c.main_site = env.MAIN_SITE || "https://securitycyber.uk";
+  // Same GA4 property as securitycyber.uk, so a visit is one journey across both.
+  // GA_MEASUREMENT_ID="" disables it.
+  c.ga_measurement_id = env.GA_MEASUREMENT_ID ?? "G-F43K0Y370J";
   c.from_email = env.FROM_EMAIL || "";
   c.contact_email = env.CONTACT_EMAIL || env.SUPPORT_EMAIL || "";
   c.support_email = env.SUPPORT_EMAIL || env.CONTACT_EMAIL || "";

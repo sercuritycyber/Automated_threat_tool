@@ -13,7 +13,11 @@ const SECURITY_HEADERS = {
   "Permissions-Policy": "geolocation=(), microphone=(), camera=()",
   "Content-Security-Policy":
     "default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
-    "font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; script-src 'self' 'unsafe-inline'; " +
+    "font-src 'self' https://fonts.gstatic.com; " +
+    // GA4 (consent mode) — Google's documented host set for gtag.js
+    "img-src 'self' data: https://*.google-analytics.com https://*.googletagmanager.com; " +
+    "script-src 'self' 'unsafe-inline' https://*.googletagmanager.com; " +
+    "connect-src 'self' https://*.google-analytics.com https://*.analytics.google.com https://*.googletagmanager.com; " +
     // Stripe hosted Checkout (API sessions) + Stripe Payment Links (buy.stripe.com):
     // "Continue to payment" is a POST to /subscribe that 303-redirects to one of
     // these, and some browsers still check form-action against the redirect target.
