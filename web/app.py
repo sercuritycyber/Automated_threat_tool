@@ -1045,7 +1045,8 @@ def _rewrite_text(cur: str) -> str:
     if not cur:
         return ""
     try:
-        proc = subprocess.run(["claude", "-p", REWRITE_PROMPT % cur, "--allowedTools", ""],
+        proc = subprocess.run(["claude", "-p", REWRITE_PROMPT % cur, "--allowedTools", "",
+                               "--settings", str(ROOT / "config" / "claude-untrusted.json")],
                                cwd=ROOT, capture_output=True, text=True, timeout=120,
                                env=_env_with_config())
         new = proc.stdout.strip()
@@ -1147,7 +1148,9 @@ def _claude_draft_one(cand: dict) -> tuple[dict | None, str]:
     }
     try:
         proc = subprocess.run(
-            ["claude", "-p", prompt, "--allowedTools", "WebFetch"],
+            # candidate text is untrusted; same hard deny rules as the analyst
+            ["claude", "-p", prompt, "--allowedTools", "WebFetch",
+             "--settings", str(ROOT / "config" / "claude-untrusted.json")],
             cwd=ROOT, capture_output=True, text=True, timeout=240, env=_env_with_config(),
         )
     except (subprocess.TimeoutExpired, FileNotFoundError) as ex:

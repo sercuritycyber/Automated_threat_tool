@@ -88,9 +88,14 @@ PYEOF
 )"
 echo "[run] stage 2/4 : analyst (engine=$ENGINE)"
 
+# The analyst reads hostile feed text and fetches arbitrary article URLs, so a
+# prompt injection is in scope. config/claude-untrusted.json hard-denies reading
+# secrets (/proc included — config/env is exported into this env) and editing
+# anything but state/. Deny rules beat --allowedTools and acceptEdits.
 run_claude_analyst() {
   claude -p "$(cat "$ROOT/prompts/analyst.md")" \
-    --allowedTools "Read,Write,WebFetch" --permission-mode acceptEdits
+    --allowedTools "Read,Write,WebFetch" --permission-mode acceptEdits \
+    --settings "$ROOT/config/claude-untrusted.json"
 }
 
 set +e

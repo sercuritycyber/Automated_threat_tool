@@ -1,0 +1,40 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(./config/env)",
+      "Read(./config/env.*)",
+      "Read(./config/settings.yaml)",
+      "Read(./config/settings.yaml.*)",
+      "Read(./worker/.dev.vars)",
+      "Read(./**/*.key)",
+      "Read(./**/*.pem)",
+      "Read(~/.ssh/**)",
+      "Read(~/.claude.json)",
+      "Read(~/.claude/**)",
+      "Read(~/.config/**)",
+      "Read(//proc/**)",
+      "Edit(./bin/**)",
+      "Edit(./lib/**)",
+      "Edit(./web/**)",
+      "Edit(./worker/**)",
+      "Edit(./systemd/**)",
+      "Edit(./config/**)",
+      "Edit(./prompts/**)",
+      "Edit(./tests/**)",
+      "Edit(./.claude/**)",
+      "Edit(./.github/**)",
+      "Edit(./*.sh)",
+      "Edit(./*.py)",
+      "Edit(./requirements*.txt)",
+      "Edit(~/.bashrc)",
+      "Edit(~/.bash_profile)",
+      "Edit(~/.profile)",
+      "Edit(~/.ssh/**)",
+      "Edit(~/.config/**)",
+      "Edit(~/.local/**)",
+      "Edit(~/.claude/**)",
+      "Bash",
+      "NotebookEdit"
+    ]
+  }
+}
