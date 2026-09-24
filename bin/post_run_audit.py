@@ -371,7 +371,7 @@ def check_tests() -> None:
 # through 338 consecutive exec failures, so the last run's result is what counts.
 # cti-audit is excluded: it exits non-zero by design whenever it finds a FAIL.
 SCHEDULED_UNITS = ("cti-harvester", "cti-emergency", "cti-digest", "cti-backup",
-                   "cti-marketing", "cti-retention")
+                   "cti-marketing", "cti-retention", "cti-smithers")
 
 
 def check_units() -> None:
