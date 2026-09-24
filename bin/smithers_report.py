@@ -2,8 +2,9 @@
 """Smithers — read-only CTI pipeline health reporter for Paperclip (nightshift).
 
 Runs hourly from cti-smithers.timer. Reads pipeline health on this box and
-posts to Paperclip: one summary a day on the standing "Pipeline health" task,
-a high-priority task when something breaks, and a note when it recovers.
+posts to Paperclip: one summary a day filed under the standing "Pipeline
+health" task, a high-priority task when something breaks, and a note under
+that alert when it recovers.
 
 Only numbers, statuses and fixed labels leave this box. Feed and log text is
 untrusted and Paperclip agents read these reports, so none of it is copied in.
@@ -223,25 +224,43 @@ def main() -> int:
         print(f"[smithers] missing config: {', '.join(missing)}", file=sys.stderr)
         return 1
 
+    # Paperclip lets an agent key CREATE tasks without a heartbeat run, but
+    # commenting on / editing another task needs one. So Smithers only ever
+    # creates tasks: reports are child tasks filed already-done under their
+    # parent. State is saved after every successful post so a later failure
+    # can never cause a duplicate.
+    def save() -> None:
+        STATE.write_text(json.dumps(state, indent=2))
+
+    def create(title: str, body: str, status: str, priority: str, parent: str | None = None) -> dict:
+        payload = {"title": title, "description": body, "status": status, "priority": priority,
+                   "projectId": env["SMITHERS_PROJECT_ID"]}
+        if parent:
+            payload["parentId"] = parent
+        return api(env, "POST", f"/api/companies/{env['SMITHERS_COMPANY_ID']}/issues", payload)
+
+    stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
     if problems and sig != state.get("alert_sig", ""):
         if state.get("alert_issue"):
-            api(env, "POST", f"/api/issues/{state['alert_issue']}/comments", {"body": "**Changed:**\n\n" + md})
+            create(f"Alert changed {stamp}: {len(problems)} problem(s)", md, "done", "high", state["alert_issue"])
         else:
-            issue = api(env, "POST", f"/api/companies/{env['SMITHERS_COMPANY_ID']}/issues", {
-                "title": f"Pipeline alert: {len(problems)} problem(s)", "description": md,
-                "priority": "high", "status": "todo", "projectId": env["SMITHERS_PROJECT_ID"]})
+            issue = create(f"Pipeline alert: {len(problems)} problem(s)", md, "todo", "high")
             state["alert_issue"] = issue.get("id")
         state["alert_sig"] = sig
+        save()
     elif not problems and state.get("alert_issue"):
-        api(env, "POST", f"/api/issues/{state['alert_issue']}/comments", {"body": "**Recovered — all clear.**\n\n" + md})
+        create(f"Recovered {stamp} — all clear", md + "\n\nClose the parent alert when you've read this.",
+               "done", "medium", state["alert_issue"])
         state.pop("alert_issue", None)
         state["alert_sig"] = ""
+        save()
 
     if want_summary:
-        api(env, "POST", f"/api/issues/{env['SMITHERS_HEALTH_ISSUE_ID']}/comments", {"body": md})
+        status_word = "all clear" if not problems else f"{len(problems)} problem(s)"
+        create(f"Pipeline health — {today} ({status_word})", md, "done", "low", env["SMITHERS_HEALTH_ISSUE_ID"])
         state["last_summary"] = today
+        save()
 
-    STATE.write_text(json.dumps(state, indent=2))
     print(f"[smithers] problems={len(problems)} summary={'sent' if want_summary else 'skipped'}")
     return 0
 
