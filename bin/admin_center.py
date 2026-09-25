@@ -231,7 +231,12 @@ def pulse(root: Path, creds: dict, *, settings: dict | None = None,
 
 # --------------------------------------------------------------------------- head
 def console_head() -> str:
-    return r"""
+    import re
+    import panel_theme as PT
+    return re.sub(r"@@(\w+)@@", lambda m: PT.icon(m.group(1)), _CONSOLE_HEAD)
+
+
+_CONSOLE_HEAD = r"""
 <style>
 .ac{margin:-6px 0 22px}
 .ac .bar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
@@ -261,12 +266,11 @@ def console_head() -> str:
 </style>
 <div class="ac" id="ac">
   <div class="bar">
-    <button class="primary" data-a="/run" data-c="Run the pipeline now?">▶ Run pipeline</button>
-    <button data-a="/toggle-armed" data-c="Flip live / paused?">⏸ Arm / pause</button>
-    <button data-a="/action/approve-next" data-c="Approve &amp; post the next queued item?">✓ Approve next</button>
-    <button data-a="/action/sync-stripe-links">🔗 Sync Stripe links</button>
-    <button onclick="location.href='/marketing'">📣 Marketing desk</button>
-    <button onclick="location.href='/review'">📋 Review queue</button>
+    <button class="primary" data-a="/run" data-c="Run the pipeline now?">@@play@@ Run pipeline</button>
+    <button id="acArm" data-a="/toggle-armed" data-c="Flip live / paused?">@@pause@@ <span>Live / pause</span></button>
+    <button data-a="/action/approve-next" data-c="Approve &amp; post the next queued item?">@@check@@ Approve next</button>
+    <form method="post" action="/fire-top" style="margin:0" onsubmit="return confirm('Draft the top-ranked candidate now and send it to the review queue?')"><button type="submit">@@zap@@ Fire top candidate</button></form>
+    <button data-a="/action/sync-stripe-links">@@link@@ Sync Stripe links</button>
   </div>
   <div class="strip" id="acStrip"><div class="muted">loading live status…</div></div>
   <div class="attn" id="acAttn"></div>
@@ -281,6 +285,10 @@ def console_head() -> str:
     let p; try{ p=await (await fetch('/api/pulse')).json(); }catch(e){ return; }
     const pl=p.pipeline,li=p.linkedin,au=p.audience;
     const stCls={'live':'good','dry-run':'warn','review':'','no-network':'bad'}[pl.state]||'';
+    const arm=document.getElementById('acArm');
+    if(arm){ const dry=pl.state==='dry-run';
+      arm.querySelector('span').textContent=dry?'Go live':'Pause posting';
+      arm.dataset.c=dry?'Switch to LIVE — cleared stories post for real?':'Pause posting (dry-run) — drafts only, nothing sent?'; }
     strip.innerHTML=[
       cell('pipeline',pl.state,stCls),
       cell('last run',pl.last_run_rel+' · '+pl.last_decision),

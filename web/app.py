@@ -386,28 +386,24 @@ animation:pulse 2.4s infinite}
 """
 
 NAV = [
-    ("/", "Operations"),
-    ("/review", "Review queue"),
-    ("/compose", "Compose"),
-    ("/candidates", "Candidates"),
-    ("/intel", "Intel Desk"),
-    ("/drafts", "Drafts"),
-    ("/marketing", "Marketing"),
-    ("/service", "CTI service"),
-    ("/subscribers", "Subscribers"),
-    ("/purchases", "Purchases"),
-    ("/d1", "D1 tables"),
-    ("/settings", "Settings"),
-    ("/feeds", "Feeds"),
-    ("/secrets", "Secrets"),
-    ("/logs", "Logs"),
+    ("Operate", [("/", "Operations", "gauge"), ("/review", "Review queue", "inbox"),
+                 ("/compose", "Compose", "pen"), ("/candidates", "Candidates", "list"),
+                 ("/intel", "Intel Desk", "radar"), ("/drafts", "Drafts", "file")]),
+    ("Grow", [("/marketing", "Marketing", "megaphone")]),
+    ("Customers", [("/service", "CTI service", "shield"), ("/subscribers", "Subscribers", "users"),
+                   ("/purchases", "Purchases", "card")]),
+    ("Configure", [("/settings", "Settings", "sliders"), ("/feeds", "Feeds", "rss"),
+                   ("/secrets", "Secrets", "key")]),
+    ("System", [("/d1", "D1 tables", "database"), ("/logs", "Logs", "terminal")]),
 ]
 
 
 def page(title: str, body: str, active: str = "", flash: str = "") -> HTMLResponse:
     nav = "".join(
-        f'<a href="{p}" class="{"on" if p == active else ""}">{e(label)}</a>'
-        for p, label in NAV
+        f'<div class=grp>{e(group)}</div>' + "".join(
+            f'<a href="{p}" class="{"on" if p == active else ""}">{PT.icon(ic)}<span>{e(label)}</span></a>'
+            for p, label, ic in items)
+        for group, items in NAV
     )
     fl = f'<div class="flash">{e(flash)}</div>' if flash else ""
     return HTMLResponse(PT.shell(e(title), body, nav, fl, bool(_panel_pass()), datetime.now()))
@@ -670,9 +666,6 @@ def dashboard(request: Request):
                     f'<a class="btn ghost" href="/subscribers">Subscribers →</a></div></div>')
     except Exception:  # noqa
         subs_card = ""
-    live_toggle = ('<button class="btn good">▶ Go live</button>' if dry
-                   else '<button class="btn ghost">⏸ Pause (dry-run)</button>')
-
     script = (
         "<script>(function(){var T=" + str(target_ms) + ";"
         "var el=document.getElementById('cd');"
@@ -698,22 +691,16 @@ def dashboard(request: Request):
 </div>
 
 <div class=tiles>
-  <div class="tile {cap_cls}"><div class=n>{used_day}<span class=dim style="font-size:14px">/{max_day}</span></div><div class=l>posts today</div></div>
-  <div class=tile><div class=n>{week}</div><div class=l>last 7 days</div></div>
+  <div class="tile {cap_cls}"><div class=n>{used_day}<span class=dim style="font-size:14px">/{max_day}</span></div><div class=l>posts today · cap</div></div>
   <div class=tile><div class=n>{avg7}</div><div class=l>avg score · 7d</div></div>
-  <div class="tile {'warn' if queue_n else ''}"><div class=n>{queue_n}</div><div class=l>review queue</div></div>
   <div class=tile><div class=n>{cand_n}</div><div class=l>candidates</div></div>
   <div class="tile {'bad' if not ready else 'good'}"><div class=n style="font-size:15px;padding-top:4px">{e(', '.join(publishers.PROVIDER_LABELS.get(t,t) for t in tgts)) or 'none'}</div><div class=l>posting to</div></div>
 </div>
 
 <div class=card>
   <div class=row style="justify-content:space-between">
+    <span class=dim style="font-size:12px">Today's schedule</span>
     <div class=row style="gap:6px">{slots_html or '<span class=dim>no schedule</span>'}</div>
-    <div class=row>
-      <form method=post action=/run><button class=btn>▶ Run now</button></form>
-      <form method=post action=/fire-top onsubmit="return confirm('Draft the top-ranked candidate now and send it to the review queue?')"><button class="btn ghost">⚡ Fire top candidate</button></form>
-      <form method=post action=/toggle-armed onsubmit="return confirm('{'Switch to LIVE — cleared stories post for real?' if dry else 'Pause posting (dry-run) — drafts only, nothing sent?'}')">{live_toggle}</form>
-    </div>
   </div>
 </div>
 {subs_card}

@@ -18,6 +18,40 @@ LOGO_SVG = (
     "</svg>"
 )
 
+# Line icons (24px grid, stroke = currentColor), inlined so the admin panel
+# never loads anything from a third party.
+_ICON_PATHS = {
+    "gauge": '<path d="M12 14l4-4"/><path d="M3.3 19a9 9 0 1 1 17.4 0"/>',
+    "inbox": '<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.5 5.1 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.5-6.9A2 2 0 0 0 16.8 4H7.2a2 2 0 0 0-1.7 1.1z"/>',
+    "pen": '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>',
+    "list": '<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>',
+    "radar": '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.5"/><path d="M12 12l6.4-6.4"/>',
+    "file": '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/>',
+    "megaphone": '<path d="M3 11v2a1 1 0 0 0 1 1h2l5 4V6L6 10H4a1 1 0 0 0-1 1z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"/>',
+    "shield": '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
+    "users": '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8"/>',
+    "card": '<rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/>',
+    "database": '<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.7 4 3 9 3s9-1.3 9-3V5"/><path d="M3 12c0 1.7 4 3 9 3s9-1.3 9-3"/>',
+    "sliders": '<path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/>',
+    "rss": '<path d="M4 11a9 9 0 0 1 9 9M4 4a16 16 0 0 1 16 16"/><circle cx="5" cy="19" r="1"/>',
+    "key": '<circle cx="7.5" cy="15.5" r="5.5"/><path d="M21 2l-9.6 9.6M15.5 7.5l3 3L22 7l-3-3"/>',
+    "terminal": '<path d="M4 17l6-6-6-6M12 19h8"/>',
+    "play": '<path d="M6 4l14 8-14 8z"/>',
+    "check": '<path d="M20 6 9 17l-5-5"/>',
+    "zap": '<path d="M13 2 3 14h9l-1 8 10-12h-9z"/>',
+    "link": '<path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/>',
+    "pause": '<path d="M10 4H6v16h4zM18 4h-4v16h4z"/>',
+    "lock": '<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
+    "menu": '<path d="M3 6h18M3 12h18M3 18h18"/>',
+}
+
+
+def icon(name: str, cls: str = "ico") -> str:
+    return (f'<svg class="{cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+            f'stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+            f'{_ICON_PATHS.get(name, "")}</svg>')
+
+
 CSS = """
 :root{
   --bg:#0a0e14;--bg2:#0d1420;--panel:#121a26;--panel2:#182234;--line:#233248;
@@ -123,6 +157,41 @@ pre{background:var(--bg2);border:1px solid var(--line);border-radius:10px;paddin
 .tl .t{color:var(--faint);white-space:nowrap;font-size:11.5px;min-width:64px}
 .seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
 .seg label{margin:0}.seg span{padding:6px 12px;font-size:12px;cursor:pointer;color:var(--dim)}
+
+/* --- 2026-09 refresh: grouped nav, icons, tidier tiles and forms, mobile --- */
+.ico{width:16px;height:16px;flex-shrink:0}
+.nav .grp{padding:16px 18px 5px;font-size:10px;letter-spacing:.14em;text-transform:uppercase;
+ color:var(--faint);font-weight:700}
+.nav .grp:first-child{padding-top:8px}
+.nav a{display:flex;align-items:center;gap:10px;padding:7px 18px;margin:1px 10px;border-radius:8px;
+ border-left:0}
+.nav a .ico{opacity:.7}
+.nav a:hover .ico,.nav a.on .ico{opacity:1}
+.nav a.on{background:rgba(59,130,246,.16);color:#fff;box-shadow:inset 2px 0 0 var(--accent)}
+.stat .n,.tile .n{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:clamp(17px,1.7vw,23px)}
+.tile{transition:border-color .15s,transform .15s}.tile:hover{transform:translateY(-1px)}
+.grid{align-items:end}
+input[type=number]{-moz-appearance:textfield;appearance:textfield}
+input[type=number]::-webkit-inner-spin-button,input[type=number]::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
+input[type=checkbox],input[type=radio]{accent-color:var(--accent);width:15px;height:15px;vertical-align:-2px;margin:0 6px 0 0}
+select{appearance:none;background-image:linear-gradient(45deg,transparent 50%,var(--dim) 50%),
+ linear-gradient(135deg,var(--dim) 50%,transparent 50%);background-position:calc(100% - 17px) 55%,calc(100% - 12px) 55%;
+ background-size:5px 5px;background-repeat:no-repeat;padding-right:32px}
+.btn{display:inline-flex;align-items:center;gap:7px}
+.btn .ico{width:15px;height:15px}
+.card:hover{border-color:#2b3d57}
+.burger{display:none;background:transparent;border:1px solid var(--line);color:var(--fg);border-radius:8px;
+ padding:5px 7px;cursor:pointer;align-items:center}
+.navt{display:none}
+@media(max-width:900px){
+ .side{position:fixed;left:0;top:0;z-index:40;transform:translateX(-100%);transition:transform .2s;
+  box-shadow:var(--shadow)}
+ .navt:checked~.wrap .side{transform:none}
+ .burger{display:inline-flex}
+ .topbar{padding:10px 16px}.main{padding:18px 16px 56px}
+ .topbar .idle{display:none}
+}
+.topbar .clk,.topbar .idle{white-space:nowrap}
 """
 
 
@@ -136,7 +205,7 @@ def shell(title, body, nav_html, flash_html, locked_enabled, now):
     greet = f"{_greeting(now.hour)}, {OPERATOR}"
     lock_ui = (
         '<span class="idle">auto-lock in <b id="idleT">10:00</b></span>'
-        '<form method="post" action="/lock"><button class="lockbtn">\U0001f512 Lock</button></form>'
+        f'<form method="post" action="/lock"><button class="lockbtn">{icon("lock")} Lock</button></form>'
     ) if locked_enabled else '<span class="idle" style="color:var(--faint)">panel is open — set PANEL_PASSPHRASE to lock it</span>'
     idle_js = f"""<script>
 (function(){{
@@ -152,6 +221,7 @@ setInterval(function(){{var c=document.querySelector('.clk time');if(c)c.textCon
     return f"""<!doctype html><html><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1">
 <title>{title} · SecurityCyber</title><style>{CSS}</style></head><body>
+<input type=checkbox id=navt class=navt>
 <div class=wrap>
  <aside class=side>
   <div class=brandbox><div class=wm>{LOGO_SVG}<span>Security<span class=c>Cyber</span></span></div>
@@ -160,7 +230,7 @@ setInterval(function(){{var c=document.querySelector('.clk time');if(c)c.textCon
   <div class=who>Operator&nbsp;·&nbsp;<b>{OPERATOR}</b><br>{greet}</div>
  </aside>
  <div class=col>
-  <div class=topbar><span class=beat></span>
+  <div class=topbar><label for=navt class=burger aria-label="Menu">{icon("menu")}</label><span class=beat></span>
    <span class=clk><time>{now.strftime('%H:%M:%S')}</time> BST</span>
    <span class=sp></span>{lock_ui}</div>
   <main class=main><h1>{title}</h1>{flash_html}{body}</main>
