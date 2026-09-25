@@ -95,7 +95,29 @@ echo "[run] stage 2/4 : analyst (engine=$ENGINE)"
 run_claude_analyst() {
   claude -p "$(cat "$ROOT/prompts/analyst.md")" \
     --allowedTools "Read,Write,WebFetch" --permission-mode acceptEdits \
-    --settings "$ROOT/config/claude-untrusted.json"
+    --settings "$ROOT/config/claude-untrusted.json" "$@"
+}
+
+# API bridge: when the Claude subscription is unavailable (lapsed, or a session
+# limit), spend prepaid API credits on at most ONE analyst run per day — the
+# first after 07:00, so it feeds the 08:15 digest. Every other run takes the
+# free deterministic fallback. Only active while ANTHROPIC_API_KEY_BRIDGE is in
+# config/env; it is deliberately not named ANTHROPIC_API_KEY, which would make
+# every run bill the API even while the subscription works.
+BRIDGE_MAX_USD="${BRIDGE_MAX_USD:-5}"
+BRIDGE_STAMP="$ROOT/state/api_bridge_last_run"
+BRIDGE_EXPECTED_FALLBACK=0
+run_bridge_analyst() {
+  [[ -n "${ANTHROPIC_API_KEY_BRIDGE:-}" ]] || return 1
+  local today; today="$(date +%F)"
+  if [[ "$(cat "$BRIDGE_STAMP" 2>/dev/null)" == "$today" || "$(date +%-H)" -lt 7 ]]; then
+    echo "[run] API bridge: today's run already used (or before 07:00) — free fallback"
+    BRIDGE_EXPECTED_FALLBACK=1
+    return 1
+  fi
+  echo "$today" > "$BRIDGE_STAMP"   # stamp first: a failed attempt still counts
+  echo "[run] subscription unavailable — API bridge run (1/day, cap \$$BRIDGE_MAX_USD)"
+  ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY_BRIDGE" run_claude_analyst --max-budget-usd "$BRIDGE_MAX_USD"
 }
 
 set +e
@@ -106,6 +128,9 @@ case "$ENGINE" in
     ;;
   claude|*)
     run_claude_analyst; ANALYST_RC=$?
+    if [[ "$ANALYST_RC" -ne 0 && -n "${ANTHROPIC_API_KEY_BRIDGE:-}" ]]; then
+      run_bridge_analyst; ANALYST_RC=$?
+    fi
     if [[ "$ANALYST_RC" -ne 0 ]]; then
       echo "[run] claude analyst exited $ANALYST_RC — trying Antigravity (Gemini) backup"
       python3 "$ROOT/bin/analyst_antigravity.py"; ANALYST_RC=$?
@@ -117,7 +142,12 @@ if [[ "$ANALYST_RC" -ne 0 ]]; then
   echo "[run] all analyst engines failed ($ANALYST_RC) — deterministic fallback for subscribers"
   # Without this, a lapsed claude login stops public posting with no signal —
   # subscribers still get unverified alerts, so nothing else looks broken.
-  python3 "$ROOT/bin/notify.py" "CTI analyst unavailable (exit $ANALYST_RC) — ran deterministic fallback: unverified subscriber alerts only, no public post. Check 'claude -p' auth on the VM. Log: $LOG" high || true
+  # In bridge mode the fallback is expected on all but one run a day: stay quiet.
+  if [[ "$BRIDGE_EXPECTED_FALLBACK" -eq 1 ]]; then
+    echo "[run] bridge mode: expected fallback, no alert"
+  else
+    python3 "$ROOT/bin/notify.py" "CTI analyst unavailable (exit $ANALYST_RC) — ran deterministic fallback: unverified subscriber alerts only, no public post. Check 'claude -p' auth on the VM (or API bridge credits). Log: $LOG" high || true
+  fi
   python3 "$ROOT/bin/analyst_fallback.py" || echo "[run] analyst_fallback returned $? (non-fatal)"
 fi
 
