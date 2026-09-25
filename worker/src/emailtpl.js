@@ -6,6 +6,7 @@
 // escaped: alert text is analyst-written but passes through here as data.
 
 import { esc } from "./util.js";
+import { MOTTO } from "./config.js";
 
 // Brand: blue (#3b82f6) is the UI accent everywhere on securitycyber.uk; red is
 // reserved for the "Cyber" wordmark and a genuine severity warning. Section
@@ -110,6 +111,7 @@ export function alertEmailHtml(cfg, alert, links = {}) {
   </td></tr>
 
   <tr><td style="padding:22px 32px;background:#080d18;border-top:1px solid ${C.border};text-align:center">
+    <p style="font-size:12px;color:#94a3b8;margin:0 0 10px;line-height:1.6;font-style:italic">${esc(MOTTO)}</p>
     <p style="font-size:11px;color:#64748b;margin:0;line-height:1.6">
       ${esc(cfg.brand || "SecurityCyber")} · Independent UK blue-team security advisory<br>
       Informational only — an aggregation of public advisories, not professional advice.<br>
@@ -131,6 +133,8 @@ export function alertEmailText(cfg, alert, links = {}) {
   if ((alert.action || "").trim()) { lines.push(`DO NOW: ${alert.action.trim()}`); lines.push(""); }
   lines.push((alert.subscriber_text || alert.body || alert.post_text || "").trim());
   if (alert.url) { lines.push(""); lines.push(`Source: ${alert.url}`); }
+  lines.push("");
+  lines.push(MOTTO);
   lines.push("");
   lines.push(`— ${cfg.brand || "SecurityCyber"} CTI`);
   if (links.manage) lines.push(`Preferences: ${links.manage}`);

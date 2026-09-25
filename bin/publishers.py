@@ -130,6 +130,30 @@ LI_MAX_TAGS = 3
 # its distribution and the reader still gets the route. The full clickable URL
 # goes in the first comment when the token is ever allowed to post one.
 LI_LINK_HINT = "cti.securitycyber.uk"
+# SecurityCyber's brand motto (Charlie, 2026-09-25). The full version lives on
+# the brand pages (websites, emails); posts carry the short line, placed just
+# above the hashtags on every long-form network. Idempotent.
+MOTTO_FULL = ("You don't have an intelligence problem, you have an ingestion problem. "
+              "You don't have an information problem, you have a triage problem.")
+MOTTO = "You don't have an information problem. You have a triage problem."
+# Networks whose posts are built from a ~260-300 char teaser: the motto would
+# crowd out the alert itself, so they are the one exception.
+_SHORT_NETWORKS = {"bluesky", "x"}
+
+
+def add_motto(text: str) -> str:
+    """Append MOTTO above the trailing hashtag block (if any), once."""
+    t = (text or "").rstrip()
+    if not t or MOTTO.lower() in t.lower():
+        return t
+    lines = t.splitlines()
+    tail: list[str] = []
+    while lines and (not lines[-1].strip() or _is_tag_line(lines[-1])):
+        ln = lines.pop()
+        if ln.strip():
+            tail.insert(0, ln)
+    out = "\n".join(lines).rstrip() + "\n\n" + MOTTO
+    return out + ("\n\n" + "\n".join(tail) if tail else "")
 # Copy that promises a first comment we cannot currently create.
 _COMMENT_PROMISE = re.compile(
     r"[(\u2014-]*\s*\b(?:link|links|full write-up|source)\b[^\n.]{0,40}"
@@ -190,6 +214,8 @@ def _li_shape(text: str, link_hint: str = LI_LINK_HINT) -> str:
 
     if link_hint and link_hint.lower() not in body.lower():
         body = body.rstrip() + f"\n\n\u2192 {link_hint}"
+    if MOTTO.lower() not in body.lower():
+        body = body.rstrip() + "\n\n" + MOTTO
 
     out = body if not keep else body.rstrip() + "\n\n" + " ".join(keep)
     return re.sub(r"\n{3,}", "\n\n", out).strip()
@@ -576,10 +602,12 @@ def post_all(text: str, creds: dict, settings: dict, *, short_text: str | None =
     for name in resolve_targets(settings, creds, only):
         fn = PROVIDERS[name]
         try:
-            if name == "linkedin":
+            if name == "linkedin":   # _li_shape adds the motto (above the tags)
                 out.append(fn(text, creds, settings, short_text, log, comment=comment))
-            else:
+            elif name in _SHORT_NETWORKS:
                 out.append(fn(text, creds, settings, short_text, log))
+            else:
+                out.append(fn(add_motto(text), creds, settings, short_text, log))
         except Exception as e:  # noqa — a broken provider must not kill the others
             out.append(_res(name, False, error=f"{type(e).__name__}: {e}"[:300]))
     return out

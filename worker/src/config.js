@@ -122,6 +122,12 @@ function deepMerge(base, over) {
   return out;
 }
 
+// SecurityCyber's brand motto (Charlie, 2026-09-25). Full version on brand
+// pages and emails; the short line on posts. Keep in step with bin/publishers.py.
+export const MOTTO = "You don't have an intelligence problem, you have an ingestion problem. "
+  + "You don't have an information problem, you have a triage problem.";
+export const MOTTO_SHORT = "You don't have an information problem. You have a triage problem.";
+
 export function config(env) {
   let over = {};
   try { over = env.CONFIG ? JSON.parse(env.CONFIG) : {}; } catch { over = {}; }

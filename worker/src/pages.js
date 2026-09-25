@@ -5,7 +5,7 @@ import { esc } from "./util.js";
 // its OG card (our image), RSS readers show it as the feed logo.
 export const PROMO_URL = "https://securitycyber.uk/cti";
 export const PROMO_IMG = "https://securitycyber.uk/og-image.png";
-import { monthlyPence, paymentLink } from "./config.js";
+import { monthlyPence, paymentLink, MOTTO } from "./config.js";
 
 export const LOGO_SVG =
   '<svg viewBox="0 0 48 46" width="26" height="26" fill="none" aria-hidden="true">' +
@@ -166,6 +166,7 @@ export function page(cfg, title, body, flash = "", flashKind = "", noindex = fal
 <a href="${esc(cfg.main_site)}/contact">Contact</a></span></nav>
 ${fl}${body}
 <footer><div class=fb>${LOGO_SVG}<b>Security<span>Cyber</span></b> · CTI Alerts</div>
+<p style="margin:6px 0 10px;font-style:italic">${esc(MOTTO)}</p>
 ${esc(legal)}${ico} · Independent UK blue-team security advisory.<br>
 <a href="${esc(cfg.main_site)}">securitycyber.uk</a> ·
 <a href="${esc(cfg.main_site)}/services">Services</a> ·

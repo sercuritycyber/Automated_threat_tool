@@ -1,6 +1,6 @@
 // SecurityCyber CTI Alerts — Cloudflare Worker entrypoint.
 import { config, problems, advisories, priceToTier, monthlyPence,
-  paymentLink, paymentLinkUrl, canCheckout, buyableMap, takingRealMoney } from "./config.js";
+  paymentLink, paymentLinkUrl, canCheckout, buyableMap, takingRealMoney, MOTTO_SHORT } from "./config.js";
 import * as db from "./db.js";
 import * as billing from "./billing.js";
 import * as discord from "./discord.js";
@@ -1133,6 +1133,7 @@ function discordChannelPost(cfg, p) {
     (p.subscriber_text || p.post_text || "").trim(),
     cves ? `CVE: ${cves}` : "",
     p.url ? `<${p.url}>` : "",
+    `*${MOTTO_SHORT}*`,
     "https://securitycyber.uk/cti",
   ].filter(Boolean);
   return parts.join("\n\n");
