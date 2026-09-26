@@ -140,7 +140,55 @@ def _read_queue() -> list[dict]:
         return []
 
 
+def _posted_urls() -> set[str]:
+    try:
+        rows = (STATE / "history.jsonl").read_text().splitlines()
+    except OSError:
+        return set()
+    out = set()
+    for line in rows:
+        try:
+            u = json.loads(line).get("url")
+        except json.JSONDecodeError:
+            continue
+        if u:
+            out.add(u)
+    return out
+
+
+def _dedupe_queue(waiting: list[dict]) -> list[dict]:
+    """One queued post per source story, and none for a story already posted.
+
+    The analyst re-drafts a still-unposted story on every run under a fresh
+    title, so the (url, title) check in schedule_social let the same Kiteworks
+    story pile up four times (2026-09-26), and trend posts anchored on an
+    already-published URL queued as near-repeats. Keep the highest-scoring
+    draft per URL, released at the earliest slot any copy had.
+    """
+    posted = _posted_urls()
+    best: dict[str, dict] = {}
+    order: list[str] = []
+    for q in waiting:
+        key = q.get("url") or f"title:{q.get('title')}"
+        if q.get("url") and q["url"] in posted:
+            continue
+        cur = best.get(key)
+        if cur is None:
+            best[key] = q
+            order.append(key)
+            continue
+        first = min(filter(None, (cur.get("post_after"), q.get("post_after"))), default=None)
+        if int(q.get("score", 0) or 0) > int(cur.get("score", 0) or 0):
+            cur = q
+        best[key] = {**cur, "post_after": first} if first else cur
+    return [best[k] for k in order]
+
+
 def _write_queue(waiting: list[dict], now: datetime) -> bool:
+    before = len(waiting)
+    waiting = _dedupe_queue(waiting)
+    if len(waiting) < before:
+        log(f"social queue: dropped {before - len(waiting)} duplicate/already-posted item(s)")
     try:
         SOCIAL_QUEUE.write_text(json.dumps({"updated": now.isoformat(),
                                             "queue": waiting}, indent=2))

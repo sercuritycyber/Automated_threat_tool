@@ -166,6 +166,21 @@ recent_hit = P._find_dup_cve(["CVE-2026-76461"], {"CVE-2026-76461": "recent titl
 chk("a 72h-recent CVE takes priority over run_cves and is labelled '72h'",
     recent_hit[1] if recent_hit else None, "72h")
 
+# ---- queue dedupe (2026-09-26: Kiteworks queued 4x under fresh titles) ----
+_hist = tmp / "history.jsonl"
+_hist.write_text(json.dumps({"url": "https://x/posted"}) + "\n")
+_orig_state = P.STATE
+P.STATE = tmp
+dq = P._dedupe_queue([
+    {"url": "https://x/kite", "title": "A", "score": 35, "post_after": "2026-09-26T21:30"},
+    {"url": "https://x/kite", "title": "B", "score": 42, "post_after": "2026-09-27T09:00"},
+    {"url": "https://x/posted", "title": "C", "score": 55, "post_after": "2026-09-26T20:00"},
+    {"url": "https://x/other", "title": "D", "score": 40, "post_after": "2026-09-27T10:30"},
+])
+P.STATE = _orig_state
+chk("dedupe keeps one per url, drops already-posted", [q["title"] for q in dq], ["B", "D"])
+chk("dedupe keeps the earliest release slot", dq[0]["post_after"], "2026-09-26T21:30")
+
 print()
 print(f"{'ALL PASS' if not fails else str(len(fails)) + ' FAILURES: ' + ', '.join(fails)}")
 sys.exit(1 if fails else 0)
