@@ -206,6 +206,20 @@ attached a heuristic `pre_score`. Your job is judgement, not scraping.
    #CyberSecurity #ThreatIntel <+1 topical>
    ```
 
+   ### What earns replies (reader feedback, 2026-09-25 — small sample, revisit)
+
+   The first real reply on the company page (ClickFix / Psychedelic stealer
+   trend post) skipped the headline and quoted two things: the **counter-
+   intuitive angle** — a documentation placeholder domain (`third-party[.]com`)
+   trusted in 1,700+ repos, later weaponised — and the **self-check** ("have you
+   grepped your old READMEs?"). So, in every lane:
+   - If the story has a detail defenders assume is safe but isn't, surface it
+     plainly — don't bury it under the headline facts.
+   - Make at least one "Do this" / "What to look for" item a check the reader
+     can run on their own estate in minutes (search their repos or docs for X,
+     check this one setting) — concrete enough that they could reply "done".
+   Only when the source supports it: never manufacture a twist to fit this.
+
    ### The gap line — the actual conversion mechanic
 
    This is the only thing in the post that says "there is more". It converts
