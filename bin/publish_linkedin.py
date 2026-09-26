@@ -55,6 +55,7 @@ except ImportError:
     def lint_text(_t, _c=None, _lane="intel"):
         return {"ok": True, "errors": [], "warnings": []}
 from postlog import count_last_24h
+from decision_validation import is_backup_analyst
 import publishers
 
 STATE = ROOT / "state"
@@ -595,6 +596,24 @@ def main() -> int:
         for _f in ("post_text", "short_text", "comment"):
             if _p.get(_f):
                 _p[_f] = substitute_tokens(_p[_f], decision)
+    # A backup model (Gemini / OpenAI-compatible) writes differently from the
+    # analyst the prompt was tuned on, so its public posts wait for a human —
+    # emergencies included, since its scores decide what counts as one.
+    # Subscribers were already served in stage 3.
+    if (posts and not operator and is_backup_analyst(decision)
+            and (settings.get("analyst") or {}).get("backup_review", True)):
+        pj = STATE / "pending.json"
+        try:
+            existing = json.loads(pj.read_text()).get("queue", []) if pj.exists() else []
+        except (json.JSONDecodeError, OSError):
+            existing = []
+        tagged = [{**p, "held_because": f"backup model ({decision.get('analyst')})",
+                   "min_score": min_score} for p in posts]
+        pj.write_text(json.dumps({"held_at": now_iso(), "manual": False,
+                                  "queue": existing + tagged,
+                                  "considered": decision.get("considered", [])}, indent=2))
+        log(f"backup analyst {decision.get('analyst')}: {len(posts)} post(s) held for approval")
+        posts = []
     # schedule_social parks new posts and returns whatever is due for release
     # (which may be items queued on an earlier run, even if this run's decision
     # is "skip").

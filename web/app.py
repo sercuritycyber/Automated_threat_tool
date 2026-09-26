@@ -62,6 +62,16 @@ SECRET_KEYS += [("NTFY_URL", "Notification URL", "optional — ntfy.sh-style top
 CLAUDE_KEYS = [("ANTHROPIC_API_KEY_BRIDGE", "Claude API key",
                 "sk-ant-… from console.anthropic.com; used only when the subscription is down, 1 run/day"),
                ("BRIDGE_MAX_USD", "Daily spend cap (USD)", "blank = $5 per bridge run")]
+# Backup analyst engines (bin/analyst_antigravity.py, bin/analyst_openai_compat.py).
+# Their public posts are held for approval; the model id is pinned in settings.yaml.
+BACKUP_AI_KEYS = [("GEMINI_API_KEY", "Gemini API key", "aistudio.google.com; first backup"),
+                  ("OPENROUTER_API_KEY", "OpenRouter API key", "openrouter.ai/keys; one key, many models"),
+                  ("OPENAI_API_KEY", "OpenAI API key", "platform.openai.com"),
+                  ("MISTRAL_API_KEY", "Mistral API key", "console.mistral.ai")]
+SECRET_KEYS += BACKUP_AI_KEYS
+_AI_MODEL_LISTS = {"OPENROUTER_API_KEY": "https://openrouter.ai/api/v1/key",  # /models is public
+                   "OPENAI_API_KEY": "https://api.openai.com/v1/models",
+                   "MISTRAL_API_KEY": "https://api.mistral.ai/v1/models"}
 SECRET_KEYS += CLAUDE_KEYS
 
 # fields shown as plain text (not masked) so they can be checked / fixed
@@ -1536,6 +1546,11 @@ def secrets_get(request: Request):
                  f'<div class=card>{"".join(_secret_field(k, lb, ht, env) for k, lb, ht in CLAUDE_KEYS)}'
                  f'<div style="margin-top:10px"><button class="btn ghost" formaction=/secrets/test '
                  f'name=only value=claude formnovalidate>Test Claude API</button></div></div>')
+    sections += (f'<h2>Backup AI analysts</h2><div class=card><small>Used only when Claude is '
+                 f'unavailable. Their public posts wait for your approval; subscribers are served either way.</small>'
+                 f'{"".join(_secret_field(k, lb, ht, env) for k, lb, ht in BACKUP_AI_KEYS)}'
+                 f'<div style="margin-top:10px"><button class="btn ghost" formaction=/secrets/test '
+                 f'name=only value=backup_ai formnovalidate>Test backup keys</button></div></div>')
     extra = "".join(_secret_field(k, lb, ht, env) for k, lb, ht in
                     [("NTFY_URL", "Notification URL", "ntfy.sh-style topic for pipeline alerts")])
     dry = env.get("CTI_DRY_RUN", "")
@@ -1675,8 +1690,37 @@ def _test_claude(env: dict) -> str:
             f"credit balance is only on console.anthropic.com.")
 
 
+def _test_backup_ai(env: dict) -> str:
+    """Model listing only: free, and shows the ids to pin in settings.yaml."""
+    out = []
+    g = env.get("GEMINI_API_KEY")
+    if g:
+        try:
+            r = requests.get("https://generativelanguage.googleapis.com/v1beta/models",
+                             params={"key": g}, timeout=15)
+            out.append(f"Gemini: {'OK' if r.ok else 'HTTP ' + str(r.status_code)}")
+        except Exception as ex:  # noqa
+            out.append(f"Gemini: error {e(str(ex)[:100])}")
+    for k, url in _AI_MODEL_LISTS.items():
+        key = env.get(k)
+        if not key:
+            continue
+        try:
+            r = requests.get(url, headers={"Authorization": f"Bearer {key}"}, timeout=15)
+        except Exception as ex:  # noqa
+            out.append(f"{k}: error {e(str(ex)[:100])}")
+            continue
+        if not r.ok:
+            out.append(f"{k}: HTTP {r.status_code}")
+            continue
+        data = r.json().get("data")
+        out.append(f"{k}: OK" + (f", {len(data)} models" if isinstance(data, list) else ", key accepted"))
+    return "<br>".join(e(x) if "<" not in x else x for x in out) or "No backup keys set."
+
+
 _TESTS = {"linkedin": _test_linkedin, "mastodon": _test_mastodon, "bluesky": _test_bluesky,
-          "x": _test_x, "email": _test_email, "claude": _test_claude}
+          "x": _test_x, "email": _test_email, "claude": _test_claude,
+          "backup_ai": _test_backup_ai}
 
 
 @app.post("/secrets/test", response_class=HTMLResponse)

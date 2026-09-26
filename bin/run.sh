@@ -135,6 +135,10 @@ case "$ENGINE" in
       echo "[run] claude analyst exited $ANALYST_RC — trying Antigravity (Gemini) backup"
       python3 "$ROOT/bin/analyst_antigravity.py"; ANALYST_RC=$?
     fi
+    if [[ "$ANALYST_RC" -ne 0 ]]; then
+      echo "[run] Gemini backup unavailable — trying OpenAI-compatible providers"
+      python3 "$ROOT/bin/analyst_openai_compat.py"; ANALYST_RC=$?
+    fi
     ;;
 esac
 set -e

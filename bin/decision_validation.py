@@ -8,10 +8,12 @@ and lets the run continue so subscribers still get served.
 """
 from __future__ import annotations
 
+import json
 import re
 from urllib.parse import urlsplit, urlunsplit
 
 URL_RE = re.compile(r"https?://[^\s<>\])]+", re.I)
+CVE_RE = re.compile(r"CVE-\d{4}-\d{4,}", re.I)
 _TRACKING = {
     "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
     "utm_id", "mkt_tok", "fbclid", "gclid", "ref", "ref_src", "source",
@@ -87,6 +89,20 @@ def _post_problems(post: dict, allowed: set[str], operator: bool) -> list[str]:
     return out
 
 
+def is_backup_analyst(decision: dict) -> bool:
+    """True for engines that only see candidates.json (no web access): the
+    Gemini backup and the OpenAI-compatible providers. Their output gets the
+    strict checks below; Claude's does not, since it reads the articles and can
+    legitimately cite a CVE the feed summary lacked."""
+    return str(decision.get("analyst") or "").startswith(("antigravity", "api:"))
+
+
+def _ungrounded_cves(post: dict, cand_text: str) -> list[str]:
+    cited = {c.upper() for c in (post.get("cve_ids") or []) if isinstance(c, str)}
+    cited |= {c.upper() for c in CVE_RE.findall(str(post.get("post_text") or ""))}
+    return sorted(c for c in cited if c not in cand_text)
+
+
 def sanitize_decision(decision: dict, candidates: dict) -> tuple[dict, list[str]]:
     """Drop any social post that fails provenance; never raise. Returns
     (possibly-modified decision, human-readable list of what was dropped).
@@ -101,9 +117,15 @@ def sanitize_decision(decision: dict, candidates: dict) -> tuple[dict, list[str]
     if not isinstance(posts, list):
         return decision, dropped
     allowed = _candidate_urls(candidates)
+    strict = is_backup_analyst(decision)
+    cand_text = json.dumps(candidates).upper() if strict else ""
     kept = []
     for i, post in enumerate(posts):
         probs = _post_problems(post, allowed, operator=False)
+        if strict and isinstance(post, dict):
+            bad = _ungrounded_cves(post, cand_text)
+            if bad:
+                probs.append(f"cites {', '.join(bad)}, not in any candidate (possible invention)")
         if probs:
             title = (post.get("title") or post.get("url") or f"post {i}") if isinstance(post, dict) else f"post {i}"
             dropped.append(f"{str(title)[:60]} — {'; '.join(probs)}")
