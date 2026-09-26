@@ -58,10 +58,16 @@ SECRET_KEYS: list[tuple[str, str, str]] = []
 for _prov, _keys in publishers.PROVIDER_KEYS.items():
     SECRET_KEYS += _keys
 SECRET_KEYS += [("NTFY_URL", "Notification URL", "optional — ntfy.sh-style topic for alerts")]
+# Claude API bridge (bin/run.sh): paid fallback when the subscription is unavailable.
+CLAUDE_KEYS = [("ANTHROPIC_API_KEY_BRIDGE", "Claude API key",
+                "sk-ant-… from console.anthropic.com; used only when the subscription is down, 1 run/day"),
+               ("BRIDGE_MAX_USD", "Daily spend cap (USD)", "blank = $5 per bridge run")]
+SECRET_KEYS += CLAUDE_KEYS
 
 # fields shown as plain text (not masked) so they can be checked / fixed
 PLAINTEXT_KEYS = {"LINKEDIN_AUTHOR_URN", "MASTODON_BASE_URL", "BLUESKY_HANDLE", "BLUESKY_PDS_URL",
-                  "EMAIL_SMTP_HOST", "EMAIL_SMTP_PORT", "EMAIL_SMTP_USER", "EMAIL_FROM", "EMAIL_TO"}
+                  "EMAIL_SMTP_HOST", "EMAIL_SMTP_PORT", "EMAIL_SMTP_USER", "EMAIL_FROM", "EMAIL_TO",
+                  "BRIDGE_MAX_USD"}
 ALL_TARGETS = list(publishers.PROVIDERS)
 
 app = FastAPI(title="SecurityCyber Admin Center")
@@ -1524,6 +1530,12 @@ def secrets_get(request: Request):
                      f'<div style="margin-top:10px"><button class="btn ghost" formaction=/secrets/test '
                      f'name=only value={prov} formnovalidate>Test {e(publishers.PROVIDER_LABELS.get(prov, prov))}</button></div>'
                      f'</div>')
+    claude_badge = ('<span class="pill good">configured</span>' if env.get("ANTHROPIC_API_KEY_BRIDGE")
+                    else '<span class="pill dim">not set up</span>')
+    sections += (f'<h2>Claude API (bridge) {claude_badge}</h2>'
+                 f'<div class=card>{"".join(_secret_field(k, lb, ht, env) for k, lb, ht in CLAUDE_KEYS)}'
+                 f'<div style="margin-top:10px"><button class="btn ghost" formaction=/secrets/test '
+                 f'name=only value=claude formnovalidate>Test Claude API</button></div></div>')
     extra = "".join(_secret_field(k, lb, ht, env) for k, lb, ht in
                     [("NTFY_URL", "Notification URL", "ntfy.sh-style topic for pipeline alerts")])
     dry = env.get("CTI_DRY_RUN", "")
@@ -1647,8 +1659,24 @@ def _test_email(env: dict) -> str:
     return f"OK — connected to {e(host)}:{port}, recipients: <span class=mono>{e(to)}</span>"
 
 
+def _test_claude(env: dict) -> str:
+    key = env.get("ANTHROPIC_API_KEY_BRIDGE")
+    if not key:
+        return "No ANTHROPIC_API_KEY_BRIDGE set."
+    try:
+        r = requests.get("https://api.anthropic.com/v1/models",
+                         headers={"x-api-key": key, "anthropic-version": "2023-06-01"}, timeout=15)
+    except Exception as ex:  # noqa
+        return f"error: {e(str(ex))}"
+    if not r.ok:
+        return f"HTTP {r.status_code}: <span class=mono>{e(r.text[:300])}</span>"
+    n = len(r.json().get("data") or [])
+    return (f"OK: key accepted, {n} models visible. This check is free; "
+            f"credit balance is only on console.anthropic.com.")
+
+
 _TESTS = {"linkedin": _test_linkedin, "mastodon": _test_mastodon, "bluesky": _test_bluesky,
-          "x": _test_x, "email": _test_email}
+          "x": _test_x, "email": _test_email, "claude": _test_claude}
 
 
 @app.post("/secrets/test", response_class=HTMLResponse)
