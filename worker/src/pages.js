@@ -170,6 +170,7 @@ ${fl}${body}
 ${esc(legal)}${ico} · Independent UK blue-team security advisory.<br>
 <a href="${esc(cfg.main_site)}">securitycyber.uk</a> ·
 <a href="${esc(cfg.main_site)}/services">Services</a> ·
+<a href="https://www.youtube.com/@OpsecCharlie" target="_blank" rel="noopener noreferrer">YouTube</a> ·
 <a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="/cookies">Cookies</a> ·
 <a href="mailto:${esc(contact)}">${esc(contact)}</a></footer>
 </div>${consentBanner(cfg)}</body></html>`;
