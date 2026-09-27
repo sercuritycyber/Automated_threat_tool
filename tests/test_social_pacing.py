@@ -181,6 +181,18 @@ P.STATE = _orig_state
 chk("dedupe keeps one per url, drops already-posted", [q["title"] for q in dq], ["B", "D"])
 chk("dedupe keeps the earliest release slot", dq[0]["post_after"], "2026-09-26T21:30")
 
+# ---- stale queue items (Kiteworks "until 08:00 UTC today", 2026-09-26) ----
+_now = datetime(2026, 9, 26, 15, 0, tzinfo=timezone.utc)
+chk("same-day time-bound post still goes",
+    P._stale({"queued_at": "2026-09-26T07:11:00+00:00", "post_text": "Offline until 08:00 UTC today."}, _now), None)
+chk("time-bound post from yesterday expires",
+    P._stale({"queued_at": "2026-09-25T20:00:00+00:00", "post_text": "Patch tonight."}, _now),
+    "time-bound wording from an earlier day")
+chk("undated post from yesterday still goes",
+    P._stale({"queued_at": "2026-09-25T20:00:00+00:00", "post_text": "Patch the gateway."}, _now), None)
+chk("anything past 36h expires",
+    P._stale({"queued_at": "2026-09-24T20:00:00+00:00", "post_text": "Patch."}, _now), "queued over 36h ago")
+
 print()
 print(f"{'ALL PASS' if not fails else str(len(fails)) + ' FAILURES: ' + ', '.join(fails)}")
 sys.exit(1 if fails else 0)

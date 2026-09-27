@@ -208,6 +208,10 @@ def fetch_kev(timeout: int) -> dict:
             "dateAdded": v.get("dateAdded", ""),
             "ransomware": v.get("knownRansomwareCampaignUse", "") == "Known",
             "dueDate": v.get("dueDate", ""),
+            "vendor": v.get("vendorProject", ""),
+            "product": v.get("product", ""),
+            "desc": v.get("shortDescription", ""),
+            "action": v.get("requiredAction", ""),
         }
         try:
             if datetime.strptime(v["dateAdded"], "%Y-%m-%d").date() >= cutoff:
@@ -216,6 +220,42 @@ def fetch_kev(timeout: int) -> dict:
             pass
     print(f"  - CISA KEV: {len(all_cves)} total, {len(recent)} added <= {KEV_RECENT_DAYS}d")
     return {"all": all_cves, "recent": recent, "meta": meta}
+
+
+def kev_items(kev: dict, days: int) -> list[dict]:
+    """New KEV listings as stories in their own right.
+
+    A CVE CISA adds to KEV with no write-up in our feeds used to be invisible:
+    KEV only boosted articles that already named it. That is how the Pixel
+    modem zero-day (CVE-2026-58704, KEV 2026-09-16) never reached subscribers.
+    When an article on the same CVE exists, clustering merges the two.
+    """
+    if days <= 0:
+        return []
+    today = datetime.now(timezone.utc).date()
+    out = []
+    for cid, m in kev["meta"].items():
+        try:
+            added = datetime.strptime(m.get("dateAdded", ""), "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        if (today - added).days > days:
+            continue
+        what = " ".join(x for x in (m.get("vendor"), m.get("product")) if x)
+        tag = (f"[CISA KEV · added {m['dateAdded']} · federal patch deadline {m.get('dueDate') or 'n/a'}"
+               + (" · known ransomware use" if m.get("ransomware") else "") + "] ")
+        out.append({
+            "title": f"CISA adds {cid} ({what}) to Known Exploited Vulnerabilities",
+            "link": f"https://nvd.nist.gov/vuln/detail/{cid}",
+            "summary": (tag + f"{m.get('name', '')}. {m.get('desc', '')} Required action: {m.get('action', '')}")[:1200],
+            # KEV gives a date only; CISA usually publishes US daytime.
+            "published": min(datetime.now(timezone.utc),
+                             datetime.combine(added, datetime.min.time(), tzinfo=timezone.utc) + timedelta(hours=18)),
+            "source": "CISA KEV",
+            "source_weight": 1.0,
+        })
+    print(f"  - CISA KEV as stories: {len(out)} added in the last {days}d")
+    return out
 
 
 # A feed at or above this weight is a PRIMARY source — a vendor PSIRT, a CERT,
@@ -375,6 +415,7 @@ def main() -> int:
         for fut in as_completed(futs):
             raw.extend(fut.result())
     kev = fetch_kev(timeout)
+    raw.extend(kev_items(kev, int(ing.get("kev_story_days", 2))))
 
     # window + URL dedup
     fresh: list[dict] = []

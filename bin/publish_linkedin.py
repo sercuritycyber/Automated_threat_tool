@@ -38,6 +38,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import textwrap
 from datetime import datetime, timedelta, timezone
@@ -141,6 +142,26 @@ def _read_queue() -> list[dict]:
         return []
 
 
+# Words that pin a post to the day it was written. "switched off until 08:00
+# UTC today" read as live advice at 16:00 (Kiteworks, 2026-09-26).
+_DATED_RE = re.compile(r"\b(today|tonight|this (morning|afternoon|evening|weekend)|"
+                       r"right now|until \d{1,2}:\d{2}|in the next \d+ hours?)\b", re.I)
+QUEUE_MAX_AGE_H = 36
+
+
+def _stale(q: dict, now: datetime) -> str | None:
+    """Why a queued post should no longer go out, or None."""
+    queued = _parse_iso(q.get("queued_at", ""))
+    if queued is None:
+        return None
+    if now - queued > timedelta(hours=QUEUE_MAX_AGE_H):
+        return f"queued over {QUEUE_MAX_AGE_H}h ago"
+    if (queued.astimezone(LONDON).date() != now.astimezone(LONDON).date()
+            and _DATED_RE.search(str(q.get("post_text") or ""))):
+        return "time-bound wording from an earlier day"
+    return None
+
+
 def _posted_urls() -> set[str]:
     try:
         rows = (STATE / "history.jsonl").read_text().splitlines()
@@ -226,6 +247,10 @@ def schedule_social(posts: list[dict], decision: dict, settings: dict,
 
     due, waiting = [], []
     for q in _read_queue():
+        why = _stale(q, now)
+        if why:
+            log(f"social queue: expired “{str(q.get('title'))[:50]}” — {why}")
+            continue
         after = _parse_iso(q.get("post_after", ""))
         (due if (after is None or after <= now) else waiting).append(q)
 
