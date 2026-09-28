@@ -625,8 +625,13 @@ def main() -> int:
     # analyst the prompt was tuned on, so its public posts wait for a human —
     # emergencies included, since its scores decide what counts as one.
     # Subscribers were already served in stage 3.
-    if (posts and not operator and is_backup_analyst(decision)
-            and (settings.get("analyst") or {}).get("backup_review", True)):
+    # `analyst.hold_posts_from` extends this to engines on probation: a list of
+    # analyst-name prefixes (e.g. [codex]) whose public posts also wait.
+    ana = settings.get("analyst") or {}
+    who = str(decision.get("analyst") or "")
+    probation = any(who.startswith(str(p)) for p in (ana.get("hold_posts_from") or []) if p)
+    if (posts and not operator and ana.get("backup_review", True)
+            and (is_backup_analyst(decision) or probation)):
         pj = STATE / "pending.json"
         try:
             existing = json.loads(pj.read_text()).get("queue", []) if pj.exists() else []

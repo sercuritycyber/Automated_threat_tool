@@ -67,6 +67,16 @@ out = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=Tr
 line = next((l for l in out.stdout.splitlines() if l.startswith("RESULT")), out.stderr[-300:])
 chk("backup post held for approval, not published", line, "RESULT 0 1 backup model (api:x/m)")
 
+# ---- engines on probation (analyst.hold_posts_from) are held too ----
+tmp2 = Path(tempfile.mkdtemp())
+dec2 = tmp2 / "decision.json"
+dec2.write_text(json.dumps({"decision": "post", "analyst": "codex", "posts": [post(["CVE-2026-1111"])]}))
+probe2 = (probe.replace(repr(str(tmp)), repr(str(tmp2))).replace(repr(str(dec)), repr(str(dec2)))
+          .replace('"analyst": {}', '"analyst": {"hold_posts_from": ["codex"]}'))
+out = subprocess.run([sys.executable, "-c", probe2], capture_output=True, text=True)
+line = next((l for l in out.stdout.splitlines() if l.startswith("RESULT")), out.stderr[-300:])
+chk("web-verified codex post held while on probation", line, "RESULT 0 1 backup model (codex)")
+
 print()
 print(f"{'ALL PASS' if not fails else str(len(fails)) + ' FAILURES: ' + ', '.join(fails)}")
 sys.exit(1 if fails else 0)
