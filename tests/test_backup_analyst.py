@@ -38,6 +38,12 @@ chk("grounded CVE kept", V.sanitize_decision(d, CANDS)[1], [])
 d = {"decision": "post", "analyst": "api:x/m", "posts": [post([], "See CVE-2026-2222 now.")]}
 chk("CVE invented in body text is caught", bool(V.sanitize_decision(d, CANDS)[1]), True)
 
+chk("codex is a backup", V.is_backup_analyst({"analyst": "codex:default"}), True)
+_env = {"LINKEDIN_ACCESS_TOKEN": "AQX" + "z" * 40, "EMAIL_SMTP_PORT": "587", "EMPTY": ""}
+chk("secret value in an alert is caught",
+    V.leaked_secrets({"alerts": [{"body": "key AQX" + "z" * 40}]}, _env), ["LINKEDIN_ACCESS_TOKEN"])
+chk("short values never match", V.leaked_secrets({"alerts": [{"body": "port 587"}]}, _env), [])
+
 # ---- publisher holds backup-model posts in pending.json, posts nothing ----
 tmp = Path(tempfile.mkdtemp())
 dec = tmp / "decision.json"

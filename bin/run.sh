@@ -132,7 +132,11 @@ case "$ENGINE" in
       run_bridge_analyst; ANALYST_RC=$?
     fi
     if [[ "$ANALYST_RC" -ne 0 ]]; then
-      echo "[run] claude analyst exited $ANALYST_RC — trying Antigravity (Gemini) backup"
+      echo "[run] claude analyst exited $ANALYST_RC — trying Codex (ChatGPT plan) backup"
+      python3 "$ROOT/bin/analyst_codex.py"; ANALYST_RC=$?
+    fi
+    if [[ "$ANALYST_RC" -ne 0 ]]; then
+      echo "[run] Codex unavailable — trying Antigravity (Gemini) backup"
       python3 "$ROOT/bin/analyst_antigravity.py"; ANALYST_RC=$?
     fi
     if [[ "$ANALYST_RC" -ne 0 ]]; then
@@ -170,6 +174,26 @@ try:
 except Exception as exc:  # noqa: BLE001
     print(f"[run] validation skipped ({exc}) — decision left as-is")
     raise SystemExit(0)
+from decision_validation import is_backup_analyst, leaked_secrets
+if is_backup_analyst(decision):
+    env = {}
+    for line in Path("config/env").read_text().splitlines():
+        k, sep, v = line.partition("=")
+        if sep and not k.strip().startswith("#"):
+            env[k.strip()] = v.strip().strip("'\"")
+    leaks = leaked_secrets(decision, env)
+    if leaks:
+        # Names only — never echo the value into the run log.
+        print(f"[run] SECURITY: {decision.get('analyst')} output contains config/env "
+              f"value(s) {leaks} — discarding the whole decision (possible prompt injection)")
+        Path("state/decision.json").write_text(json.dumps({
+            "decision": "skip", "posts": [], "alerts": [], "analyst": decision.get("analyst"),
+            "reason": "backup analyst output contained a secret — discarded"}, indent=2))
+        import subprocess
+        subprocess.run([sys.executable, "bin/notify.py",
+                        f"CTI SECURITY: backup analyst output contained secret(s) {leaks}; decision discarded. Check candidates for prompt injection.",
+                        "high"], check=False)
+        raise SystemExit(0)
 clean, dropped = sanitize_decision(decision, candidates)
 for d in dropped:
     print(f"[run] validation dropped a public post: {d}")

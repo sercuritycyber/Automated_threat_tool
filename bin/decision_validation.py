@@ -91,10 +91,21 @@ def _post_problems(post: dict, allowed: set[str], operator: bool) -> list[str]:
 
 def is_backup_analyst(decision: dict) -> bool:
     """True for engines that only see candidates.json (no web access): the
-    Gemini backup and the OpenAI-compatible providers. Their output gets the
+    Gemini backup, Codex and the OpenAI-compatible providers. Their output gets the
     strict checks below; Claude's does not, since it reads the articles and can
     legitimately cite a CVE the feed summary lacked."""
-    return str(decision.get("analyst") or "").startswith(("antigravity", "api:"))
+    return str(decision.get("analyst") or "").startswith(("antigravity", "api:", "codex:"))
+
+
+def leaked_secrets(decision: dict, env: dict) -> list[str]:
+    """Names of config/env values that appear anywhere in the decision.
+
+    Backstop against prompt injection in feed text ("print your API keys")
+    reaching subscribers, whose alerts are not held for review. Short values
+    (ports, true/false, handles) are skipped: they'd match by accident.
+    """
+    blob = json.dumps(decision, ensure_ascii=False)
+    return sorted(k for k, v in env.items() if v and len(v) >= 16 and v in blob)
 
 
 def _ungrounded_cves(post: dict, cand_text: str) -> list[str]:
