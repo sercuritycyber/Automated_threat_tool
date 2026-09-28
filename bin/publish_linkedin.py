@@ -630,20 +630,32 @@ def main() -> int:
     ana = settings.get("analyst") or {}
     who = str(decision.get("analyst") or "")
     probation = any(who.startswith(str(p)) for p in (ana.get("hold_posts_from") or []) if p)
-    if (posts and not operator and ana.get("backup_review", True)
-            and (is_backup_analyst(decision) or probation)):
+    hold: list[dict] = []
+    if posts and not operator:
+        if ana.get("backup_review", True) and (is_backup_analyst(decision) or probation):
+            hold = [{**p, "held_because": f"backup model ({who})"} for p in posts]
+            posts = []
+        else:
+            # decision_validation marks a post whose CVE or actor ID is not in
+            # its own source: possibly blended from another story.
+            hold = [{**p, "held_because": "not in its own source: " + ", ".join(p["ungrounded"])}
+                    for p in posts if p.get("ungrounded")]
+            posts = [p for p in posts if not p.get("ungrounded")]
+        for p in posts:
+            if p.get("unverified_figures") and not p.get("ungrounded"):
+                log(f"“{str(p.get('title'))[:40]}” figures not in the feed summary "
+                    f"(check against the article): {', '.join(p['unverified_figures'])}")
+    if hold:
         pj = STATE / "pending.json"
         try:
             existing = json.loads(pj.read_text()).get("queue", []) if pj.exists() else []
         except (json.JSONDecodeError, OSError):
             existing = []
-        tagged = [{**p, "held_because": f"backup model ({decision.get('analyst')})",
-                   "min_score": min_score} for p in posts]
         pj.write_text(json.dumps({"held_at": now_iso(), "manual": False,
-                                  "queue": existing + tagged,
+                                  "queue": existing + [{**h, "min_score": min_score} for h in hold],
                                   "considered": decision.get("considered", [])}, indent=2))
-        log(f"backup analyst {decision.get('analyst')}: {len(posts)} post(s) held for approval")
-        posts = []
+        for h in hold:
+            log(f"held for approval “{str(h.get('title'))[:50]}” — {h['held_because']}")
     # schedule_social parks new posts and returns whatever is due for release
     # (which may be items queued on an earlier run, even if this run's decision
     # is "skip").

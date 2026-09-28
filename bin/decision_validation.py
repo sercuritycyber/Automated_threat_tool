@@ -108,10 +108,61 @@ def leaked_secrets(decision: dict, env: dict) -> list[str]:
     return sorted(k for k, v in env.items() if v and len(v) >= 16 and v in blob)
 
 
-def _ungrounded_cves(post: dict, cand_text: str) -> list[str]:
-    cited = {c.upper() for c in (post.get("cve_ids") or []) if isinstance(c, str)}
-    cited |= {c.upper() for c in CVE_RE.findall(str(post.get("post_text") or ""))}
-    return sorted(c for c in cited if c not in cand_text)
+# Facts a post must be able to point back to in ITS OWN source. Checking
+# against the whole candidate batch let a CVE or figure from story B pass in
+# story A's post: the "Chinese whispers" failure, where a model saturated with
+# ~80 stories blends them (Charlie, 2026-09-29).
+ACTOR_RE = re.compile(r"\b(?:Storm|UNC|UTA|TA|APT|DEV|FIN|UAT)-?\d{2,5}\b", re.I)
+VERSION_RE = re.compile(r"\b\d+\.\d+\.\d+(?:[.-]\d+)*\b|\b\d+\.\d+-\d+(?:\.\d+)*\b")
+MONEY_RE = re.compile(r"[$£€]\s?\d[\d,.]*\s?(?:[kmb]n?|million|billion|thousand)?\b", re.I)
+COUNT_RE = re.compile(r"\b\d{1,3}(?:,\d{3})+\+?|\b\d{3,}\+|\b\d+(?:\.\d+)?%")
+# Claude reads the full articles, so a figure missing from our short feed
+# summary is normal there; only identifiers are strong enough to hold on.
+STRONG_KINDS = ("cve", "actor")
+
+
+def _norm(t: str) -> str:
+    return re.sub(r"[\s,]", "", t).upper()
+
+
+def post_facts(post: dict) -> dict[str, set[str]]:
+    text = " ".join(str(post.get(f) or "") for f in ("post_text", "short_text"))
+    facts = {
+        "cve": {c.upper() for c in CVE_RE.findall(text)}
+               | {str(c).upper() for c in (post.get("cve_ids") or []) if isinstance(c, str)},
+        "actor": {a for a in ACTOR_RE.findall(text)},
+        "version": set(VERSION_RE.findall(text)),
+        "money": {m.strip() for m in MONEY_RE.findall(text)},
+        "count": set(COUNT_RE.findall(text)),
+    }
+    return {k: v for k, v in facts.items() if v}
+
+
+def source_text(post: dict, candidates: dict) -> str | None:
+    """Everything our ingest knows about the ONE story this post cites."""
+    url = normalise_url(post.get("url", ""))
+    for c in candidates.get("candidates") or []:
+        if isinstance(c, dict) and normalise_url(c.get("url", "")) == url:
+            return _norm(json.dumps(c, ensure_ascii=False))
+    return None
+
+
+def ungrounded_facts(post: dict, candidates: dict, kinds=None) -> list[str]:
+    """Facts in the post that its own source does not contain."""
+    src = source_text(post, candidates)
+    if src is None:
+        return []  # provenance check already rejects an unknown URL
+    missing = []
+    for kind, vals in post_facts(post).items():
+        if kinds and kind not in kinds:
+            continue
+        for v in sorted(vals):
+            n = _norm(v).rstrip("+")
+            if kind == "money":
+                n = re.sub(r"[$£€]", "", n)
+            if n and n not in src:
+                missing.append(f"{kind} {v}")
+    return missing
 
 
 def sanitize_decision(decision: dict, candidates: dict) -> tuple[dict, list[str]]:
@@ -129,14 +180,24 @@ def sanitize_decision(decision: dict, candidates: dict) -> tuple[dict, list[str]
         return decision, dropped
     allowed = _candidate_urls(candidates)
     strict = is_backup_analyst(decision)
-    cand_text = json.dumps(candidates).upper() if strict else ""
     kept = []
     for i, post in enumerate(posts):
         probs = _post_problems(post, allowed, operator=False)
-        if strict and isinstance(post, dict):
-            bad = _ungrounded_cves(post, cand_text)
-            if bad:
-                probs.append(f"cites {', '.join(bad)}, not in any candidate (possible invention)")
+        if isinstance(post, dict) and not probs:
+            if strict:
+                # Backup engines see only candidates.json: anything not in
+                # this post's own source can only have been blended or invented.
+                bad = ungrounded_facts(post, candidates)
+                if bad:
+                    probs.append(f"not in its own source (blended or invented): {', '.join(bad)}")
+            else:
+                strong = ungrounded_facts(post, candidates, STRONG_KINDS)
+                if strong:
+                    # Claude may have read it in the full article; a human decides.
+                    post["ungrounded"] = strong
+                weak = ungrounded_facts(post, candidates, ("version", "money", "count"))
+                if weak:
+                    post["unverified_figures"] = weak
         if probs:
             title = (post.get("title") or post.get("url") or f"post {i}") if isinstance(post, dict) else f"post {i}"
             dropped.append(f"{str(title)[:60]} — {'; '.join(probs)}")
