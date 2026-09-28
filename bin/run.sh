@@ -123,6 +123,15 @@ run_bridge_analyst() {
 set +e
 ANALYST_RC=1
 case "$ENGINE" in
+  codex)
+    python3 "$ROOT/bin/analyst_codex.py"; ANALYST_RC=$?
+    if [[ "$ANALYST_RC" -ne 0 ]]; then
+      echo "[run] Codex exited $ANALYST_RC — trying the Claude subscription"
+      run_claude_analyst; ANALYST_RC=$?
+    fi
+    # No paid API bridge on the Codex route. Keep subscriber-only deterministic
+    # fallback below if the subscription is unavailable.
+    ;;
   antigravity)
     python3 "$ROOT/bin/analyst_antigravity.py"; ANALYST_RC=$?
     ;;
@@ -154,9 +163,9 @@ if [[ "$ANALYST_RC" -ne 0 ]]; then
   if [[ "$BRIDGE_EXPECTED_FALLBACK" -eq 1 ]]; then
     echo "[run] bridge mode: expected fallback, no alert"
   else
-    python3 "$ROOT/bin/notify.py" "CTI analyst unavailable (exit $ANALYST_RC) — ran deterministic fallback: unverified subscriber alerts only, no public post. Check 'claude -p' auth on the VM (or API bridge credits). Log: $LOG" high || true
+    python3 "$ROOT/bin/notify.py" "CTI analyst unavailable (exit $ANALYST_RC) — ran deterministic fallback: unverified subscriber alerts only, no public post. Check $ENGINE authentication on the VM. Log: $LOG" high || true
   fi
-  python3 "$ROOT/bin/analyst_fallback.py" || echo "[run] analyst_fallback returned $? (non-fatal)"
+  python3 "$ROOT/bin/analyst_fallback.py" || fail analyst_fallback $?
 fi
 
 # Model output is untrusted: drop any public post whose URL was not in this
@@ -174,8 +183,9 @@ try:
 except Exception as exc:  # noqa: BLE001
     print(f"[run] validation skipped ({exc}) — decision left as-is")
     raise SystemExit(0)
-from decision_validation import is_backup_analyst, leaked_secrets
-if is_backup_analyst(decision):
+from decision_validation import leaked_secrets
+# Every engine, not only backups: web-verified Codex and Claude read hostile text too.
+if isinstance(decision, dict):
     env = {}
     for line in Path("config/env").read_text().splitlines():
         k, sep, v = line.partition("=")
@@ -184,14 +194,14 @@ if is_backup_analyst(decision):
     leaks = leaked_secrets(decision, env)
     if leaks:
         # Names only — never echo the value into the run log.
-        print(f"[run] SECURITY: {decision.get('analyst')} output contains config/env "
+        print(f"[run] SECURITY: {decision.get('analyst') or 'claude'} output contains config/env "
               f"value(s) {leaks} — discarding the whole decision (possible prompt injection)")
         Path("state/decision.json").write_text(json.dumps({
             "decision": "skip", "posts": [], "alerts": [], "analyst": decision.get("analyst"),
-            "reason": "backup analyst output contained a secret — discarded"}, indent=2))
+            "reason": "analyst output contained a secret — discarded"}, indent=2))
         import subprocess
         subprocess.run([sys.executable, "bin/notify.py",
-                        f"CTI SECURITY: backup analyst output contained secret(s) {leaks}; decision discarded. Check candidates for prompt injection.",
+                        f"CTI SECURITY: analyst output contained secret(s) {leaks}; decision discarded. Check candidates for prompt injection.",
                         "high"], check=False)
         raise SystemExit(0)
 clean, dropped = sanitize_decision(decision, candidates)
@@ -243,5 +253,4 @@ fi
 
 echo "=== done $(date -u +%Y%m%dT%H%M%SZ) ==========================="
 
-# keep only the last 60 run logs
-ls -1t "$ROOT"/logs/run-*.log 2>/dev/null | tail -n +61 | xargs -r rm -f
+# Run logs retained during the Codex handover; no automatic deletion here.
