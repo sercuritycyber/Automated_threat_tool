@@ -94,7 +94,7 @@ def is_backup_analyst(decision: dict) -> bool:
     Gemini backup and the OpenAI-compatible providers. Their output gets the
     strict checks below; Claude's does not, since it reads the articles and can
     legitimately cite a CVE the feed summary lacked."""
-    return str(decision.get("analyst") or "").startswith(("antigravity", "api:"))
+    return str(decision.get("analyst") or "").startswith(("antigravity", "api:", "codex-summary"))
 
 
 def _ungrounded_cves(post: dict, cand_text: str) -> list[str]:

@@ -123,6 +123,11 @@ run_bridge_analyst() {
 set +e
 ANALYST_RC=1
 case "$ENGINE" in
+  codex)
+    python3 "$ROOT/bin/analyst_codex.py"; ANALYST_RC=$?
+    # No paid API bridge on the Codex route. Keep subscriber-only deterministic
+    # fallback below if the subscription is unavailable.
+    ;;
   antigravity)
     python3 "$ROOT/bin/analyst_antigravity.py"; ANALYST_RC=$?
     ;;
@@ -150,9 +155,9 @@ if [[ "$ANALYST_RC" -ne 0 ]]; then
   if [[ "$BRIDGE_EXPECTED_FALLBACK" -eq 1 ]]; then
     echo "[run] bridge mode: expected fallback, no alert"
   else
-    python3 "$ROOT/bin/notify.py" "CTI analyst unavailable (exit $ANALYST_RC) — ran deterministic fallback: unverified subscriber alerts only, no public post. Check 'claude -p' auth on the VM (or API bridge credits). Log: $LOG" high || true
+    python3 "$ROOT/bin/notify.py" "CTI analyst unavailable (exit $ANALYST_RC) — ran deterministic fallback: unverified subscriber alerts only, no public post. Check $ENGINE authentication on the VM. Log: $LOG" high || true
   fi
-  python3 "$ROOT/bin/analyst_fallback.py" || echo "[run] analyst_fallback returned $? (non-fatal)"
+  python3 "$ROOT/bin/analyst_fallback.py" || fail analyst_fallback $?
 fi
 
 # Model output is untrusted: drop any public post whose URL was not in this
@@ -219,5 +224,4 @@ fi
 
 echo "=== done $(date -u +%Y%m%dT%H%M%SZ) ==========================="
 
-# keep only the last 60 run logs
-ls -1t "$ROOT"/logs/run-*.log 2>/dev/null | tail -n +61 | xargs -r rm -f
+# Run logs retained during the Codex handover; no automatic deletion here.

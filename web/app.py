@@ -42,6 +42,7 @@ for d in (STATE, DRAFTS, LOGS):
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "bin"))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 import publishers  # noqa: E402
+from analyst_codex import call_codex  # noqa: E402
 import marketing_desk as MKT  # noqa: E402
 import admin_center as AC  # noqa: E402
 import cve_desk as CVE  # noqa: E402
@@ -793,7 +794,7 @@ def fire_top():
     if not pool:
         return RedirectResponse("/?m=" + quote("No fresh candidates to fire — run the pipeline first"), 303)
     top = max(pool, key=lambda x: x.get("pre_score", 0))
-    it, err = _claude_draft_one(top)
+    it, err = _analyst_draft_one(top)
     if err:
         return RedirectResponse("/?m=" + quote("Fire failed — " + err), 303)
     queue_append([it], manual=True)
@@ -1043,17 +1044,20 @@ Output ONLY the rewritten post text, nothing else.
 
 
 def _rewrite_text(cur: str) -> str:
-    """Ask claude -p to tighten a post. Returns "" on any failure."""
+    """Ask the configured analyst to tighten a post. Returns "" on any failure."""
     cur = (cur or "").strip()
     if not cur:
         return ""
     try:
-        proc = subprocess.run(["claude", "-p", REWRITE_PROMPT % cur, "--allowedTools", "",
-                               "--settings", str(ROOT / "config" / "claude-untrusted.json")],
-                               cwd=ROOT, capture_output=True, text=True, timeout=120,
-                               env=_env_with_config())
-        new = proc.stdout.strip()
-    except (subprocess.TimeoutExpired, FileNotFoundError):
+        if (load_yaml(CFG / "settings.yaml").get("analyst") or {}).get("engine") == "codex":
+            new, _ = call_codex(REWRITE_PROMPT % cur, timeout=120, web=False)
+        else:
+            proc = subprocess.run(["claude", "-p", REWRITE_PROMPT % cur, "--allowedTools", "",
+                                   "--settings", str(ROOT / "config" / "claude-untrusted.json")],
+                                   cwd=ROOT, capture_output=True, text=True, timeout=120,
+                                   env=_env_with_config())
+            new = proc.stdout.strip() if proc.returncode == 0 else ""
+    except (subprocess.TimeoutExpired, OSError, RuntimeError, ValueError):
         return ""
     # The new format carries no "https://" by design, so the old
     # `"http" in new` guard would reject every good rewrite. Accept on
@@ -1138,8 +1142,8 @@ Print ONLY this JSON on one line - no code fence, no commentary:
 """
 
 
-def _claude_draft_one(cand: dict) -> tuple[dict | None, str]:
-    """Hand one operator-picked candidate to `claude -p`; returns (post_item, "")."""
+def _analyst_draft_one(cand: dict) -> tuple[dict | None, str]:
+    """Hand one operator-picked candidate to the configured analyst; returns (post_item, "")."""
     prompt = DRAFT_ONE_PROMPT % {
         "title": cand.get("title", ""),
         "url": cand.get("url", ""),
@@ -1150,17 +1154,21 @@ def _claude_draft_one(cand: dict) -> tuple[dict | None, str]:
         "summary": (cand.get("summary", "") or "")[:1200],
     }
     try:
-        proc = subprocess.run(
-            # candidate text is untrusted; same hard deny rules as the analyst
-            ["claude", "-p", prompt, "--allowedTools", "WebFetch",
-             "--settings", str(ROOT / "config" / "claude-untrusted.json")],
-            cwd=ROOT, capture_output=True, text=True, timeout=240, env=_env_with_config(),
-        )
-    except (subprocess.TimeoutExpired, FileNotFoundError) as ex:
+        if (load_yaml(CFG / "settings.yaml").get("analyst") or {}).get("engine") == "codex":
+            raw, _ = call_codex(prompt, timeout=240)
+        else:
+            proc = subprocess.run(
+                ["claude", "-p", prompt, "--allowedTools", "WebFetch",
+                 "--settings", str(ROOT / "config" / "claude-untrusted.json")],
+                cwd=ROOT, capture_output=True, text=True, timeout=240, env=_env_with_config())
+            if proc.returncode:
+                return None, f"analyst exited {proc.returncode}"
+            raw = proc.stdout
+    except (subprocess.TimeoutExpired, OSError, RuntimeError, ValueError) as ex:
         return None, f"analyst call failed: {str(ex)[:160]}"
-    m = re.search(r"\{.*\}", proc.stdout, re.S)
+    m = re.search(r"\{.*\}", raw, re.S)
     if not m:
-        return None, f"analyst returned no JSON (exit {proc.returncode})"
+        return None, "analyst returned no JSON"
     try:
         it = json.loads(m.group(0))
     except json.JSONDecodeError as ex:
@@ -1190,7 +1198,7 @@ def candidates_fire(url: str = Form("")):
         return RedirectResponse("/candidates?m=" + quote("Couldn't find that candidate — re-run ingest first"), 303)
     if url in posted_urls():
         return RedirectResponse("/candidates?m=" + quote("That story has already been posted"), 303)
-    it, err = _claude_draft_one(cand)
+    it, err = _analyst_draft_one(cand)
     if err:
         return RedirectResponse("/candidates?m=" + quote("Manual fire failed — " + err), 303)
     queue_append([it], manual=True)
@@ -1327,7 +1335,16 @@ def settings_get(request: Request):
     def ck(v):
         return "checked" if v else ""
 
+    engine = (s.get("analyst") or {}).get("engine", "claude")
+    engine_options = "".join(f'<option value="{x}" {"selected" if engine == x else ""}>{label}</option>'
+                             for x, label in (("codex", "Codex — ChatGPT subscription"),
+                                              ("claude", "Claude — legacy engine"),
+                                              ("antigravity", "Gemini — backup engine")))
     body = f"""<form method=post action=/settings>
+<h2>Analyst</h2><div class=card><label>Engine</label>
+<select name=analyst_engine>{engine_options}</select>
+<small>Codex uses the VM's ChatGPT login. If unavailable, the scheduled run uses
+subscriber-only deterministic fallback; it does not spend Claude API credits.</small></div>
 <h2>Brand / voice</h2><div class=card>
 <label>Name</label><input type=text name=brand_name value="{e(b.get('name',''))}">
 <label>Site</label><input type=text name=brand_site value="{e(b.get('site',''))}">
@@ -1391,6 +1408,9 @@ def settings_get(request: Request):
 async def settings_post(request: Request):
     f = await request.form()
     s = load_yaml(CFG / "settings.yaml")
+    engine = f.get("analyst_engine")
+    if engine in {"codex", "claude", "antigravity"}:
+        s.setdefault("analyst", {})["engine"] = engine
     s.setdefault("brand", {}).update(
         name=f.get("brand_name", ""), site=f.get("brand_site", ""),
         audience=f.get("brand_audience", ""))
