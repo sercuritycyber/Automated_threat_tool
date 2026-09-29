@@ -44,6 +44,9 @@ _env = {"LINKEDIN_ACCESS_TOKEN": "AQX" + "z" * 40, "EMAIL_SMTP_PORT": "587", "EM
 chk("secret value in an alert is caught",
     V.leaked_secrets({"alerts": [{"body": "key AQX" + "z" * 40}]}, _env), ["LINKEDIN_ACCESS_TOKEN"])
 chk("short values never match", V.leaked_secrets({"alerts": [{"body": "port 587"}]}, _env), [])
+chk("public site URL is not a secret",
+    V.leaked_secrets({"posts": [{"comment": "https://cti.securitycyber.uk"}]},
+                     {"CTI_WORKER_URL": "https://cti.securitycyber.uk"}), [])
 
 # ---- publisher holds backup-model posts in pending.json, posts nothing ----
 tmp = Path(tempfile.mkdtemp())
