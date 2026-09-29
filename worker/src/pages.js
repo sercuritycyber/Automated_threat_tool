@@ -203,6 +203,7 @@ export function landing(cfg, flash = "", flashKind = "", buyable = null) {
 <p class=muted style="margin-top:8px">${esc(t.blurb || "")}</p>
 <ul>
 <li>The full paid feed for a week — instant alerts scoring ${Number(t.instant_min_score) || 70}+ and the daily digest</li>
+<li>Includes the weekly honeynet brief from our own sensors</li>
 <li>Goes to ${esc(chans)}</li>
 <li>No card, no charge. It stops after 7 days unless you upgrade</li>
 <li>Keep it going from £2/week — your feed URL and preferences carry over</li>
@@ -236,6 +237,7 @@ export function landing(cfg, flash = "", flashKind = "", buyable = null) {
 <ul>
 <li>Only what clears the bar — nothing routine, nothing you can't act on</li>
 <li>Delivered the moment it's confirmed, plus a once-a-day recap</li>
+<li>Weekly honeynet brief from our own sensors — included, no extra cost</li>
 ${t.attach_json ? "<li>Machine-readable JSON with every alert — pipe it straight into your tooling</li>" : ""}
 <li>Filter to your stack: name the vendors you run, ignore the rest</li>
 <li>Goes to ${esc(chans)}</li>
@@ -332,6 +334,25 @@ Who's exploiting it and per which source, and what a defender should hunt for ri
 </div>
 <p class=muted style="margin-top:12px">Every fact is attributed. We never invent a CVE, a
 version, a CVSS or an indicator — if the source doesn't say it, it's not in the alert.</p>
+</div>
+
+<div class=section id=honeynet>
+<h2>Honeynet intelligence — our own sensors, included in every plan</h2>
+<p class=muted>Alongside the news-driven alerts, we run our own internet-facing honeypots:
+SSH and Telnet sensors plus Windows RDP/SMB hosts, collected in Microsoft Sentinel. Once a
+week every subscriber gets a first-party honeynet brief built from that telemetry — not
+republished from another vendor's feed. It's part of the subscription at no extra cost,
+including the free trial.</p>
+<div class=grid2>
+<div class=card><b class=h style="font-family:var(--display);color:var(--white)">What's in the brief</b>
+<p class=muted>Attack volume and how far attackers got through the kill chain, the
+campaigns we saw, the credentials that actually worked, payload and C2 hosts, the IPs
+spraying Windows logons, and what to hunt for. Indicators are defanged.</p></div>
+<div class=card><b class=h style="font-family:var(--display);color:var(--white)">How it's made</b>
+<p class=muted>Counted and clustered by code, straight from the sensor data — no model reads
+the logs, so no figure is estimated or invented. When the sensors had a gap in the week,
+the brief says so.</p></div>
+</div>
 </div>
 
 <div class=section>
