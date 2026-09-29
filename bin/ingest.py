@@ -346,6 +346,13 @@ def prescore(item: dict, kev: dict) -> dict:
             score += 3
             reasons.append("+3 published <3h ago")
 
+    # UK service: the national authority's own advisory is the source UK
+    # readers act on. NCSC items carry short summaries with no CVE in the title,
+    # so without this they scored below the lanes (Citrix alert, 2026-09-28: 47.9).
+    if "NCSC" in str(item.get("source", "")).upper():
+        score += 15
+        reasons.append("+15 UK national authority (NCSC)")
+
     category = str(item.get("category", "")).strip().upper()
     if category in PRIORITY_COUNTRIES:
         score += 12

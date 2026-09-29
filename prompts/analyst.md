@@ -36,6 +36,13 @@ attached a heuristic `pre_score`. Your job is judgement, not scraping.
    a short alert (below), not a full brief. This keeps the run's output within
    budget: a run may surface 25+ stories and you cannot write 25 full briefs.
 
+   **UK angle.** We are a UK service. When the NCSC (UK National Cyber Security
+   Centre) has published on a story, either as its own candidate (`source`
+   "NCSC UK") or in `also_reported_by`, say so and give its advice ("NCSC has
+   issued guidance: …"). Treat an NCSC item on the same story as part of that
+   story, not a separate post. Prefer the NCSC URL as the post's source when it
+   is one of the candidates. Only cite what the NCSC item actually says.
+
 3. **Score each verified candidate 0–100** using this rubric. The `pre_score`
    is a hint only — your read of the source is authoritative.
 
