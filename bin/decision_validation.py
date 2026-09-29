@@ -115,6 +115,38 @@ def leaked_secrets(decision: dict, env: dict) -> list[str]:
                   if k not in PUBLIC_ENV and v and len(v) >= 16 and v in blob)
 
 
+def drop_leaking_items(decision: dict, env: dict) -> tuple[dict, list[str], list[str]]:
+    """Remove only the posts/alerts that contain a config/env secret.
+
+    Returns (decision, dropped descriptions, residual leak names). A residual
+    leak sits outside any item (reason, summary...) and the caller must discard
+    the whole decision. Descriptions carry env NAMES only, never values.
+    """
+    decision = dict(decision)
+    dropped: list[str] = []
+    for field in ("posts", "alerts"):
+        items = decision.get(field)
+        if not isinstance(items, list):
+            continue
+        kept = []
+        for i, item in enumerate(items):
+            leaks = leaked_secrets(item, env)
+            if leaks:
+                title = item.get("title") if isinstance(item, dict) else None
+                dropped.append(f"{field}[{i}] {str(title or '')[:60]} — contains {leaks}")
+            else:
+                kept.append(item)
+        decision[field] = kept
+    selected = decision.get("selected")
+    if isinstance(selected, dict) and leaked_secrets(selected, env):
+        dropped.append(f"selected — contains {leaked_secrets(selected, env)}")
+        decision.pop("selected")
+    if dropped and not decision.get("posts") and not decision.get("selected"):
+        decision["decision"] = "skip"
+        decision["reason"] = (str(decision.get("reason") or "") + " [public posts dropped: contained a secret]").strip()
+    return decision, dropped, leaked_secrets(decision, env)
+
+
 # Facts a post must be able to point back to in ITS OWN source. Checking
 # against the whole candidate batch let a CVE or figure from story B pass in
 # story A's post: the "Chinese whispers" failure, where a model saturated with

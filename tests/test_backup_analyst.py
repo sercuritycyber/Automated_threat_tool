@@ -44,6 +44,19 @@ _env = {"LINKEDIN_ACCESS_TOKEN": "AQX" + "z" * 40, "EMAIL_SMTP_PORT": "587", "EM
 chk("secret value in an alert is caught",
     V.leaked_secrets({"alerts": [{"body": "key AQX" + "z" * 40}]}, _env), ["LINKEDIN_ACCESS_TOKEN"])
 chk("short values never match", V.leaked_secrets({"alerts": [{"body": "port 587"}]}, _env), [])
+_sec = "AQX" + "z" * 40
+_d = {"decision": "post", "reason": "ok",
+      "posts": [{"title": "good"}, {"title": "bad", "comment": _sec}],
+      "alerts": [{"title": "a1"}, {"title": "a2", "body": "key " + _sec}]}
+_c, _dr, _res = V.drop_leaking_items(_d, _env)
+chk("only leaking items dropped",
+    ([p["title"] for p in _c["posts"]], [a["title"] for a in _c["alerts"]], len(_dr), _res, _c["decision"]),
+    (["good"], ["a1"], 2, [], "post"))
+chk("drop descriptions never carry the value", any(_sec in x for x in _dr), False)
+_c, _dr, _res = V.drop_leaking_items({"decision": "post", "posts": [{"comment": _sec}], "alerts": [{"title": "a"}]}, _env)
+chk("all posts leaked -> skip, alerts kept", (_c["decision"], len(_c["alerts"]), _res), ("skip", 1, []))
+_c, _dr, _res = V.drop_leaking_items({"decision": "post", "reason": _sec, "posts": [], "alerts": []}, _env)
+chk("leak outside items is residual", _res, ["LINKEDIN_ACCESS_TOKEN"])
 chk("public site URL is not a secret",
     V.leaked_secrets({"posts": [{"comment": "https://cti.securitycyber.uk"}]},
                      {"CTI_WORKER_URL": "https://cti.securitycyber.uk"}), [])
