@@ -649,8 +649,11 @@ def main() -> int:
     hold: list[dict] = []
     if posts and not operator:
         if ana.get("backup_review", True) and (is_backup_analyst(decision) or probation):
-            hold = [{**p, "held_because": f"backup model ({who})"} for p in posts]
-            posts = []
+            # The honeynet brief is built from our own report by code, not by
+            # this run's model, so a backup engine is no reason to hold it.
+            hold = [{**p, "held_because": f"backup model ({who})"} for p in posts
+                    if p.get("source") != "honeynet"]
+            posts = [p for p in posts if p.get("source") == "honeynet"]
         else:
             # decision_validation marks a post whose CVE or actor ID is not in
             # its own source: possibly blended from another story.

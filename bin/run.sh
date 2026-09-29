@@ -168,6 +168,12 @@ if [[ "$ANALYST_RC" -ne 0 ]]; then
   python3 "$ROOT/bin/analyst_fallback.py" || fail analyst_fallback $?
 fi
 
+# Honeynet add-on: the weekly first-party brief from honeyintel joins this run's
+# decision here, so the leak guard, validation, subscriber fan-out and every
+# posting rule below treat it exactly like CTI output. Never fatal.
+python3 "$ROOT/bin/honeynet_bridge.py" --merge "$ROOT/state/decision.json" \
+  || echo "[run] honeynet bridge returned $? (non-fatal)"
+
 # Model output is untrusted: drop any public post whose URL was not in this
 # run's candidate set (or is missing from its own body). NON-FATAL — subscribers
 # still get served; only the offending social posts are removed.

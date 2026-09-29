@@ -12,6 +12,8 @@ import json
 import re
 from urllib.parse import urlsplit, urlunsplit
 
+# Source tag honeynet_bridge puts on its first-party post; see _post_problems.
+HONEYNET = "honeynet"
 URL_RE = re.compile(r"https?://[^\s<>\])]+", re.I)
 CVE_RE = re.compile(r"CVE-\d{4}-\d{4,}", re.I)
 _TRACKING = {
@@ -66,6 +68,13 @@ def _post_problems(post: dict, allowed: set[str], operator: bool) -> list[str]:
     if not isinstance(post, dict):
         return ["is not an object"]
     if operator:
+        return out
+    if post.get("source") == HONEYNET:
+        # First-party honeynet brief: built from our own report by
+        # honeynet_bridge (which strips analyst items claiming this source), so
+        # there is no news URL to trace. Keep the body-URL rule.
+        if URL_RE.findall(str(post.get("post_text") or "")):
+            out.append("post_text contains a URL — links belong in `comment` only")
         return out
     url = normalise_url(post.get("url", ""))
     if not url or url not in allowed:
@@ -222,7 +231,7 @@ def sanitize_decision(decision: dict, candidates: dict) -> tuple[dict, list[str]
     kept = []
     for i, post in enumerate(posts):
         probs = _post_problems(post, allowed, operator=False)
-        if isinstance(post, dict) and not probs:
+        if isinstance(post, dict) and not probs and post.get("source") != HONEYNET:
             if strict:
                 # Backup engines see only candidates.json: anything not in
                 # this post's own source can only have been blended or invented.
