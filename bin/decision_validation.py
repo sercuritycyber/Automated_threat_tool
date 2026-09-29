@@ -97,6 +97,12 @@ def is_backup_analyst(decision: dict) -> bool:
     return str(decision.get("analyst") or "").startswith(("antigravity", "api:", "codex-summary"))
 
 
+# config/env entries that are public by design. The analyst prompt tells every
+# post to plug cti.securitycyber.uk, which is CTI_WORKER_URL's value, so
+# scanning it discarded every Claude decision (2026-09-29).
+PUBLIC_ENV = frozenset({"CTI_WORKER_URL"})
+
+
 def leaked_secrets(decision: dict, env: dict) -> list[str]:
     """Names of config/env values that appear anywhere in the decision.
 
@@ -105,7 +111,8 @@ def leaked_secrets(decision: dict, env: dict) -> list[str]:
     (ports, true/false, handles) are skipped: they'd match by accident.
     """
     blob = json.dumps(decision, ensure_ascii=False)
-    return sorted(k for k, v in env.items() if v and len(v) >= 16 and v in blob)
+    return sorted(k for k, v in env.items()
+                  if k not in PUBLIC_ENV and v and len(v) >= 16 and v in blob)
 
 
 # Facts a post must be able to point back to in ITS OWN source. Checking
