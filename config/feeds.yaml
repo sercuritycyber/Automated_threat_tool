@@ -51,6 +51,17 @@ feeds:
   url: https://portswigger.net/research/rss
   weight: 0.7
   enabled: true
+# Government / public-sector breach disclosures: the Pentagon DMDC breach
+# (3M people, 2026-09-25) broke via general and government press and none of
+# the security-trade feeds above carried it.
+- name: The Record (Recorded Future News)
+  url: https://therecord.media/feed
+  weight: 0.75
+  enabled: true
+- name: Federal News Network (cybersecurity)
+  url: https://federalnewsnetwork.com/category/technology-main/cybersecurity/feed/
+  weight: 0.7
+  enabled: true
 - name: The Hacker News
   url: https://feeds.feedburner.com/TheHackersNews
   weight: 0.72
