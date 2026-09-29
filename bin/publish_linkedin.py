@@ -457,6 +457,7 @@ def load_decision(args) -> tuple[dict, list[dict], bool]:
         p = {"title": args.title or "manual post", "url": "", "source": "manual",
              "cve_ids": [], "score": 100, "confidence": "operator",
              "post_text": args.text.strip(),
+             "comment": (args.comment or "").strip() or None,
              "targets": [t.strip() for t in (args.targets or "").split(",") if t.strip()] or None}
         return {"decision": "post", "reason": "operator composed", "run_at": now_iso(),
                 "min_score": 0}, [p], True
@@ -598,9 +599,24 @@ def main() -> int:
     ap.add_argument("--text", help="post this exact text now (operator one-off)")
     ap.add_argument("--title", help="title to record for --text")
     ap.add_argument("--targets", help="comma list of targets for --text (default: settings)")
+    ap.add_argument("--comment", help="first comment for --text (the source link), or the text "
+                                      "for --comment-on")
+    ap.add_argument("--comment-on", metavar="SHARE_URN",
+                    help="add --comment as a comment on an existing LinkedIn post, then exit")
     args = ap.parse_args()
 
     settings = load_settings()
+    if args.comment_on:
+        # A manual post that went out without its source link (2026-09-29).
+        if not args.comment:
+            log("--comment-on needs --comment")
+            return 2
+        C = creds()
+        tok = C.get("LINKEDIN_ACCESS_TOKEN") or ""
+        ok = publishers._li_comment(tok, publishers._li_author(tok, C, log), args.comment_on,
+                                    args.comment, "", log)
+        log(f"comment on {args.comment_on}: {'ok' if ok else 'FAILED'}")
+        return 0 if ok else 1
     pub = settings.get("publish", {})
     mode = str(pub.get("mode", "auto")).lower()
     limit = int(pub.get("max_post_chars", 2900))
