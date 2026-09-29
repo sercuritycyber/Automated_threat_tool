@@ -183,27 +183,36 @@ try:
 except Exception as exc:  # noqa: BLE001
     print(f"[run] validation skipped ({exc}) — decision left as-is")
     raise SystemExit(0)
-from decision_validation import leaked_secrets
+from decision_validation import drop_leaking_items
 # Every engine, not only backups: web-verified Codex and Claude read hostile text too.
+# Only the items carrying a secret are dropped; the rest still reach subscribers.
 if isinstance(decision, dict):
     env = {}
     for line in Path("config/env").read_text().splitlines():
         k, sep, v = line.partition("=")
         if sep and not k.strip().startswith("#"):
             env[k.strip()] = v.strip().strip("'\"")
-    leaks = leaked_secrets(decision, env)
-    if leaks:
+    decision, leak_drops, residual = drop_leaking_items(decision, env)
+    who = decision.get("analyst") or "claude"
+    import subprocess
+    if residual:
         # Names only — never echo the value into the run log.
-        print(f"[run] SECURITY: {decision.get('analyst') or 'claude'} output contains config/env "
-              f"value(s) {leaks} — discarding the whole decision (possible prompt injection)")
+        print(f"[run] SECURITY: {who} output contains config/env value(s) {residual} "
+              f"outside any post/alert — discarding the whole decision (possible prompt injection)")
         Path("state/decision.json").write_text(json.dumps({
             "decision": "skip", "posts": [], "alerts": [], "analyst": decision.get("analyst"),
             "reason": "analyst output contained a secret — discarded"}, indent=2))
-        import subprocess
         subprocess.run([sys.executable, "bin/notify.py",
-                        f"CTI SECURITY: analyst output contained secret(s) {leaks}; decision discarded. Check candidates for prompt injection.",
+                        f"CTI SECURITY: analyst output contained secret(s) {residual}; decision discarded. Check candidates for prompt injection.",
                         "high"], check=False)
         raise SystemExit(0)
+    if leak_drops:
+        for d in leak_drops:
+            print(f"[run] SECURITY: {who} item dropped — {d}")
+        Path("state/decision.json").write_text(json.dumps(decision, indent=2))
+        subprocess.run([sys.executable, "bin/notify.py",
+                        f"CTI SECURITY: dropped {len(leak_drops)} analyst item(s) containing a secret; the rest were delivered. Check candidates for prompt injection. {leak_drops}",
+                        "high"], check=False)
 clean, dropped = sanitize_decision(decision, candidates)
 for d in dropped:
     print(f"[run] validation dropped a public post: {d}")
