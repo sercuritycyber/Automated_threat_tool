@@ -46,6 +46,7 @@ from analyst_codex import call_codex  # noqa: E402
 import marketing_desk as MKT  # noqa: E402
 import admin_center as AC  # noqa: E402
 import cve_desk as CVE  # noqa: E402
+import honeynet_desk as HN  # noqa: E402
 import panel_theme as PT  # noqa: E402
 try:
     import subscribers as SUBS  # noqa: E402
@@ -406,6 +407,9 @@ NAV = [
     ("Operate", [("/", "Operations", "gauge"), ("/review", "Review queue", "inbox"),
                  ("/compose", "Compose", "pen"), ("/candidates", "Candidates", "list"),
                  ("/intel", "Intel Desk", "radar"), ("/drafts", "Drafts", "file")]),
+    ("Honeynet", [("/honeynet", "Overview", "hive"), ("/honeynet/campaigns", "Campaigns", "target"),
+                  ("/honeynet/iocs", "IOC feed", "shield"), ("/honeynet/credentials", "Credentials", "key"),
+                  ("/honeynet/windows", "Windows sensors", "terminal"), ("/honeynet/report", "Report & draft", "file")]),
     ("Grow", [("/marketing", "Marketing", "megaphone")]),
     ("Customers", [("/service", "CTI service", "shield"), ("/subscribers", "Subscribers", "users"),
                    ("/purchases", "Purchases", "card")]),
@@ -2640,6 +2644,53 @@ async def subscriptions_save(request: Request):
     return RedirectResponse("/subscriptions?m=Saved", 303)
 
 
+
+
+# ----------------------------------------------------------------------------- honeynet desk
+# Reads the separate honeyintel service's latest report; never publishes.
+@app.get("/honeynet", response_class=HTMLResponse)
+def honeynet_overview(request: Request):
+    return page("Honeynet", HN.render_overview(), "/honeynet", flash_from(request))
+
+
+@app.get("/honeynet/campaigns", response_class=HTMLResponse)
+def honeynet_campaigns(request: Request):
+    return page("Honeynet · Campaigns", HN.render_campaigns(), "/honeynet/campaigns", flash_from(request))
+
+
+@app.get("/honeynet/iocs", response_class=HTMLResponse)
+def honeynet_iocs(request: Request, role: str = ""):
+    return page("Honeynet · IOC feed", HN.render_iocs(role), "/honeynet/iocs", flash_from(request))
+
+
+@app.get("/honeynet/credentials", response_class=HTMLResponse)
+def honeynet_credentials(request: Request):
+    return page("Honeynet · Credentials", HN.render_credentials(), "/honeynet/credentials", flash_from(request))
+
+
+@app.get("/honeynet/windows", response_class=HTMLResponse)
+def honeynet_windows(request: Request):
+    return page("Honeynet · Windows sensors", HN.render_windows(), "/honeynet/windows", flash_from(request))
+
+
+@app.get("/honeynet/report", response_class=HTMLResponse)
+def honeynet_report(request: Request):
+    return page("Honeynet · Report", HN.render_report(), "/honeynet/report", flash_from(request))
+
+
+@app.get("/honeynet/file/{name}")
+def honeynet_file(name: str):
+    hit = HN.artefact(name)
+    if not hit:
+        return PlainTextResponse("not found", 404)
+    path, ctype = hit
+    return PlainTextResponse(path.read_text(), media_type=ctype,
+                             headers={"Content-Disposition": f'attachment; filename="honeynet-{path.parent.name}-{name}"'})
+
+
+@app.post("/honeynet/refresh")
+def honeynet_refresh():
+    return RedirectResponse("/honeynet?m=" + quote(HN.refresh()), 303)
 
 
 # ----------------------------------------------------------------------------- intel desk
