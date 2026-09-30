@@ -48,9 +48,29 @@ CREATE TABLE IF NOT EXISTS tags (
     UNIQUE(address, tag)
 );
 
+CREATE TABLE IF NOT EXISTS alerts (
+    id            INTEGER PRIMARY KEY,
+    address       TEXT NOT NULL,
+    event         TEXT NOT NULL,     -- back_up
+    title         TEXT,
+    tag           TEXT,
+    created_at    REAL NOT NULL,
+    acked         INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS status_log (
+    id            INTEGER PRIMARY KEY,
+    address       TEXT NOT NULL,
+    old_status    TEXT,
+    new_status    TEXT NOT NULL,
+    at            REAL NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS ix_sight_addr ON sightings(address);
 CREATE INDEX IF NOT EXISTS ix_tags_addr ON tags(address);
 CREATE INDEX IF NOT EXISTS ix_onion_status ON onions(status);
+CREATE INDEX IF NOT EXISTS ix_alerts_acked ON alerts(acked);
+CREATE INDEX IF NOT EXISTS ix_statuslog_addr ON status_log(address);
 """
 
 
@@ -110,14 +130,67 @@ class Store:
         return is_new
 
     def set_liveness(self, address: str, *, status: str, http_status: int | None,
-                     title: str | None, now: float | None = None) -> None:
+                     title: str | None, now: float | None = None) -> bool:
+        """Update liveness and log any status change. Returns True iff the
+        address just transitioned down -> up (i.e. a tracked site came back)."""
         now = time.time() if now is None else now
+        address = address.lower().strip()
+        old = self.db.execute("SELECT status FROM onions WHERE address=?", (address,)).fetchone()
+        old_status = old["status"] if old else None
         self.db.execute(
             "UPDATE onions SET status=?, http_status=?, title=COALESCE(?,title), last_checked=? "
             "WHERE address=?",
-            (status, http_status, title, now, address.lower().strip()),
+            (status, http_status, title, now, address),
+        )
+        if old_status != status:
+            self.db.execute(
+                "INSERT INTO status_log(address,old_status,new_status,at) VALUES(?,?,?,?)",
+                (address, old_status, status, now),
+            )
+        self.db.commit()
+        return old_status == "down" and status == "up"
+
+    def tags_for(self, address: str) -> str:
+        row = self.db.execute("SELECT GROUP_CONCAT(tag) t FROM tags WHERE address=?",
+                              (address.lower().strip(),)).fetchone()
+        return (row["t"] if row and row["t"] else "")
+
+    def history(self, address: str):
+        return self.db.execute(
+            "SELECT * FROM status_log WHERE address=? ORDER BY at", (address.lower().strip(),)
+        ).fetchall()
+
+    # -- alerts (down -> up) ------------------------------------------------ #
+    def add_alert(self, address: str, event: str, title: str | None,
+                  tag: str | None, now: float | None = None) -> int:
+        now = time.time() if now is None else now
+        cur = self.db.execute(
+            "INSERT INTO alerts(address,event,title,tag,created_at) VALUES(?,?,?,?,?)",
+            (address.lower().strip(), event, (title or "")[:200], tag or "", now),
         )
         self.db.commit()
+        return cur.lastrowid
+
+    def alerts(self, *, unacked_only: bool = True):
+        q = ("SELECT a.*, "
+             "(SELECT status FROM onions o WHERE o.address=a.address) AS cur_status "
+             "FROM alerts a")
+        if unacked_only:
+            q += " WHERE a.acked=0"
+        q += " ORDER BY a.created_at DESC"
+        return self.db.execute(q).fetchall()
+
+    def unacked_alert_count(self) -> int:
+        return self.db.execute("SELECT COUNT(*) FROM alerts WHERE acked=0").fetchone()[0]
+
+    def ack_alert(self, alert_id: int) -> None:
+        self.db.execute("UPDATE alerts SET acked=1 WHERE id=?", (alert_id,))
+        self.db.commit()
+
+    def ack_all_alerts(self) -> int:
+        cur = self.db.execute("UPDATE alerts SET acked=1 WHERE acked=0")
+        self.db.commit()
+        return cur.rowcount
 
     def set_note(self, address: str, note: str) -> None:
         self.db.execute("UPDATE onions SET note=? WHERE address=?",
@@ -193,4 +266,5 @@ class Store:
             "tagged": c("SELECT COUNT(DISTINCT address) FROM tags").fetchone()[0],
             "sources": c("SELECT COUNT(DISTINCT source) FROM sightings").fetchone()[0],
             "blocked_csam": c("SELECT COUNT(*) FROM onions WHERE status='blocked'").fetchone()[0],
+            "alerts_new": c("SELECT COUNT(*) FROM alerts WHERE acked=0").fetchone()[0],
         }
