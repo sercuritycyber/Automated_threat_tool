@@ -139,6 +139,32 @@ def action(kind: str) -> str:
     return "unknown action"
 
 
+def add_address(raw: str, tag: str = "") -> str:
+    """Manually track an onion you found. Safety-gated; stored without fetching
+    (validate it with 'Re-check liveness', which runs the checkup)."""
+    import re
+    m = re.search(r"\b([a-z2-7]{56}\.onion)\b", (raw or "").strip(), re.I)
+    if not m:
+        return "no valid v3 .onion address found in that input"
+    addr = m.group(1).lower()
+    try:
+        import safety as safetymod
+        sf = safetymod.load((_load(SOURCES).get("safety")), DW)
+        if sf.address_blocked(addr):
+            return "address is on the CSAM blocklist — refused"
+        from store import Store
+        with Store(_db_path()) as st:
+            if st.is_blocked(addr):
+                return "address was previously CSAM-blocked — refused"
+            tags = [tag] if tag else []
+            new = st.add_sighting(addr, "manual", tag or "manually added",
+                                  tag or "manually added", tags)
+        return (f"{'added' if new else 'already tracked'}: {addr[:16]}… "
+                f"— click 'Re-check liveness' to validate")
+    except Exception as ex:
+        return f"error: {ex}"
+
+
 def toggle_source(name: str) -> str:
     data = _load(SOURCES)
     for s in data.get("sources") or []:
@@ -219,13 +245,26 @@ def render_addresses() -> str:
             rows = st.listing()
     except Exception as ex:
         return _tabs("/darkweb/addresses") + f'<div class="card"><span class="pill bad">DB error</span> {e(ex)}</div>'
-    if not rows:
-        return _tabs("/darkweb/addresses") + _safe_banner(stats) + '<div class="card dim">No addresses yet. Run a crawl.</div>'
     body = "".join(_addr_full_row(r) for r in rows)
-    return (_tabs("/darkweb/addresses") + _safe_banner(stats)
-            + f'<p class="dim">{len(rows)} addresses (CSAM-blocked ones are never listed).</p>'
-            + '<table><tr><th>Status</th><th>Address</th><th>Tags</th><th>Sources</th><th>Title</th></tr>'
-            + body + '</table>')
+    table = ('<div class="card dim">No addresses yet. Run a crawl, or add one you found below.</div>'
+             if not rows else
+             f'<p class="dim">{len(rows)} addresses (CSAM-blocked ones are never listed).</p>'
+             '<table><tr><th>Status</th><th>Address</th><th>Tags</th><th>Sources</th><th>Title</th></tr>'
+             + body + '</table>')
+    return _tabs("/darkweb/addresses") + _safe_banner(stats) + _add_form() + table
+
+
+def _add_form() -> str:
+    return """<div class="card"><b>Track an onion you found</b>
+      <form method=post action="/darkweb/add" class="row" style="margin-top:8px;align-items:flex-end">
+        <div style="flex:2;min-width:240px"><label>Address or URL</label>
+          <input type=text name=address placeholder="xxxxxxxx…d.onion"></div>
+        <div style="flex:1;min-width:120px"><label>Tag <small>(site name)</small></label>
+          <input type=text name=tag placeholder="e.g. sh-psa"></div>
+        <button class="btn" type=submit>Add</button>
+      </form>
+      <div class="dim" style="font-size:12px;margin-top:6px">Stored safely (CSAM-gated), no fetch.
+      Then hit <b>Re-check liveness</b> to validate up/down.</div></div>"""
 
 
 def _addr_full_row(r) -> str:

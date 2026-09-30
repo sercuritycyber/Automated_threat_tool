@@ -77,6 +77,7 @@ verified onion addresses and must never be committed.
 ## Usage
 ```bash
 python3 darkweb/harvest.py check
+python3 darkweb/harvest.py add <onion-or-url> --tag sh-psa   # track one you found
 python3 darkweb/harvest.py crawl
 python3 darkweb/harvest.py checkup --limit 60 --stale 24
 python3 darkweb/harvest.py list --tag breachforums --up --json state/onions.jsonl

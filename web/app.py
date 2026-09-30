@@ -2729,6 +2729,13 @@ def darkweb_log(request: Request):
     return _dw_guard() or page("Dark web · Activity", DW.render_log(), "/darkweb/log", flash_from(request))
 
 
+@app.post("/darkweb/add")
+def darkweb_add(address: str = Form(""), tag: str = Form("")):
+    if not _DW_OK:
+        return RedirectResponse("/darkweb", 303)
+    return RedirectResponse("/darkweb/addresses?m=" + quote(DW.add_address(address, tag)), 303)
+
+
 @app.post("/darkweb/act")
 def darkweb_act(do: str = Form("check"), src: str = Form("")):
     if not _DW_OK:

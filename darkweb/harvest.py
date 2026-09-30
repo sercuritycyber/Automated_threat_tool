@@ -223,6 +223,54 @@ def cmd_checkup(args) -> int:
     return 0
 
 
+def cmd_add(args) -> int:
+    """Manually track an onion you found yourself (your workflow: you discover,
+    the tool validates + tracks). Stores it, then liveness-checks it now."""
+    cfg_all = _load_yaml(Path(args.sources))
+    cfg = _settings(cfg_all)
+    safety = _make_safety(cfg_all)          # fail-closed
+    m = discover.ONION_RE.search(args.address.strip())
+    if not m:
+        print("no valid v3 .onion address found in input", file=sys.stderr)
+        return 2
+    addr = m.group(1).lower()
+    if safety.address_blocked(addr):
+        print("address is on the CSAM blocklist — refused")
+        return 5
+    db_path = _resolve(cfg["db"])
+    with lock(db_path), Store(db_path) as store:
+        if store.is_blocked(addr):
+            print("address was previously CSAM-blocked — refused")
+            return 5
+        tags = [args.tag] if args.tag else []
+        note = args.note or "manually added"
+        new = store.add_sighting(addr, "manual", note, note, tags)
+        print(f"{'added' if new else 'already tracked'}: {addr}"
+              + (f" [{args.tag}]" if args.tag else ""))
+        if args.no_check:
+            return 0
+        try:
+            resp = _fetch(f"http://{addr}/", cfg)
+        except (torfetch.TorError, torfetch.FetchRefused) as ex:
+            store.set_liveness(addr, status="down", http_status=None, title=None)
+            print(f"DOWN — {ex}")
+            return 0
+        try:
+            title = parse.title(resp.text)
+            flagged = safety.text_flagged(title) or safety.text_flagged(resp.text[:20000])
+        except Exception:
+            store.set_liveness(addr, status="up", http_status=resp.status, title=None)
+            print(f"UP  {resp.status}  (unclassified — no title stored)")
+            return 0
+        if flagged:
+            store.mark_blocked(addr)
+            print("CSAM-flagged on fetch — blocked; nothing stored")
+            return 5
+        store.set_liveness(addr, status="up", http_status=resp.status, title=title or None)
+        print(f"UP  {resp.status}  {title or ''}")
+    return 0
+
+
 def cmd_list(args) -> int:
     cfg = _settings(_load_yaml(Path(args.sources)))
     db_path = _resolve(cfg["db"])
@@ -279,6 +327,13 @@ def main(argv=None) -> int:
 
     sub.add_parser("check").set_defaults(func=cmd_check)
     sub.add_parser("crawl").set_defaults(func=cmd_crawl)
+
+    a = sub.add_parser("add", help="manually track an onion you found yourself")
+    a.add_argument("address", help="a v3 .onion address or URL")
+    a.add_argument("--tag", default="", help="label it (e.g. the site name)")
+    a.add_argument("--note", default="", help="free-text note")
+    a.add_argument("--no-check", action="store_true", help="store without liveness-checking now")
+    a.set_defaults(func=cmd_add)
 
     c = sub.add_parser("checkup")
     c.add_argument("--limit", type=int, default=0)
