@@ -2,29 +2,24 @@
 Description=SecurityCyber onion-address aggregator (crawl + validate over Tor)
 Documentation=file:%h/Threatintel/darkweb/README.md
 After=network-online.target tor.service
-Wants=network-online.target
-Requires=tor.service
+Wants=network-online.target tor.service
+
+# systemd --user unit (runs as the securitycyber pipeline user, like the rest of
+# the box). The "no shell" guarantee does not rely on the user: NoExecPaths=/
+# plus a narrow ExecPaths whitelist means this process can start python but
+# CANNOT exec /usr/bin/bash, /usr/bin/sudo, or anything else — verified on the
+# host (exec of bash -> PermissionError). The collector core also contains no
+# subprocess call at all.
 
 [Service]
 Type=oneshot
-# SYSTEM unit (not --user): run as a dedicated locked-down account so the code
-# that ingests untrusted onion HTML is strongly isolated. Create it once with:
-#   sudo useradd --system --no-create-home --shell /usr/sbin/nologin darkweb
-#   sudo usermod -aG securitycyber darkweb   # read the repo + honeyintel exports
-User=darkweb
-Group=darkweb
-SupplementaryGroups=securitycyber
+WorkingDirectory=%h/Threatintel
+ExecStart=/usr/bin/python3 %h/Threatintel/darkweb/harvest.py run --json /mnt/data/threatintel/darkweb/onions.jsonl
 
-WorkingDirectory=/home/securitycyber/Threatintel
-# No shell wrapper: the interpreter runs the collector directly. The collector
-# core imports no subprocess module — this ExecStart is the only process spawn.
-ExecStart=/usr/bin/python3 /home/securitycyber/Threatintel/darkweb/harvest.py run --json state/onions.jsonl
-
-# --- hard isolation: the aggregator gets NO shell / exec ------------------- #
-# @system-service is an allowlist; subtracting execve/execveat means this
-# process physically cannot launch bash or any other program.
+# --- the aggregator gets NO shell / exec of anything but the interpreter ----- #
+NoExecPaths=/
+ExecPaths=/usr/bin/python3 /usr/bin/python3.14 /usr/lib64 /usr/lib /lib64 /etc/ld.so.cache
 SystemCallFilter=@system-service
-SystemCallFilter=~execve execveat @clock @debug @module @mount @reboot @swap @obsolete
 SystemCallArchitectures=native
 NoNewPrivileges=yes
 LockPersonality=yes
@@ -32,23 +27,19 @@ RestrictSUIDSGID=yes
 RestrictNamespaces=yes
 RestrictRealtime=yes
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
-# filesystem: read-only everywhere except the collector's own state dir
+# read-only filesystem except the collector's own data dir (no symlink games)
 ProtectSystem=strict
-ProtectHome=read-only
-ReadWritePaths=/home/securitycyber/Threatintel/state
+ReadWritePaths=/mnt/data/threatintel/darkweb
 PrivateTmp=yes
-PrivateDevices=yes
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectControlGroups=yes
 ProtectClock=yes
 ProtectHostname=yes
-CapabilityBoundingSet=
-AmbientCapabilities=
 UMask=0077
 
 TimeoutStartSec=1800
 Nice=12
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=default.target

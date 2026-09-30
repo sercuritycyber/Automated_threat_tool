@@ -1,9 +1,8 @@
 [Unit]
-Description=Run the dark-web collector periodically
+Description=Run the onion-address aggregator periodically
 
 [Timer]
-# A few times a day, offset from the CTI harvester, with jitter so the request
-# pattern isn't perfectly periodic.
+# A few times a day, offset from the CTI harvester, with jitter.
 OnCalendar=02,10,18:35
 RandomizedDelaySec=1200
 Persistent=true

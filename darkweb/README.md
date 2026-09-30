@@ -52,24 +52,27 @@ python3 darkweb/harvest.py check     # {"IsTor":true,...}
 ```
 
 ### Hardened service (the collector gets NO shell)
-The collector core imports no `subprocess`; in prod it runs under
-`cti-darkweb.service` as a dedicated `nologin` user whose `SystemCallFilter`
-blocks `execve`/`execveat`, so the process handling onion HTML can't launch a
-program. Only the Admin Center (trusted) shells out — to start that unit.
+The collector core imports no `subprocess`. It runs under the `systemd --user`
+unit `cti-darkweb.service` with `NoExecPaths=/` and a narrow `ExecPaths`
+whitelist (python + libs only): the process can start the interpreter but
+**cannot exec `/usr/bin/bash`, `/usr/bin/sudo`, or anything else** — verified on
+the host (exec of bash → `PermissionError`). This holds even though it runs as
+the pipeline user. Only the Admin Center (trusted) starts the unit.
 ```bash
-sudo useradd --system --no-create-home --shell /usr/sbin/nologin darkweb
-sudo usermod -aG securitycyber darkweb
-sudo cp systemd/cti-darkweb.{service,timer} /etc/systemd/system/
-sudo systemctl daemon-reload && sudo systemctl enable --now cti-darkweb.timer
-echo 'securitycyber ALL=(root) NOPASSWD: /usr/bin/systemctl start --no-block cti-darkweb.service' \
-  | sudo tee /etc/sudoers.d/darkweb
+mkdir -p /mnt/data/threatintel/darkweb          # writable data dir (ReadWritePaths)
+cp systemd/cti-darkweb.{service,timer} ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now cti-darkweb.timer
 ```
 
 ### Config
 ```bash
 cp darkweb/sources.yaml.example darkweb/sources.yaml   # set targets + sources
+# set `db:` to /mnt/data/threatintel/darkweb/onions.db (matches ReadWritePaths)
 # optional CSAM blocklist files referenced from the safety: block
 ```
+`sources.yaml` (and any `safety_blocklist_*.txt`) are gitignored — they may hold
+verified onion addresses and must never be committed.
 
 ## Usage
 ```bash

@@ -98,8 +98,10 @@ def _log(line: str) -> None:
 
 
 def _start_service() -> bool:
-    for cmd in (["systemctl", "start", "--no-block", SERVICE],
-                ["sudo", "-n", "systemctl", "start", "--no-block", SERVICE]):
+    """Trigger the hardened --user collector unit so the run is sandboxed
+    (NoExecPaths=/ — can't exec a shell). Returns True if a start was accepted."""
+    for cmd in (["systemctl", "--user", "start", "--no-block", SERVICE],
+                ["systemctl", "start", "--no-block", SERVICE]):
         try:
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
             if r.returncode == 0:
