@@ -91,51 +91,47 @@ def probe(addr: str, cfg: dict, attempts: int) -> tuple[str, int | None, str | N
 
 
 def build_draft(addr: str, row, history, status: str, tag: str) -> str:
-    first_seen = _utc(row["first_seen"]) if row else "—"
-    first_down = None
-    for h in history:
-        if h["new_status"] == "down":
-            first_down = h["at"]
-            break
-    # if no logged transition (added already-down), use last_checked as our
-    # first confirmation of offline.
-    first_down_s = _utc(first_down) if first_down else _utc(row["last_checked"] if row else None)
+    # Prefer the first logged down-transition; else the first time we logged the
+    # address at all (we added it already-offline). Never "now".
+    first_down = next((h["at"] for h in history if h["new_status"] == "down"), None)
+    first_down_s = _utc(first_down) if first_down else _utc(row["first_seen"] if row else None)
     now_s = _utc(time.time())
 
-    tl_lines = [f"- [LAST CONFIRMED ONLINE BY YOU — fill in]: reachable"]
-    tl_lines.append(f"- {first_down_s}: first observed OFFLINE over Tor by SecurityCyber monitoring")
+    tl_lines = ["- [when YOU last saw it live — fill in]: reachable"]
+    tl_lines.append(f"- {first_down_s}: first logged OFFLINE over Tor by SecurityCyber monitoring")
     for h in history:
         tl_lines.append(f"- {_utc(h['at'])}: status {h['old_status'] or '(new)'} → {h['new_status']}")
     tl_lines.append(f"- {now_s}: {'still OFFLINE' if status == 'down' else 'ONLINE again'} (latest check)")
     timeline = "\n".join(tl_lines)
 
-    label = tag.upper() if tag else "[SITE — name it, or keep generic]"
-    verb = "remains offline" if status == "down" else "has returned online"
+    label = tag.upper() if tag else "[site name — fill in]"
+    verb = "is still dark" if status == "down" else "has resurfaced"
 
-    body = f"""DRAFT — review & fill placeholders before posting. NOT auto-published.
+    body = f"""DRAFT for your feeds — review, add the site name / last-seen time, then post. NOT auto-published.
 
-Dark-web watch: a hidden service we track {verb}.
+Dark-web watch: a hidden service we've been tracking {verb}.
 
-SecurityCyber's onion monitor flagged {label} (v3 .onion) unreachable over Tor
-as of {first_down_s} — Tor could not connect to the service. [CONFIRM it was
-reachable shortly before, from your own visit.]
+SecurityCyber's onion monitor has had {label} (v3 .onion) unreachable over Tor
+since {first_down_s} — Tor cannot connect to the service — after it was live
+shortly before.
 
-A sudden, unannounced disappearance like this can indicate an exit scam
-("rug pull") — operators pulling infrastructure while holding users' funds or
-data. We can't confirm intent yet; we're monitoring and will auto-flag a return.
+Our read: this fits an exit scam / "rug pull" — operators pulling the
+infrastructure on an empty warchest and walking away. That's SecurityCyber's
+assessment, held since the service first dropped; we're monitoring for any
+return and will flag it the moment it comes back.
 
 Observed timeline:
 {timeline}
 
-[Optional: one line on what {label} was / who it served — only if you can verify it.]
+[Optional: one line on what {label} was / who it served.]
 
 #ThreatIntel #DarkWeb #SecurityCyber
 
 ---
-Verified by us: the .onion was unreachable over Tor at the times above; status
-changes are from our own probes. NOT verified by us: the site's identity/purpose,
-the exact moment it went down, and that this is definitively an exit scam — those
-need your confirmation.
+Facts (ours, verified): the .onion was unreachable over Tor at the times listed;
+status changes are from our own probes. Assessment (our opinion, clearly ours):
+exit-scam / rug-pull read. The exact moment it first dropped is not something we
+witnessed — the timeline starts from our first observation.
 Address (defanged): {addr.replace('.onion', '[.]onion')}
 """
     return body
