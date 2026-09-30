@@ -2743,6 +2743,8 @@ def darkweb_act(do: str = Form("check"), src: str = Form("")):
     if do == "toggle" and src:
         msg = DW.toggle_source(src)
         return RedirectResponse("/darkweb/sources?m=" + quote(msg), 303)
+    if do == "ack":
+        return RedirectResponse("/darkweb?m=" + quote(DW.ack_alerts()), 303)
     msg = DW.action(do)
     dest = "/darkweb/log" if do in ("crawl", "checkup", "check") else "/darkweb"
     return RedirectResponse(f"{dest}?m=" + quote(msg), 303)

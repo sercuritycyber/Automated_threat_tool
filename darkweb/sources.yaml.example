@@ -37,6 +37,12 @@ safety:
   blocklist_hashes: safety_blocklist_hashes.txt
   extra_terms: []
 
+# Optional push when a tracked DOWN address comes back UP (rug-pull / return
+# signal). Use a DEDICATED ntfy topic — NOT the pipeline's canary ntfy_url.
+# Env DARKWEB_ALERT_NTFY overrides this. Unset = panel-only alerting.
+alert:
+  ntfy_url: ""   # e.g. https://ntfy.sh/securitycyber-darkweb-<random>
+
 sources:
   # Ahmia — clearnet onion search that excludes abuse content. {target} is
   # expanded to one search per target above. A solid default.

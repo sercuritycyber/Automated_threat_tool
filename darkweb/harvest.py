@@ -112,6 +112,32 @@ def _fetch(url, cfg, **kw):
         timeout=float(cfg["timeout"]), max_bytes=int(cfg["max_bytes"]), **kw)
 
 
+def _push_alert(cfg_all: dict, text: str) -> None:
+    """Opt-in push of an alert to a SEPARATE ntfy-style topic. Never the
+    pipeline's settings.notify.ntfy_url (that is a canary). No-op if unset."""
+    url = (os.environ.get("DARKWEB_ALERT_NTFY")
+           or ((cfg_all.get("alert") or {}).get("ntfy_url") or "")).strip()
+    if not url:
+        return
+    import urllib.request
+    try:
+        req = urllib.request.Request(
+            url, data=text.encode(),
+            headers={"Title": "SecurityCyber dark-web", "Priority": "high", "Tags": "onion"})
+        urllib.request.urlopen(req, timeout=15).read()
+    except Exception as e:  # never let an alert failure break a run
+        print(f"[alert push failed] {e}", file=sys.stderr)
+
+
+def _fire_up_alert(store, cfg_all: dict, addr: str, title: str | None) -> None:
+    tag = store.tags_for(addr)
+    store.add_alert(addr, "back_up", title, tag)
+    msg = (f"BACK UP: {addr}" + (f" [{tag}]" if tag else "")
+           + (f" — {title}" if title else ""))
+    print("ALERT  " + msg)
+    _push_alert(cfg_all, "[darkweb] " + msg)
+
+
 # --------------------------------------------------------------------------- #
 def cmd_check(args) -> int:
     cfg = _settings(_load_yaml(Path(args.sources)))
@@ -208,15 +234,16 @@ def cmd_checkup(args) -> int:
                 flagged = safety.text_flagged(title) or safety.text_flagged(resp.text[:20000])
             except Exception:
                 # fail-closed: if we can't classify, store no title/content
-                store.set_liveness(addr, status="up", http_status=resp.status, title=None)
+                if store.set_liveness(addr, status="up", http_status=resp.status, title=None):
+                    _fire_up_alert(store, cfg_all, addr, None)
                 up += 1
                 continue
             if flagged:
                 store.mark_blocked(addr)
                 blocked += 1
                 continue
-            store.set_liveness(addr, status="up", http_status=resp.status,
-                               title=title or None)
+            if store.set_liveness(addr, status="up", http_status=resp.status, title=title or None):
+                _fire_up_alert(store, cfg_all, addr, title)
             up += 1
             time.sleep(float(cfg["rate_seconds"]))
     print(f"checkup: {len(addrs)} checked, {up} up, {down} down, {blocked} CSAM-blocked")
@@ -259,14 +286,16 @@ def cmd_add(args) -> int:
             title = parse.title(resp.text)
             flagged = safety.text_flagged(title) or safety.text_flagged(resp.text[:20000])
         except Exception:
-            store.set_liveness(addr, status="up", http_status=resp.status, title=None)
+            if store.set_liveness(addr, status="up", http_status=resp.status, title=None):
+                _fire_up_alert(store, cfg_all, addr, None)
             print(f"UP  {resp.status}  (unclassified — no title stored)")
             return 0
         if flagged:
             store.mark_blocked(addr)
             print("CSAM-flagged on fetch — blocked; nothing stored")
             return 5
-        store.set_liveness(addr, status="up", http_status=resp.status, title=title or None)
+        if store.set_liveness(addr, status="up", http_status=resp.status, title=title or None):
+            _fire_up_alert(store, cfg_all, addr, title)
         print(f"UP  {resp.status}  {title or ''}")
     return 0
 
@@ -312,6 +341,43 @@ def cmd_run(args) -> int:
     return rc
 
 
+def cmd_alerts(args) -> int:
+    cfg = _settings(_load_yaml(Path(args.sources)))
+    with Store(_resolve(cfg["db"])) as store:
+        if args.ack_all:
+            print(f"acked {store.ack_all_alerts()} alert(s)")
+            return 0
+        rows = store.alerts(unacked_only=not args.all)
+        if not rows:
+            print("no alerts")
+            return 0
+        for r in rows:
+            ts = time.strftime("%Y-%m-%d %H:%M", time.localtime(r["created_at"]))
+            tag = f" [{r['tag']}]" if r["tag"] else ""
+            title = f" — {r['title']}" if r["title"] else ""
+            acked = " (acked)" if r["acked"] else ""
+            print(f"[{ts}] {r['event']}: {r['address']}{tag}{title}  now={r['cur_status']}{acked}")
+        print(f"\n{len(rows)} alert(s)")
+    return 0
+
+
+def cmd_history(args) -> int:
+    cfg = _settings(_load_yaml(Path(args.sources)))
+    m = discover.ONION_RE.search(args.address.strip())
+    if not m:
+        print("no valid v3 .onion address in input", file=sys.stderr)
+        return 2
+    with Store(_resolve(cfg["db"])) as store:
+        rows = store.history(m.group(1).lower())
+        if not rows:
+            print("no status changes logged yet for that address")
+            return 0
+        for r in rows:
+            ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(r["at"]))
+            print(f"{ts}  {r['old_status'] or '(new)'} -> {r['new_status']}")
+    return 0
+
+
 def cmd_stats(args) -> int:
     cfg = _settings(_load_yaml(Path(args.sources)))
     with Store(_resolve(cfg["db"])) as store:
@@ -353,6 +419,15 @@ def main(argv=None) -> int:
     rn.add_argument("--limit", type=int, default=0)
     rn.add_argument("--stale", type=float, default=0)
     rn.set_defaults(func=cmd_run)
+
+    al = sub.add_parser("alerts", help="down->up alerts (tracked sites that came back)")
+    al.add_argument("--all", action="store_true", help="include acked")
+    al.add_argument("--ack-all", action="store_true", help="mark all acknowledged")
+    al.set_defaults(func=cmd_alerts)
+
+    h = sub.add_parser("history", help="status-change timeline for one address")
+    h.add_argument("address")
+    h.set_defaults(func=cmd_history)
 
     sub.add_parser("stats").set_defaults(func=cmd_stats)
 

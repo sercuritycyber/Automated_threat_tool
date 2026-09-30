@@ -98,6 +98,26 @@ def test_store_sighting_dedup_tags_and_liveness():
         st.close()
 
 
+def test_liveness_transition_and_alert():
+    with tempfile.TemporaryDirectory() as d:
+        st = Store(Path(d) / "o.db")
+        st.add_sighting(ADDR1, "manual", "sh-psa", "", ["sh-psa"])
+        # unknown -> down: not a "back up"
+        assert st.set_liveness(ADDR1, status="down", http_status=None, title=None) is False
+        # down -> up: IS a back-up transition
+        assert st.set_liveness(ADDR1, status="up", http_status=200, title="back") is True
+        st.add_alert(ADDR1, "back_up", "back", st.tags_for(ADDR1))
+        assert st.unacked_alert_count() == 1
+        # up -> up: no transition
+        assert st.set_liveness(ADDR1, status="up", http_status=200, title="back") is False
+        # timeline captured both changes
+        hist = [(h["old_status"], h["new_status"]) for h in st.history(ADDR1)]
+        assert hist == [("unknown", "down"), ("down", "up")]
+        assert st.tags_for(ADDR1) == "sh-psa"
+        assert st.ack_all_alerts() == 1 and st.unacked_alert_count() == 0
+        st.close()
+
+
 def test_store_blocked_is_hidden_and_purged():
     with tempfile.TemporaryDirectory() as d:
         st = Store(Path(d) / "o.db")

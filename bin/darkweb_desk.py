@@ -41,6 +41,8 @@ CSS = """<style>
 .dw-tabs a.on{border-color:var(--accent);color:#fff;background:rgba(59,130,246,.16)}
 .dw-k{font-family:ui-monospace,Menlo,monospace;font-size:12px;word-break:break-all}
 .dw-safe{border:1px solid rgba(63,185,80,.4);background:rgba(63,185,80,.08);border-radius:10px;padding:10px 14px;margin-bottom:14px;font-size:13px}
+.dw-alert{border:1px solid var(--accent);background:rgba(59,130,246,.12);border-radius:10px;padding:12px 14px;margin-bottom:14px}
+.dw-alert b{color:#fff}
 </style>"""
 
 
@@ -165,6 +167,14 @@ def add_address(raw: str, tag: str = "") -> str:
         return f"error: {ex}"
 
 
+def ack_alerts() -> str:
+    try:
+        with _store() as st:
+            return f"acknowledged {st.ack_all_alerts()} alert(s)"
+    except Exception as ex:
+        return f"error: {ex}"
+
+
 def toggle_source(name: str) -> str:
     data = _load(SOURCES)
     for s in data.get("sources") or []:
@@ -182,6 +192,29 @@ def _tabs(active: str) -> str:
     return CSS + '<div class="dw-tabs">' + "".join(
         f'<a href="{p}" class="{"on" if p == active else ""}">{e(label)}</a>'
         for p, label in TABS) + "</div>"
+
+
+def _alert_banner() -> str:
+    try:
+        with _store() as st:
+            rows = st.alerts(unacked_only=True)
+    except Exception:
+        return ""
+    if not rows:
+        return ""
+    items = ""
+    for r in rows[:12]:
+        ts = time.strftime("%Y-%m-%d %H:%M", time.localtime(r["created_at"]))
+        tag = f' <span class="pill good">{e(r["tag"])}</span>' if r["tag"] else ""
+        title = f' — {e(r["title"])}' if r["title"] else ""
+        items += (f'<div style="margin-top:6px"><b>BACK UP</b>{tag} '
+                  f'<span class="dw-k">{e(defang(r["address"]))}</span>{title} '
+                  f'<span class="dim" style="font-size:11px">· {e(ts)}</span></div>')
+    return (f'<div class="dw-alert">🔔 <b>{len(rows)} tracked site(s) came back online</b>'
+            f'{items}<form method=post action="/darkweb/act" style="margin-top:10px">'
+            f'<input type=hidden name=do value=ack>'
+            f'<button class="btn ghost" type=submit style="padding:4px 12px;font-size:12px">Acknowledge all</button>'
+            f'</form></div>')
 
 
 def _safe_banner(stats: dict) -> str:
@@ -221,7 +254,7 @@ def render_overview() -> str:
         for k, lab in [("onions", "addresses"), ("up", "live"), ("down", "down"),
                        ("unchecked", "unchecked"), ("tagged", "tagged"), ("sources", "sources")])
     live = "".join(_addr_row(r) for r in recent) or '<tr><td class="dim" colspan=4>No live addresses yet — run crawl.</td></tr>'
-    return (_tabs("/darkweb") + _safe_banner(stats) + _controls()
+    return (_tabs("/darkweb") + _alert_banner() + _safe_banner(stats) + _controls()
             + f'<div class="tiles">{tiles}</div>'
             + '<h2>Live addresses</h2><table><tr><th>Status</th><th>Address</th><th>Tags</th><th>Title</th></tr>'
             + live + '</table><p class="dim" style="font-size:12px">Full list on the Addresses tab.</p>')
@@ -251,7 +284,7 @@ def render_addresses() -> str:
              f'<p class="dim">{len(rows)} addresses (CSAM-blocked ones are never listed).</p>'
              '<table><tr><th>Status</th><th>Address</th><th>Tags</th><th>Sources</th><th>Title</th></tr>'
              + body + '</table>')
-    return _tabs("/darkweb/addresses") + _safe_banner(stats) + _add_form() + table
+    return _tabs("/darkweb/addresses") + _alert_banner() + _safe_banner(stats) + _add_form() + table
 
 
 def _add_form() -> str:

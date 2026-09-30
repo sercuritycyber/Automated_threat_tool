@@ -82,12 +82,23 @@ python3 darkweb/harvest.py crawl
 python3 darkweb/harvest.py checkup --limit 60 --stale 24
 python3 darkweb/harvest.py list --tag breachforums --up --json state/onions.jsonl
 python3 darkweb/harvest.py run        # crawl + checkup + list (timer path)
+python3 darkweb/harvest.py alerts     # tracked sites that came back UP (down->up)
+python3 darkweb/harvest.py history <onion>   # status-change timeline (rug-pull view)
 python3 darkweb/harvest.py stats
 ```
 
+## Status alerts (down → up)
+
+When a tracked address that was **down** comes back **up**, the tool raises an
+alert — a bright banner on the `/darkweb` desk (with "Acknowledge all") plus an
+optional push to a **dedicated** ntfy topic (`alert.ntfy_url` in sources.yaml,
+or `DARKWEB_ALERT_NTFY` env — never the pipeline's canary `ntfy_url`). Every
+status change is also written to a `status_log`, so `harvest.py history <onion>`
+prints the full up/down timeline (useful for an exit-scam / rug-pull theory).
+
 ## Admin Center (`/darkweb`)
-- **Overview** — CSAM-blocked count, stats, controls (Check Tor, Crawl+validate,
-  Re-check liveness), live addresses.
+- **Overview** — down→up alert banner, CSAM-blocked count, stats, controls
+  (Check Tor, Crawl+validate, Re-check liveness), live addresses.
 - **Addresses** — the full aggregated list (blocked ones never appear).
 - **Sources** — targets + sources; enable/disable per source (override).
 - **Activity** — collector log tail.
