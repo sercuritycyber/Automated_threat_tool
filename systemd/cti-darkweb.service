@@ -1,0 +1,45 @@
+[Unit]
+Description=SecurityCyber onion-address aggregator (crawl + validate over Tor)
+Documentation=file:%h/Threatintel/darkweb/README.md
+After=network-online.target tor.service
+Wants=network-online.target tor.service
+
+# systemd --user unit (runs as the securitycyber pipeline user, like the rest of
+# the box). The "no shell" guarantee does not rely on the user: NoExecPaths=/
+# plus a narrow ExecPaths whitelist means this process can start python but
+# CANNOT exec /usr/bin/bash, /usr/bin/sudo, or anything else — verified on the
+# host (exec of bash -> PermissionError). The collector core also contains no
+# subprocess call at all.
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/Threatintel
+ExecStart=/usr/bin/python3 %h/Threatintel/darkweb/harvest.py run --json /mnt/data/threatintel/darkweb/onions.jsonl
+
+# --- the aggregator gets NO shell / exec of anything but the interpreter ----- #
+NoExecPaths=/
+ExecPaths=/usr/bin/python3 /usr/bin/python3.14 /usr/lib64 /usr/lib /lib64 /etc/ld.so.cache
+SystemCallFilter=@system-service
+SystemCallArchitectures=native
+NoNewPrivileges=yes
+LockPersonality=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+# read-only filesystem except the collector's own data dir (no symlink games)
+ProtectSystem=strict
+ReadWritePaths=/mnt/data/threatintel/darkweb
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+UMask=0077
+
+TimeoutStartSec=1800
+Nice=12
+
+[Install]
+WantedBy=default.target

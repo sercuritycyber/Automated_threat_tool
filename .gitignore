@@ -34,6 +34,11 @@ ssh-key-*.key
 gemini-code-*.html
 Gemini_Generated_Image*
 
+# dark-web aggregator — local config may hold verified onion addresses; never commit
+darkweb/sources.yaml
+darkweb/watchlist.yaml
+darkweb/safety_blocklist_*.txt
+
 # machine-local (VM)
 /.agent-bus
 /state
