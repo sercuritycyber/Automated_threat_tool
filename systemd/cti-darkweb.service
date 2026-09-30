@@ -1,5 +1,5 @@
 [Unit]
-Description=SecurityCyber dark-web collector (targeted onion CTI over Tor)
+Description=SecurityCyber onion-address aggregator (crawl + validate over Tor)
 Documentation=file:%h/Threatintel/darkweb/README.md
 After=network-online.target tor.service
 Wants=network-online.target
@@ -18,7 +18,7 @@ SupplementaryGroups=securitycyber
 WorkingDirectory=/home/securitycyber/Threatintel
 # No shell wrapper: the interpreter runs the collector directly. The collector
 # core imports no subprocess module — this ExecStart is the only process spawn.
-ExecStart=/usr/bin/python3 /home/securitycyber/Threatintel/darkweb/harvest.py run --json state/darkweb_hits.jsonl
+ExecStart=/usr/bin/python3 /home/securitycyber/Threatintel/darkweb/harvest.py run --json state/onions.jsonl
 
 # --- hard isolation: the aggregator gets NO shell / exec ------------------- #
 # @system-service is an allowlist; subtracting execve/execveat means this

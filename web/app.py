@@ -416,8 +416,8 @@ NAV = [
     ("Honeynet", [("/honeynet", "Overview", "hive"), ("/honeynet/campaigns", "Campaigns", "target"),
                   ("/honeynet/iocs", "IOC feed", "shield"), ("/honeynet/credentials", "Credentials", "key"),
                   ("/honeynet/windows", "Windows sensors", "terminal"), ("/honeynet/report", "Report & draft", "file")]),
-    ("Dark web", [("/darkweb", "Overview", "radar"), ("/darkweb/hits", "Hits", "shield"),
-                  ("/darkweb/sites", "Sites", "list"), ("/darkweb/log", "Activity", "terminal")]),
+    ("Dark web", [("/darkweb", "Overview", "radar"), ("/darkweb/addresses", "Addresses", "list"),
+                  ("/darkweb/sources", "Sources", "rss"), ("/darkweb/log", "Activity", "terminal")]),
     ("Grow", [("/marketing", "Marketing", "megaphone")]),
     ("Customers", [("/service", "CTI service", "shield"), ("/subscribers", "Subscribers", "users"),
                    ("/purchases", "Purchases", "card")]),
@@ -2714,14 +2714,14 @@ def darkweb_overview(request: Request):
     return _dw_guard() or page("Dark web", DW.render_overview(), "/darkweb", flash_from(request))
 
 
-@app.get("/darkweb/hits", response_class=HTMLResponse)
-def darkweb_hits(request: Request):
-    return _dw_guard() or page("Dark web · Hits", DW.render_hits(), "/darkweb/hits", flash_from(request))
+@app.get("/darkweb/addresses", response_class=HTMLResponse)
+def darkweb_addresses(request: Request):
+    return _dw_guard() or page("Dark web · Addresses", DW.render_addresses(), "/darkweb/addresses", flash_from(request))
 
 
-@app.get("/darkweb/sites", response_class=HTMLResponse)
-def darkweb_sites(request: Request):
-    return _dw_guard() or page("Dark web · Sites", DW.render_sites(), "/darkweb/sites", flash_from(request))
+@app.get("/darkweb/sources", response_class=HTMLResponse)
+def darkweb_sources(request: Request):
+    return _dw_guard() or page("Dark web · Sources", DW.render_sources(), "/darkweb/sources", flash_from(request))
 
 
 @app.get("/darkweb/log", response_class=HTMLResponse)
@@ -2730,17 +2730,14 @@ def darkweb_log(request: Request):
 
 
 @app.post("/darkweb/act")
-def darkweb_act(do: str = Form("check"), site: str = Form(""), hit: int = Form(0)):
+def darkweb_act(do: str = Form("check"), src: str = Form("")):
     if not _DW_OK:
         return RedirectResponse("/darkweb", 303)
-    if do == "toggle" and site:
-        msg = DW.toggle_site(site)
-        return RedirectResponse("/darkweb/sites?m=" + quote(msg), 303)
-    if do == "review" and hit:
-        msg = DW.mark_reviewed(hit)
-        return RedirectResponse("/darkweb/hits?m=" + quote(msg), 303)
+    if do == "toggle" and src:
+        msg = DW.toggle_source(src)
+        return RedirectResponse("/darkweb/sources?m=" + quote(msg), 303)
     msg = DW.action(do)
-    dest = "/darkweb/log" if do in ("collect", "check", "match") else "/darkweb"
+    dest = "/darkweb/log" if do in ("crawl", "checkup", "check") else "/darkweb"
     return RedirectResponse(f"{dest}?m=" + quote(msg), 303)
 
 

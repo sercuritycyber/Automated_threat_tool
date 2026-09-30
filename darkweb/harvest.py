@@ -1,26 +1,24 @@
 #!/usr/bin/env python3
-"""Dark-web collector + matcher — CLI entry point.
+"""Onion-address aggregator — CLI entry point.
 
-Targeted collection of onion forum pages you have configured (never a crawler),
-over Tor, into a local SQLite DB, cross-referenced against a watchlist and your
-honeypot IOCs so honeypot telemetry can be tied to market/forum activity.
+Crawls onion INDEX/SEARCH sources (not the forums themselves), extracts and
+aggregates v3 .onion addresses, and validates them over Tor, producing a
+maintained LIST of valid addresses for forums like BreachForums / XSS / Dread
+for a human to investigate. It does not scrape or store forum content.
+
+CSAM is blocked, fail-closed, at every stage and cannot be disabled: any address
+on the blocklist or whose context/title trips the filter is dropped and never
+stored or shown. If the safety filter cannot be built, the tool refuses to run.
 
 Subcommands:
-
     check                     confirm Tor is reachable and exiting
-    collect                   fetch every enabled page in the site registry
-    match                     scan stored snapshots for watchlist/IOC hits
-    report [--since HOURS]    print hits (and write JSONL) for investigation
-    run                       collect, then match, then report (the timer path)
+    crawl                     harvest addresses from the configured sources
+    checkup [--limit N] [--stale H]   liveness-check discovered addresses over Tor
+    list [--tag X] [--up] [--json F]  show / export the aggregated address list
+    run                       crawl + checkup + list (the timer path)
     stats                     DB counts
 
-Config:
-    darkweb/sites.yaml        the registry (copy sites.yaml.example)
-    darkweb/watchlist.yaml    terms/domains/handles to watch
-    settings under `darkweb:` in the registry file (proxy, db path, IOC feeds)
-
-Nothing here posts, publishes, or touches the CTI pipeline. It is an
-investigation tool.
+Config: darkweb/sources.yaml (copy sources.yaml.example).
 """
 from __future__ import annotations
 
@@ -29,14 +27,17 @@ import json
 import os
 import sys
 import time
+from collections import deque
 from contextlib import contextmanager
 from pathlib import Path
+from urllib.parse import urlsplit
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-import match as matchmod  # noqa: E402
+import discover  # noqa: E402
 import parse  # noqa: E402
+import safety as safetymod  # noqa: E402
 import torfetch  # noqa: E402
 from store import Store  # noqa: E402
 
@@ -46,8 +47,7 @@ except Exception:
     print("PyYAML is required (pip install PyYAML)", file=sys.stderr)
     raise
 
-DEFAULT_SITES = HERE / "sites.yaml"
-DEFAULT_WATCHLIST = HERE / "watchlist.yaml"
+DEFAULT_SOURCES = HERE / "sources.yaml"
 
 
 def _load_yaml(path: Path) -> dict:
@@ -56,9 +56,37 @@ def _load_yaml(path: Path) -> dict:
     return yaml.safe_load(path.read_text()) or {}
 
 
+def _settings(cfg: dict) -> dict:
+    s = dict(cfg.get("darkweb") or {})
+    s.setdefault("proxy_host", torfetch.DEFAULT_PROXY_HOST)
+    s.setdefault("proxy_port", torfetch.DEFAULT_PROXY_PORT)
+    s.setdefault("db", str(HERE.parent / "state" / "onions.db"))
+    s.setdefault("timeout", 90)
+    s.setdefault("max_bytes", 3_000_000)
+    s.setdefault("rate_seconds", 8)
+    s.setdefault("crawl_depth", 1)
+    s.setdefault("max_pages_per_source", 25)
+    s.setdefault("checkup_limit", 60)
+    return s
+
+
+def _resolve(path_str: str) -> Path:
+    p = Path(path_str).expanduser()
+    return p if p.is_absolute() else (HERE.parent / p)
+
+
+def _make_safety(cfg: dict) -> safetymod.SafetyFilter:
+    """Build the CSAM filter or abort — the tool never runs without it."""
+    try:
+        return safetymod.load(cfg.get("safety"), HERE)
+    except Exception as e:
+        print(f"FATAL: CSAM safety filter failed to load ({e}); refusing to run",
+              file=sys.stderr)
+        sys.exit(4)
+
+
 @contextmanager
 def lock(db_path: Path):
-    """A simple exclusive lock so two collects don't run at once."""
     lk = db_path.with_suffix(db_path.suffix + ".lock")
     lk.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -66,10 +94,8 @@ def lock(db_path: Path):
     except FileExistsError:
         age = time.time() - lk.stat().st_mtime
         if age < 3600:
-            print(f"another collect holds {lk} (age {age:.0f}s); exiting",
-                  file=sys.stderr)
+            print(f"another run holds {lk} (age {age:.0f}s); exiting", file=sys.stderr)
             sys.exit(3)
-        print(f"stale lock {lk} ({age:.0f}s) — taking over", file=sys.stderr)
         lk.unlink(missing_ok=True)
         fd = os.open(str(lk), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
     try:
@@ -80,181 +106,166 @@ def lock(db_path: Path):
         lk.unlink(missing_ok=True)
 
 
-def _settings(sites_cfg: dict) -> dict:
-    s = dict(sites_cfg.get("darkweb") or {})
-    s.setdefault("proxy_host", torfetch.DEFAULT_PROXY_HOST)
-    s.setdefault("proxy_port", torfetch.DEFAULT_PROXY_PORT)
-    s.setdefault("db", str(HERE.parent / "state" / "darkweb.db"))
-    s.setdefault("timeout", 60)
-    s.setdefault("max_bytes", 4_000_000)
-    s.setdefault("default_rate_seconds", 15)
-    s.setdefault("ioc_feeds", [])
-    return s
-
-
-def _resolve(path_str: str) -> Path:
-    p = Path(path_str).expanduser()
-    return p if p.is_absolute() else (HERE.parent / p)
+def _fetch(url, cfg, **kw):
+    return torfetch.fetch(
+        url, proxy_host=cfg["proxy_host"], proxy_port=int(cfg["proxy_port"]),
+        timeout=float(cfg["timeout"]), max_bytes=int(cfg["max_bytes"]), **kw)
 
 
 # --------------------------------------------------------------------------- #
 def cmd_check(args) -> int:
-    cfg = _settings(_load_yaml(Path(args.sites)))
+    cfg = _settings(_load_yaml(Path(args.sources)))
     try:
-        note = torfetch.check_tor(cfg["proxy_host"], int(cfg["proxy_port"]))
         print(f"Tor OK via {cfg['proxy_host']}:{cfg['proxy_port']}")
-        print(note)
+        print(torfetch.check_tor(cfg["proxy_host"], int(cfg["proxy_port"])))
         return 0
     except Exception as e:
         print(f"Tor check FAILED: {e}", file=sys.stderr)
-        print("Is the Tor daemon running? (systemctl status tor / `tor` on :9050)",
-              file=sys.stderr)
         return 1
 
 
-def cmd_collect(args) -> int:
-    sites_cfg = _load_yaml(Path(args.sites))
-    cfg = _settings(sites_cfg)
-    sites = sites_cfg.get("sites") or []
-    if not sites:
-        print(f"no sites configured in {args.sites} — copy sites.yaml.example "
-              "and add onion addresses you have verified", file=sys.stderr)
-        return 2
-    db_path = _resolve(cfg["db"])
-    fetched = new = errors = 0
-    with lock(db_path), Store(db_path) as store:
-        for site in sites:
-            if not site.get("enabled", True):
-                continue
-            name = site.get("name") or site.get("base", "?")
-            base = site.get("base", "").rstrip("/")
-            if not base:
-                print(f"[{name}] no base url, skipping", file=sys.stderr)
-                continue
-            cookie = None
-            if site.get("cookie_env"):
-                cookie = os.environ.get(site["cookie_env"]) or None
-                if not cookie:
-                    print(f"[{name}] cookie_env {site['cookie_env']} unset — "
-                          "authenticated pages will show the login wall")
-            rate = float(site.get("rate_seconds", cfg["default_rate_seconds"]))
-            paths = site.get("paths") or ["/"]
-            for i, path in enumerate(paths):
-                url = base + (path if path.startswith("/") else "/" + path) \
-                    if not path.startswith("http") else path
-                if i:
-                    time.sleep(rate)
-                try:
-                    resp = torfetch.fetch(
-                        url,
-                        proxy_host=cfg["proxy_host"], proxy_port=int(cfg["proxy_port"]),
-                        timeout=float(cfg["timeout"]), max_bytes=int(cfg["max_bytes"]),
-                        cookie=cookie,
-                    )
-                except (torfetch.TorError, torfetch.FetchRefused) as e:
-                    errors += 1
-                    print(f"[{name}] {url} -> {e}", file=sys.stderr)
-                    continue
-                fetched += 1
-                parsed = parse.parse_page(resp.text, resp.final_url or url)
-                _pid, _sid, is_new = store.record_fetch(
-                    name, url, title=parsed["title"], status=resp.status,
-                    content_type=resp.content_type, bytes_len=resp.bytes_len,
-                    text=parsed["text"],
-                )
-                new += int(is_new)
-                flag = "NEW" if is_new else "same"
-                print(f"[{name}] {resp.status} {flag} {len(parsed['text'])}c "
-                      f"{len(parsed['links'])}links {url}")
-    print(f"collect: {fetched} fetched, {new} new snapshots, {errors} errors")
-    return 0 if errors == 0 else 0  # errors are per-page, not fatal
-
-
-def _build_matcher(cfg: dict, watchlist_path: Path) -> matchmod.Matcher:
-    indicators: list = []
-    if watchlist_path.exists():
-        indicators += matchmod.load_watchlist(watchlist_path)
-    for feed in cfg.get("ioc_feeds", []):
-        p = _resolve(feed["path"]) if not str(feed["path"]).startswith("/") \
-            else Path(feed["path"])
-        kind = feed.get("kind")
-        if not p.exists():
-            print(f"IOC feed missing: {p}", file=sys.stderr)
-            continue
-        if kind == "ips":
-            indicators += matchmod.load_honeypot_ips(p, feed.get("column", "src_ip"))
-        elif kind == "creds":
-            indicators += matchmod.load_honeypot_creds(
-                p, feed.get("user_column", "username"),
-                feed.get("pass_column", "password"))
-        elif kind == "hashes":
-            indicators += matchmod.load_honeypot_hashes(p, feed.get("column", "sha256"))
-        else:
-            print(f"unknown IOC feed kind {kind!r} for {p}", file=sys.stderr)
-    return matchmod.Matcher(indicators)
-
-
-def cmd_match(args) -> int:
-    sites_cfg = _load_yaml(Path(args.sites))
-    cfg = _settings(sites_cfg)
-    matcher = _build_matcher(cfg, Path(args.watchlist))
-    if not matcher.indicators:
-        print("no indicators loaded (empty watchlist and no IOC feeds)",
+def cmd_crawl(args) -> int:
+    cfg_all = _load_yaml(Path(args.sources))
+    cfg = _settings(cfg_all)
+    safety = _make_safety(cfg_all)          # fail-closed: aborts if unavailable
+    targets = [str(t) for t in (cfg_all.get("targets") or [])]
+    sources = [s for s in (cfg_all.get("sources") or []) if s.get("enabled", True)]
+    if not sources:
+        print(f"no enabled sources in {args.sources} — copy sources.yaml.example",
               file=sys.stderr)
         return 2
     db_path = _resolve(cfg["db"])
-    found = 0
-    with Store(db_path) as store:
-        snaps = (store.iter_snapshots() if args.all
-                 else store.latest_snapshots())
-        for snap in snaps:
-            for hit in matcher.scan(snap["text"]):
-                if store.add_hit(snap["id"], snap["page_id"], hit["kind"],
-                                 hit["indicator"], hit["context"]):
-                    found += 1
-    print(f"match: {found} new hits ({len(matcher.indicators)} indicators)")
+    found = new = blocked = pages = 0
+    with lock(db_path), Store(db_path) as store:
+        for src in sources:
+            for name, seed in discover.expand_source_urls(src, targets):
+                depth = int(src.get("crawl_depth", cfg["crawl_depth"]))
+                seen_urls: set[str] = set()
+                q: deque = deque([(seed, 0)])
+                host = urlsplit(seed).hostname or ""
+                src_pages = 0
+                while q and src_pages < int(cfg["max_pages_per_source"]):
+                    url, d = q.popleft()
+                    if url in seen_urls:
+                        continue
+                    seen_urls.add(url)
+                    try:
+                        # all traffic rides Tor; clearnet index hosts are allowed
+                        resp = _fetch(url, cfg, allow_clearnet=True)
+                    except (torfetch.TorError, torfetch.FetchRefused) as e:
+                        print(f"[{name}] {url} -> {e}", file=sys.stderr)
+                        continue
+                    src_pages += 1
+                    pages += 1
+                    # extract addresses + context from this index page
+                    for s in discover.extract(resp.text, name, targets):
+                        found += 1
+                        if not safety.allow(s.address, s.context, s.label):
+                            store.mark_blocked(s.address)
+                            blocked += 1
+                            continue
+                        if store.is_blocked(s.address):
+                            continue
+                        if store.add_sighting(s.address, s.source, s.label,
+                                              s.context, s.tags):
+                            new += 1
+                    # bounded crawl: follow same-host index links only
+                    if d < depth:
+                        for link in parse.extract_links(resp.text, url, same_host_only=True):
+                            if urlsplit(link["url"]).hostname == host and link["url"] not in seen_urls:
+                                q.append((link["url"], d + 1))
+                    time.sleep(float(cfg["rate_seconds"]))
+    print(f"crawl: {pages} index pages, {found} address sightings, "
+          f"{new} new addresses, {blocked} CSAM-blocked")
     return 0
 
 
-def cmd_report(args) -> int:
-    sites_cfg = _load_yaml(Path(args.sites))
-    cfg = _settings(sites_cfg)
+def cmd_checkup(args) -> int:
+    cfg_all = _load_yaml(Path(args.sources))
+    cfg = _settings(cfg_all)
+    safety = _make_safety(cfg_all)          # fail-closed
     db_path = _resolve(cfg["db"])
-    since = time.time() - args.since * 3600 if args.since else None
+    stale = args.stale * 3600 if args.stale else None
+    limit = args.limit or int(cfg["checkup_limit"])
+    up = down = blocked = 0
+    with Store(db_path) as store:
+        addrs = store.addresses_to_check(stale_seconds=stale, limit=limit)
+        for addr in addrs:
+            if safety.address_blocked(addr):   # blocklist can grow between runs
+                store.mark_blocked(addr)
+                blocked += 1
+                continue
+            url = f"http://{addr}/"
+            try:
+                resp = _fetch(url, cfg)
+            except (torfetch.TorError, torfetch.FetchRefused):
+                store.set_liveness(addr, status="down", http_status=None, title=None)
+                down += 1
+                continue
+            # classify BEFORE storing anything from inside the service
+            try:
+                title = parse.title(resp.text)
+                flagged = safety.text_flagged(title) or safety.text_flagged(resp.text[:20000])
+            except Exception:
+                # fail-closed: if we can't classify, store no title/content
+                store.set_liveness(addr, status="up", http_status=resp.status, title=None)
+                up += 1
+                continue
+            if flagged:
+                store.mark_blocked(addr)
+                blocked += 1
+                continue
+            store.set_liveness(addr, status="up", http_status=resp.status,
+                               title=title or None)
+            up += 1
+            time.sleep(float(cfg["rate_seconds"]))
+    print(f"checkup: {len(addrs)} checked, {up} up, {down} down, {blocked} CSAM-blocked")
+    return 0
+
+
+def cmd_list(args) -> int:
+    cfg = _settings(_load_yaml(Path(args.sources)))
+    db_path = _resolve(cfg["db"])
+    status = "up" if args.up else None
     rows = []
     with Store(db_path) as store:
-        for h in store.hits(unreviewed_only=args.unreviewed, since=since):
+        for r in store.listing(tag=args.tag or None, status=status):
             rows.append({
-                "found_at": h["found_at"], "site": h["site"], "url": h["url"],
-                "kind": h["kind"], "indicator": h["indicator"],
-                "context": h["context"],
+                "address": r["address"], "status": r["status"],
+                "http_status": r["http_status"], "title": r["title"],
+                "tags": r["tags"], "sources": r["sources"],
+                "n_sightings": r["n_sightings"],
+                "first_seen": r["first_seen"], "last_seen": r["last_seen"],
+                "last_checked": r["last_checked"],
             })
     if args.json:
-        out = _resolve(args.json) if not args.json.startswith("/") else Path(args.json)
+        out = _resolve(args.json)
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text("\n".join(json.dumps(r) for r in rows))
-        print(f"wrote {len(rows)} hits -> {out}")
+        print(f"wrote {len(rows)} addresses -> {out}")
     if not rows:
-        print("no hits" + (f" in the last {args.since}h" if args.since else ""))
+        print("no addresses yet — run crawl")
         return 0
     for r in rows:
-        ts = time.strftime("%Y-%m-%d %H:%M", time.localtime(r["found_at"]))
-        print(f"\n[{ts}] {r['kind']}: {r['indicator']}")
-        print(f"  {r['site']}  {r['url']}")
-        print(f"  …{r['context']}…")
-    print(f"\n{len(rows)} hits")
+        st = {"up": "UP  ", "down": "down", "unknown": "?   "}.get(r["status"], r["status"])
+        tags = f" [{r['tags']}]" if r["tags"] else ""
+        title = f"  {r['title']}" if r["title"] else ""
+        print(f"{st} {r['address']}{tags}{title}")
+    print(f"\n{len(rows)} addresses"
+          + (f" (tag={args.tag})" if args.tag else "")
+          + (" (up only)" if args.up else ""))
     return 0
 
 
 def cmd_run(args) -> int:
-    rc = cmd_collect(args)
-    cmd_match(args)
-    cmd_report(args)
+    rc = cmd_crawl(args)
+    cmd_checkup(args)
+    cmd_list(args)
     return rc
 
 
 def cmd_stats(args) -> int:
-    cfg = _settings(_load_yaml(Path(args.sites)))
+    cfg = _settings(_load_yaml(Path(args.sources)))
     with Store(_resolve(cfg["db"])) as store:
         for k, v in store.stats().items():
             print(f"{k:16} {v}")
@@ -263,29 +274,29 @@ def cmd_stats(args) -> int:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--sites", default=str(DEFAULT_SITES))
-    ap.add_argument("--watchlist", default=str(DEFAULT_WATCHLIST))
+    ap.add_argument("--sources", default=str(DEFAULT_SOURCES))
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("check").set_defaults(func=cmd_check)
-    sub.add_parser("collect").set_defaults(func=cmd_collect)
+    sub.add_parser("crawl").set_defaults(func=cmd_crawl)
 
-    m = sub.add_parser("match")
-    m.add_argument("--all", action="store_true",
-                   help="scan every snapshot, not just the latest per page")
-    m.set_defaults(func=cmd_match)
+    c = sub.add_parser("checkup")
+    c.add_argument("--limit", type=int, default=0)
+    c.add_argument("--stale", type=float, default=0, help="only re-check if older than N hours")
+    c.set_defaults(func=cmd_checkup)
 
-    r = sub.add_parser("report")
-    r.add_argument("--since", type=float, default=0, help="only hits from the last N hours")
-    r.add_argument("--unreviewed", action="store_true")
-    r.add_argument("--json", help="also write hits as JSONL to this path")
-    r.set_defaults(func=cmd_report)
+    l = sub.add_parser("list")
+    l.add_argument("--tag", default="")
+    l.add_argument("--up", action="store_true", help="only live addresses")
+    l.add_argument("--json")
+    l.set_defaults(func=cmd_list)
 
     rn = sub.add_parser("run")
-    rn.add_argument("--all", action="store_true")
-    rn.add_argument("--since", type=float, default=0)
-    rn.add_argument("--unreviewed", action="store_true")
+    rn.add_argument("--tag", default="")
+    rn.add_argument("--up", action="store_true")
     rn.add_argument("--json")
+    rn.add_argument("--limit", type=int, default=0)
+    rn.add_argument("--stale", type=float, default=0)
     rn.set_defaults(func=cmd_run)
 
     sub.add_parser("stats").set_defaults(func=cmd_stats)

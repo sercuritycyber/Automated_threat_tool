@@ -1,0 +1,55 @@
+# Onion-address aggregator — discovery sources.  Copy to darkweb/sources.yaml.
+#
+# The tool crawls these INDEX / SEARCH sources (not the forums), harvests the
+# .onion addresses they publish, aggregates + dedupes them, and liveness-checks
+# each over Tor — producing a list of valid addresses for YOU to investigate.
+# It does not scrape or store forum content.
+#
+# CSAM is blocked fail-closed and cannot be disabled (see `safety:` — you can
+# only ADD to the blocklist). Prefer sources that already exclude abuse content
+# (Ahmia does).
+
+darkweb:
+  proxy_host: 127.0.0.1
+  proxy_port: 9050              # Tor SOCKS (VM: system tor; laptop: 9050 too)
+  db: state/onions.db
+  timeout: 90
+  rate_seconds: 8              # delay between fetches (politeness + OPSEC)
+  crawl_depth: 1              # how many link-hops to follow WITHIN a source host
+  max_pages_per_source: 25
+  checkup_limit: 60          # max addresses liveness-checked per run
+
+# Forum names you care about. Used to (a) expand {target} in source URLs and
+# (b) tag any discovered address whose context mentions the name.
+targets:
+  - breachforums
+  - xss
+  - dread
+  - exploit
+  - leakbase
+  - nulled
+
+# CSAM safety. The built-in high-precision filter always runs; these only ADD.
+safety:
+  # one address or md5(<addr>.onion) per line, '#'=comment. e.g. Ahmia's
+  # published abuse blacklist of md5 hashes.
+  blocklist_addresses: safety_blocklist_addresses.txt
+  blocklist_hashes: safety_blocklist_hashes.txt
+  extra_terms: []
+
+sources:
+  # Ahmia — clearnet onion search that excludes abuse content. {target} is
+  # expanded to one search per target above. A solid default.
+  - name: ahmia
+    enabled: true
+    url: "https://ahmia.fi/search/?q={target}"
+    crawl_depth: 0            # search results page only; don't spider ahmia
+
+  # Add more verified index/mirror sources you trust. Examples (verify current
+  # + that they exclude CSAM before enabling):
+  # - name: tor-taxi
+  #   enabled: false
+  #   url: "http://<verified-tor-taxi-v3>.onion/"
+  # - name: dark-fail
+  #   enabled: false
+  #   url: "http://<verified-darkfail-v3>.onion/"

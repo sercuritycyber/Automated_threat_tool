@@ -1,8 +1,8 @@
-"""Tests for the dark-web collector — no live Tor needed.
+"""Tests for the onion-address aggregator — no live Tor needed.
 
 The torfetch round-trip runs against a fake in-process server that speaks the
-SOCKS5 handshake and then answers as the origin, so the SOCKS5 client and the
-HTTP/redirect/size policy are all exercised for real.
+SOCKS5 handshake and then answers as the origin, exercising the SOCKS5 client
+and the HTTP/redirect/size policy for real.
 """
 import gzip
 import socket
@@ -17,99 +17,112 @@ ROOT = Path(__file__).resolve().parent.parent
 import sys
 sys.path.insert(0, str(ROOT / "darkweb"))
 
+import discover
 import parse
-import match as M
+import safety as S
 import torfetch
 from store import Store
 
+ADDR1 = "a" * 56 + ".onion"          # a valid-shaped v3 address
+ADDR2 = "b2cd" * 14 + ".onion"       # 56 base32 chars
+
+
+# --------------------------------------------------------------------------- discover
+def test_extract_finds_v3_and_tags_by_target():
+    text = f"BreachForums official mirror: {ADDR1} — signed. Random {ADDR2} here."
+    sights = discover.extract(text, "ahmia", targets=["breachforums", "xss"])
+    by_addr = {s.address: s for s in sights}
+    assert ADDR1 in by_addr and ADDR2 in by_addr
+    assert "breachforums" in by_addr[ADDR1].tags
+    assert by_addr[ADDR2].tags == []          # no target near it
+
+
+def test_extract_ignores_non_onion_and_short():
+    text = "not an onion: deadbeef.onion (too short) or example.com"
+    assert discover.extract(text, "x") == []
+
+
+def test_expand_source_urls_templating():
+    src = {"name": "ahmia", "url": "https://ahmia.fi/search/?q={target}"}
+    pairs = discover.expand_source_urls(src, ["breach forums", "xss"])
+    names = [n for n, _ in pairs]
+    urls = [u for _, u in pairs]
+    assert names == ["ahmia:breach forums", "ahmia:xss"]
+    assert urls[0].endswith("q=breach+forums")
+    plain = discover.expand_source_urls({"name": "x", "url": "http://y.onion/"}, ["a"])
+    assert plain == [("x", "http://y.onion/")]
+
+
+# --------------------------------------------------------------------------- safety (CSAM)
+def test_safety_blocks_csam_terms_but_not_tech_cp():
+    f = S.SafetyFilter()
+    assert f.text_flagged("selling pthc collection")          # specific CSAM abbr
+    assert f.text_flagged("child porn vendor")
+    assert f.text_flagged("nude children videos")             # co-occurrence
+    # must NOT flag legitimate threat-intel / tech usage of 'cp'
+    assert not f.text_flagged("use cp to copy the db, then scp it")
+    assert not f.text_flagged("BreachForums cp = control panel access for sale")
+    assert not f.text_flagged("new RCE exploit and stealer logs for sale")
+
+
+def test_safety_address_blocklist_and_hash():
+    import hashlib
+    a = ADDR1
+    f = S.SafetyFilter(blocked_addresses={a})
+    assert f.address_blocked(a)
+    h = hashlib.md5(ADDR2.encode()).hexdigest()
+    f2 = S.SafetyFilter(blocked_hashes={h})
+    assert f2.address_blocked(ADDR2)
+    assert not f2.address_blocked(ADDR1)
+
+
+def test_safety_allow_counts_blocked():
+    f = S.SafetyFilter()
+    assert f.allow(ADDR1, "BreachForums databases for sale")
+    assert not f.allow(ADDR2, "pthc pack here")
+    assert f.blocked_count == 1
+
 
 # --------------------------------------------------------------------------- store
-def test_store_dedup_and_hits():
+def test_store_sighting_dedup_tags_and_liveness():
     with tempfile.TemporaryDirectory() as d:
-        st = Store(Path(d) / "t.db")
-        pid, sid, new = st.record_fetch("site", "http://x.onion/", title="T",
-                                        status=200, content_type="text/html",
-                                        bytes_len=10, text="hello world")
-        assert new and sid
-        # same content -> no new snapshot
-        _pid2, sid2, new2 = st.record_fetch("site", "http://x.onion/", title="T",
-                                            status=200, content_type="text/html",
-                                            bytes_len=10, text="hello world")
-        assert not new2 and sid2 == sid
-        # changed content -> new snapshot, same page
-        _pid3, sid3, new3 = st.record_fetch("site", "http://x.onion/", title="T",
-                                            status=200, content_type="text/html",
-                                            bytes_len=12, text="hello mars")
-        assert new3 and sid3 != sid
-        assert st.add_hit(sid3, pid, "watchlist", "mars", "hello mars")
-        assert not st.add_hit(sid3, pid, "watchlist", "mars", "hello mars")  # dupe
+        st = Store(Path(d) / "o.db")
+        assert st.add_sighting(ADDR1, "ahmia", "BF mirror", "context here", ["breachforums"])
+        assert not st.add_sighting(ADDR1, "ahmia", "BF mirror", "context here", ["breachforums"])  # dup addr
+        st.set_liveness(ADDR1, status="up", http_status=200, title="BreachForums")
+        rows = st.listing()
+        assert len(rows) == 1 and rows[0]["status"] == "up"
+        assert rows[0]["title"] == "BreachForums" and "breachforums" in (rows[0]["tags"] or "")
         s = st.stats()
-        assert s["pages"] == 1 and s["snapshots"] == 2 and s["hits"] == 1
+        assert s["onions"] == 1 and s["up"] == 1 and s["tagged"] == 1
+        st.close()
+
+
+def test_store_blocked_is_hidden_and_purged():
+    with tempfile.TemporaryDirectory() as d:
+        st = Store(Path(d) / "o.db")
+        st.add_sighting(ADDR1, "ahmia", "label", "ctx", ["xss"])
+        st.mark_blocked(ADDR1)
+        assert st.is_blocked(ADDR1)
+        assert st.listing() == []                       # never listed
+        assert st.addresses_to_check() == []            # never re-checked
+        s = st.stats()
+        assert s["onions"] == 0 and s["blocked_csam"] == 1
+        # its sightings + tags were purged
+        assert st.db.execute("SELECT COUNT(*) FROM sightings").fetchone()[0] == 0
+        assert st.db.execute("SELECT COUNT(*) FROM tags").fetchone()[0] == 0
         st.close()
 
 
 # --------------------------------------------------------------------------- parse
-def test_parse_strips_scripts_and_lists_same_host_links():
-    html = """<html><head><title>Board &amp; Market</title>
-      <style>.x{}</style><script>var secret=1;</script></head>
-      <body><h1>Threads</h1>
-      <a href="/thread/1">First leak</a>
-      <a href="http://other.onion/x">offsite</a>
-      <p>visible text</p></body></html>"""
-    out = parse.parse_page(html, "http://board.onion/index")
-    assert out["title"] == "Board & Market"
-    assert "secret" not in out["text"] and "var secret" not in out["text"]
-    assert "visible text" in out["text"] and "First leak" in out["text"]
+def test_parse_title_and_same_host_links():
+    html = ("<html><head><title>Idx</title><script>x()</script></head>"
+            "<body><a href='/p2'>next</a><a href='http://other.onion/x'>off</a>"
+            "<p>text</p></body></html>")
+    out = parse.parse_page(html, "http://idx.onion/p1")
+    assert out["title"] == "Idx" and "text" in out["text"] and "x()" not in out["text"]
     urls = {l["url"] for l in out["links"]}
-    assert "http://board.onion/thread/1" in urls
-    assert "http://other.onion/x" not in urls  # cross-host dropped
-
-
-# --------------------------------------------------------------------------- match
-def test_watchlist_word_boundary_and_domains():
-    indicators = [
-        M.Indicator("watchlist", "Acme", "acme", word_boundary=True),
-        M.Indicator("watchlist", "acme.com", "acme.com"),
-    ]
-    m = M.Matcher(indicators)
-    # bare word 'Acme' must NOT match when embedded in a longer word
-    embedded = m.scan("selling acmecorp portal access")
-    assert not any(h["indicator"] == "Acme" for h in embedded)
-    # domain matches as substring
-    dom = m.scan("data from acme.com dumps")
-    assert any(h["indicator"] == "acme.com" for h in dom)
-    # bare word matches on a real boundary
-    word = m.scan("the Acme breach")
-    assert any(h["indicator"] == "Acme" for h in word)
-
-
-def test_honeypot_creds_drops_common_and_short(tmp_path):
-    csv = tmp_path / "creds.csv"
-    csv.write_text("username,password\n"
-                   "admin,admin\n"                       # both common -> dropped
-                   "svc_backup,Hunter2Longpw\n"          # both kept
-                   "ab,xy\n")                            # too short -> dropped
-    inds = M.load_honeypot_creds(csv)
-    vals = {(i.kind, i.value) for i in inds}
-    assert ("honeypot-user", "svc_backup") in vals
-    assert ("honeypot-cred", "Hunter2Longpw") in vals
-    assert all(i.value not in ("admin", "ab", "xy") for i in inds)
-
-
-def test_honeypot_ips_only_global(tmp_path):
-    csv = tmp_path / "iocs.csv"
-    csv.write_text("src_ip\n8.8.8.8\n10.0.0.5\n127.0.0.1\n45.146.164.110\n")
-    inds = M.load_honeypot_ips(csv)
-    ips = {i.value for i in inds}
-    assert "8.8.8.8" in ips and "45.146.164.110" in ips
-    assert "10.0.0.5" not in ips and "127.0.0.1" not in ips
-
-
-def test_cred_pair_context_matches_snapshot():
-    m = M.Matcher([M.Indicator("honeypot-cred", "S3cretSprayPw", "s3cretspraypw")])
-    hits = m.scan("combo list: victim@corp.com:S3cretSprayPw for sale 5 BTC")
-    assert hits and hits[0]["kind"] == "honeypot-cred"
-    assert "for sale" in hits[0]["context"]
+    assert "http://idx.onion/p2" in urls and "http://other.onion/x" not in urls
 
 
 # --------------------------------------------------------------------------- torfetch policy
@@ -121,15 +134,12 @@ def test_refuses_non_onion_without_override():
 def test_charset_and_gzip_helpers():
     assert torfetch._charset("text/html; charset=ISO-8859-1") == "iso-8859-1"
     assert torfetch._charset("text/html") == "utf-8"
-    raw = gzip.compress(b"body bytes")
-    assert torfetch._maybe_decompress(raw, "gzip") == b"body bytes"
+    assert torfetch._maybe_decompress(gzip.compress(b"body"), "gzip") == b"body"
     assert torfetch._maybe_decompress(b"plain", "") == b"plain"
 
 
-# ---- fake SOCKS5 + origin server, to exercise the SOCKS5 client end-to-end --
+# ---- fake SOCKS5 + origin server -------------------------------------------
 class _FakeSocks:
-    """Accepts a SOCKS5 CONNECT (with or without user/pass), then replies with a
-    fixed HTTP response as if it were the origin."""
     def __init__(self, response: bytes):
         self.response = response
         self.srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -138,8 +148,7 @@ class _FakeSocks:
         self.srv.listen(1)
         self.port = self.srv.getsockname()[1]
         self.requests = []
-        self.t = threading.Thread(target=self._serve, daemon=True)
-        self.t.start()
+        threading.Thread(target=self._serve, daemon=True).start()
 
     def _recvn(self, c, n):
         b = b""
@@ -153,29 +162,23 @@ class _FakeSocks:
     def _serve(self):
         c, _ = self.srv.accept()
         try:
-            ver, nm = self._recvn(c, 2)
+            self._recvn(c, 2)
+            nm = 2
             methods = self._recvn(c, nm)
-            if 0x02 in methods:                    # ask for user/pass
+            if 0x02 in methods:
                 c.sendall(b"\x05\x02")
-                v = self._recvn(c, 1)
-                ul = self._recvn(c, 1)[0]
-                self._recvn(c, ul)
-                pl = self._recvn(c, 1)[0]
-                self._recvn(c, pl)
-                c.sendall(b"\x01\x00")             # auth ok
+                self._recvn(c, 1)
+                ul = self._recvn(c, 1)[0]; self._recvn(c, ul)
+                pl = self._recvn(c, 1)[0]; self._recvn(c, pl)
+                c.sendall(b"\x01\x00")
             else:
                 c.sendall(b"\x05\x00")
-            # CONNECT request
-            hdr = self._recvn(c, 4)               # ver,cmd,rsv,atyp
-            atyp = hdr[3]
-            if atyp == 0x03:
-                dl = self._recvn(c, 1)[0]
-                self._recvn(c, dl)
-            self._recvn(c, 2)                      # port
+            hdr = self._recvn(c, 4)
+            if hdr[3] == 0x03:
+                dl = self._recvn(c, 1)[0]; self._recvn(c, dl)
+            self._recvn(c, 2)
             c.sendall(b"\x05\x00\x00\x01" + b"\x00\x00\x00\x00" + struct.pack(">H", 0))
-            # now the client sends the HTTP request (single read; it stays open)
-            req = c.recv(8192)
-            self.requests.append(req)
+            self.requests.append(c.recv(8192))
             c.sendall(self.response)
         finally:
             c.close()
@@ -184,13 +187,12 @@ class _FakeSocks:
 
 def test_socks5_http_roundtrip():
     body = b"<html><title>Hi</title><body>onion body</body></html>"
-    resp = (b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n"
-            b"Content-Length: %d\r\nConnection: close\r\n\r\n" % len(body)) + body
+    resp = (b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: %d\r\n"
+            b"Connection: close\r\n\r\n" % len(body)) + body
     fake = _FakeSocks(resp)
-    r = torfetch.fetch("http://darkforum.onion/board",
-                       proxy_host="127.0.0.1", proxy_port=fake.port, timeout=5)
-    assert r.status == 200
-    assert "onion body" in r.text
+    r = torfetch.fetch("http://darkforum.onion/board", proxy_host="127.0.0.1",
+                       proxy_port=fake.port, timeout=5)
+    assert r.status == 200 and "onion body" in r.text
     assert fake.requests and b"GET /board HTTP" in fake.requests[0]
     assert b"Host: darkforum.onion" in fake.requests[0]
 
@@ -200,5 +202,5 @@ def test_socks5_refuses_cross_host_redirect():
             b"Content-Length: 0\r\nConnection: close\r\n\r\n")
     fake = _FakeSocks(resp)
     with pytest.raises(torfetch.FetchRefused):
-        torfetch.fetch("http://darkforum.onion/board",
-                       proxy_host="127.0.0.1", proxy_port=fake.port, timeout=5)
+        torfetch.fetch("http://darkforum.onion/board", proxy_host="127.0.0.1",
+                       proxy_port=fake.port, timeout=5)
