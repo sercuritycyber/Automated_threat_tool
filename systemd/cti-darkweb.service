@@ -1,0 +1,54 @@
+[Unit]
+Description=SecurityCyber dark-web collector (targeted onion CTI over Tor)
+Documentation=file:%h/Threatintel/darkweb/README.md
+After=network-online.target tor.service
+Wants=network-online.target
+Requires=tor.service
+
+[Service]
+Type=oneshot
+# SYSTEM unit (not --user): run as a dedicated locked-down account so the code
+# that ingests untrusted onion HTML is strongly isolated. Create it once with:
+#   sudo useradd --system --no-create-home --shell /usr/sbin/nologin darkweb
+#   sudo usermod -aG securitycyber darkweb   # read the repo + honeyintel exports
+User=darkweb
+Group=darkweb
+SupplementaryGroups=securitycyber
+
+WorkingDirectory=/home/securitycyber/Threatintel
+# No shell wrapper: the interpreter runs the collector directly. The collector
+# core imports no subprocess module — this ExecStart is the only process spawn.
+ExecStart=/usr/bin/python3 /home/securitycyber/Threatintel/darkweb/harvest.py run --json state/darkweb_hits.jsonl
+
+# --- hard isolation: the aggregator gets NO shell / exec ------------------- #
+# @system-service is an allowlist; subtracting execve/execveat means this
+# process physically cannot launch bash or any other program.
+SystemCallFilter=@system-service
+SystemCallFilter=~execve execveat @clock @debug @module @mount @reboot @swap @obsolete
+SystemCallArchitectures=native
+NoNewPrivileges=yes
+LockPersonality=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+# filesystem: read-only everywhere except the collector's own state dir
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/securitycyber/Threatintel/state
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0077
+
+TimeoutStartSec=1800
+Nice=12
+
+[Install]
+WantedBy=multi-user.target

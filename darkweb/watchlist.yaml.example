@@ -1,0 +1,24 @@
+# Watchlist — what to flag when it appears in collected forum text.
+# Copy to darkweb/watchlist.yaml. Matched case-insensitively.
+#
+# terms/handles are matched on word boundaries (so "acme" won't hit "acmecorp");
+# domains/emails are matched as substrings.
+
+terms:            # brand / product / project names, client names, codewords
+  - SecurityCyber
+  - Securitycybercti
+  # - <client name>
+  # - <internal project codename>
+
+domains:          # your and your clients' domains — spot data being sold
+  - securitycyber.uk
+  - cti.securitycyber.uk
+  # - clientdomain.com
+
+emails:           # specific mailboxes worth watching for in combolists
+  - charliesecuritycyber@gmail.com
+  # - admin@clientdomain.com
+
+handles:          # actor / broker aliases you are tracking
+  # - somebroker
+  # - <actor handle from a prior investigation>

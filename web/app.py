@@ -47,6 +47,12 @@ import marketing_desk as MKT  # noqa: E402
 import admin_center as AC  # noqa: E402
 import cve_desk as CVE  # noqa: E402
 import honeynet_desk as HN  # noqa: E402
+try:
+    import darkweb_desk as DW  # noqa: E402
+    _DW_OK = True
+except Exception:  # the console must still boot if the collector isn't deployed
+    DW = None
+    _DW_OK = False
 import panel_theme as PT  # noqa: E402
 try:
     import subscribers as SUBS  # noqa: E402
@@ -410,6 +416,8 @@ NAV = [
     ("Honeynet", [("/honeynet", "Overview", "hive"), ("/honeynet/campaigns", "Campaigns", "target"),
                   ("/honeynet/iocs", "IOC feed", "shield"), ("/honeynet/credentials", "Credentials", "key"),
                   ("/honeynet/windows", "Windows sensors", "terminal"), ("/honeynet/report", "Report & draft", "file")]),
+    ("Dark web", [("/darkweb", "Overview", "radar"), ("/darkweb/hits", "Hits", "shield"),
+                  ("/darkweb/sites", "Sites", "list"), ("/darkweb/log", "Activity", "terminal")]),
     ("Grow", [("/marketing", "Marketing", "megaphone")]),
     ("Customers", [("/service", "CTI service", "shield"), ("/subscribers", "Subscribers", "users"),
                    ("/purchases", "Purchases", "card")]),
@@ -2691,6 +2699,49 @@ def honeynet_file(name: str):
 @app.post("/honeynet/refresh")
 def honeynet_refresh():
     return RedirectResponse("/honeynet?m=" + quote(HN.refresh()), 303)
+
+
+# ----------------------------------------------------------------------------- dark-web desk
+def _dw_guard() -> HTMLResponse | None:
+    if not _DW_OK:
+        return page("Dark web", '<div class="card"><span class="pill bad">unavailable</span> '
+                    'the dark-web collector module failed to import on this host.</div>', "/darkweb")
+    return None
+
+
+@app.get("/darkweb", response_class=HTMLResponse)
+def darkweb_overview(request: Request):
+    return _dw_guard() or page("Dark web", DW.render_overview(), "/darkweb", flash_from(request))
+
+
+@app.get("/darkweb/hits", response_class=HTMLResponse)
+def darkweb_hits(request: Request):
+    return _dw_guard() or page("Dark web · Hits", DW.render_hits(), "/darkweb/hits", flash_from(request))
+
+
+@app.get("/darkweb/sites", response_class=HTMLResponse)
+def darkweb_sites(request: Request):
+    return _dw_guard() or page("Dark web · Sites", DW.render_sites(), "/darkweb/sites", flash_from(request))
+
+
+@app.get("/darkweb/log", response_class=HTMLResponse)
+def darkweb_log(request: Request):
+    return _dw_guard() or page("Dark web · Activity", DW.render_log(), "/darkweb/log", flash_from(request))
+
+
+@app.post("/darkweb/act")
+def darkweb_act(do: str = Form("check"), site: str = Form(""), hit: int = Form(0)):
+    if not _DW_OK:
+        return RedirectResponse("/darkweb", 303)
+    if do == "toggle" and site:
+        msg = DW.toggle_site(site)
+        return RedirectResponse("/darkweb/sites?m=" + quote(msg), 303)
+    if do == "review" and hit:
+        msg = DW.mark_reviewed(hit)
+        return RedirectResponse("/darkweb/hits?m=" + quote(msg), 303)
+    msg = DW.action(do)
+    dest = "/darkweb/log" if do in ("collect", "check", "match") else "/darkweb"
+    return RedirectResponse(f"{dest}?m=" + quote(msg), 303)
 
 
 # ----------------------------------------------------------------------------- intel desk

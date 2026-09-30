@@ -1,0 +1,55 @@
+# Dark-web collector — site registry.  Copy to darkweb/sites.yaml and fill in.
+#
+# IMPORTANT — read before adding addresses:
+#   * Onion addresses for these forums change constantly (seizures, exit scams,
+#     rebrands) and are HEAVILY cloned for phishing. NO addresses are shipped
+#     here on purpose: paste only v3 addresses (56 chars + ".onion") you have
+#     verified yourself from a source you trust. A wrong address = a phishing
+#     clone that may harvest a session cookie you paste in.
+#   * This is a TARGETED collector, not a crawler. It fetches exactly the paths
+#     you list. It never follows links off the page. Keep `paths` to board
+#     indexes / search result pages you actually want to monitor.
+#   * Most of these boards require a logged-in session. Without a cookie you get
+#     the login wall (still useful as an uptime signal, but no content). Supply
+#     a session cookie out of band via `cookie_env` (an env var name), never in
+#     this file — this file is not for secrets.
+#   * Fetch nothing you are not authorised to, download no dumps (the collector
+#     refuses non-text and large bodies), and mind local law on accessing this
+#     material — collection for defence is the purpose.
+
+darkweb:
+  proxy_host: 127.0.0.1
+  proxy_port: 9050                 # Tor SOCKS. 9150 if using Tor Browser's Tor.
+  db: state/darkweb.db            # relative to the repo root
+  timeout: 90
+  max_bytes: 4000000
+  default_rate_seconds: 20        # polite delay between pages on one site
+
+  # Honeypot IOC feeds to match against — e.g. honeyintel's report exports.
+  # Point these at the newest report dir, or a rolling export you maintain.
+  ioc_feeds:
+    - kind: ips
+      path: /home/securitycyber/honeyintel/reports/latest/iocs.csv
+      column: src_ip
+    - kind: creds
+      path: /home/securitycyber/honeyintel/reports/latest/creds.csv
+      user_column: username
+      pass_column: password
+    # - kind: hashes
+    #   path: /home/securitycyber/honeyintel/reports/latest/iocs.csv
+    #   column: sha256
+
+sites:
+  - name: example-forum
+    enabled: false                # flip on once you've set a real base
+    base: "http://REPLACE_WITH_VERIFIED_v3_ADDRESS.onion"
+    cookie_env: DARKWEB_EXAMPLE_COOKIE   # export this in the environment, not here
+    rate_seconds: 25
+    paths:
+      - /                         # front page / board index
+      # - /search?q=securitycyber
+      # - /forum-databases        # the section you care about
+
+  # Add one block per board you monitor (BreachForums / XSS / Dread / etc.),
+  # each with its own verified base, cookie env var, and the specific index or
+  # search pages worth polling.
