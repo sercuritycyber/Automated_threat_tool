@@ -105,33 +105,33 @@ def build_draft(addr: str, row, history, status: str, tag: str) -> str:
     timeline = "\n".join(tl_lines)
 
     label = tag.upper() if tag else "[site name — fill in]"
-    verb = "is still dark" if status == "down" else "has resurfaced"
+    verb = "appears to have gone dark" if status == "down" else "appears to be back online"
 
     body = f"""DRAFT for your feeds — review, add the site name / last-seen time, then post. NOT auto-published.
 
 Dark-web watch: a hidden service we've been tracking {verb}.
 
-SecurityCyber's onion monitor has had {label} (v3 .onion) unreachable over Tor
-since {first_down_s} — Tor cannot connect to the service — after it was live
-shortly before.
+Since {first_down_s}, SecurityCyber's onion monitor has been unable to reach
+{label} (v3 .onion) over Tor — it appears offline, having seemingly been
+reachable shortly before.
 
-Our read: this fits an exit scam / "rug pull" — operators pulling the
-infrastructure on an empty warchest and walking away. That's SecurityCyber's
-assessment, held since the service first dropped; we're monitoring for any
-return and will flag it the moment it comes back.
+Our read: this looks consistent with an exit scam / "rug pull" — what appears to
+be operators pulling the infrastructure on an empty warchest and walking away.
+That's SecurityCyber's assessment, not a confirmed fact; we've held this view
+since it first seemed to drop, and we're monitoring for any return.
 
 Observed timeline:
 {timeline}
 
-[Optional: one line on what {label} was / who it served.]
+[Optional: one line on what {label} appeared to be / who it served.]
 
 #ThreatIntel #DarkWeb #SecurityCyber
 
 ---
-Facts (ours, verified): the .onion was unreachable over Tor at the times listed;
-status changes are from our own probes. Assessment (our opinion, clearly ours):
-exit-scam / rug-pull read. The exact moment it first dropped is not something we
-witnessed — the timeline starts from our first observation.
+Facts (ours, measured): the .onion was unreachable over Tor at the times listed;
+status changes are from our own probes. Assessment (our opinion, hedged as such):
+the exit-scam / rug-pull read. We did not witness the exact drop, so the timeline
+begins at our first observation.
 Address (defanged): {addr.replace('.onion', '[.]onion')}
 """
     return body
