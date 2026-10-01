@@ -260,10 +260,12 @@ vulnerability or incident that's on your mind right now.</p>
   const body = `
 <div class=hero>
 <div class=eyebrow>SecurityCyber · Threat Intelligence</div>
-<h1>The two CVEs this week that can actually hurt you — on your screen before you go looking.</h1>
-<p class=lede>Every week brings dozens of "critical" advisories. A handful matter to your
-estate. We do the reading, the cross-checking and the "so what", and send you only those —
-with the one action to take — straight to Slack, Teams-via-webhook, Discord, Telegram or your inbox.</p>
+<h1>Know what actually matters this week — in a two-minute read.</h1>
+<p class=lede>Dozens of "critical" advisories land every week; only a few are worth your
+attention. We do the reading, the cross-checking and the "so what", and send you just those —
+with the one thing to do — to your inbox, Slack, Discord, Telegram or a private feed.
+Situational awareness for people who take security seriously, whether that's a SOC, a
+side-of-desk role, or a home lab.</p>
 <div class=cta>
 <a class=btn href="#pricing">See plans &amp; pricing</a>
 <a class="btn ghost" href="#how">How it works</a>
@@ -371,10 +373,28 @@ bad week, you get the full picture — fast.</p></div>
 <div class=section>
 <h2>Who it's for</h2>
 <div class=who>
+<div><b>Solo &amp; side-of-desk defenders</b>The one person holding the pager — situational awareness without living in feeds.</div>
+<div><b>Home labbers &amp; learners</b>Follow what's actually being exploited, week by week, with the reasoning spelled out.</div>
 <div><b>Small IT teams</b>No dedicated security hire, still on the hook for it.</div>
-<div><b>MSPs &amp; MSSPs</b>One filtered stream to brief every client from.</div>
-<div><b>Solo defenders</b>The one person holding the SOC pager.</div>
-<div><b>vCISOs &amp; consultants</b>Stay current across every client's stack without living in feeds.</div>
+<div><b>MSPs, vCISOs &amp; consultants</b>One filtered stream to stay current across every client's stack.</div>
+</div>
+</div>
+
+<div class=section id=roadmap>
+<h2>Where it's heading</h2>
+<p class=muted>The direction we're building in — shared openly, not a set of promises or dates.
+The core is live today; these just make the situational-awareness picture fuller.</p>
+<div class=steps>
+<div class=step><b>A weekly "what mattered" recap.</b>
+<p class=muted>A short retrospective so you can take in the week at a glance, not only the day's alerts.</p></div>
+<div class=step><b>Exploit-likelihood scoring.</b>
+<p class=muted>Alongside severity and real-world exploitation, a read on how likely something is to be exploited next.</p></div>
+<div class=step><b>Tell us your stack once.</b>
+<p class=muted>Saved product-watches, so the feed quietly tunes itself to what you actually run.</p></div>
+<div class=step><b>Public CVE reference pages.</b>
+<p class=muted>Clean, linkable write-ups of the vulnerabilities that matter — free to read and share.</p></div>
+<div class=step><b>More first-hand sensor coverage.</b>
+<p class=muted>Growing the honeynet so more of what you read comes from our own sensors, not reposted feeds.</p></div>
 </div>
 </div>
 
