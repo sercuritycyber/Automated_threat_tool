@@ -1,0 +1,11 @@
+[Unit]
+Description=Re-check tracked onion liveness every 2 hours
+
+[Timer]
+# Every 2h, offset from the full crawl (cti-darkweb.timer at 02/10/18:35).
+OnCalendar=*-*-* 00/2:15:00
+RandomizedDelaySec=300
+Persistent=true
+
+[Install]
+WantedBy=timers.target
