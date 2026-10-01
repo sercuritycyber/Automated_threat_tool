@@ -123,10 +123,10 @@ def build_draft(addr: str, row, history, status: str, tag: str) -> str:
 
 Dark-web watch: a hidden service we've been tracking {verb}.
 
-Since {first_down_s}{(' — about ' + dur_s + ' and counting') if dur_s else ''},
-SecurityCyber's onion monitor has been unable to reach {label} (v3 .onion) over
-Tor across repeated automated checks — it appears offline, having seemingly been
-reachable shortly before.
+Since {first_down_s}{(' — about ' + dur_s + ' ago') if dur_s else ''},
+SecurityCyber's onion monitor has not been able to reach {label} (v3 .onion) over
+Tor — it appears offline, having seemingly been reachable shortly before, and was
+still unreachable on re-check.
 
 Our read: this looks consistent with an exit scam / "rug pull" — what appears to
 be operators pulling the infrastructure on an empty warchest and walking away.
