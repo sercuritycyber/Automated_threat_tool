@@ -90,18 +90,30 @@ def probe(addr: str, cfg: dict, attempts: int) -> tuple[str, int | None, str | N
     return "down", None, None
 
 
+def _dur(seconds: float) -> str:
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    if h >= 24:
+        return f"{h // 24}d {h % 24}h"
+    return f"{h}h {m}m"
+
+
 def build_draft(addr: str, row, history, status: str, tag: str) -> str:
     # Prefer the first logged down-transition; else the first time we logged the
     # address at all (we added it already-offline). Never "now".
     first_down = next((h["at"] for h in history if h["new_status"] == "down"), None)
-    first_down_s = _utc(first_down) if first_down else _utc(row["first_seen"] if row else None)
-    now_s = _utc(time.time())
+    offline_since = first_down if first_down else (row["first_seen"] if row else None)
+    first_down_s = _utc(offline_since)
+    now_ts = time.time()
+    now_s = _utc(now_ts)
+    dur_s = _dur(now_ts - offline_since) if (offline_since and status == "down") else ""
 
     tl_lines = ["- [when YOU last saw it live — fill in]: reachable"]
     tl_lines.append(f"- {first_down_s}: first logged OFFLINE over Tor by SecurityCyber monitoring")
     for h in history:
         tl_lines.append(f"- {_utc(h['at'])}: status {h['old_status'] or '(new)'} → {h['new_status']}")
-    tl_lines.append(f"- {now_s}: {'still OFFLINE' if status == 'down' else 'ONLINE again'} (latest check)")
+    still = f"still OFFLINE after ~{dur_s}" if (status == "down" and dur_s) else ("ONLINE again" if status != "down" else "still OFFLINE")
+    tl_lines.append(f"- {now_s}: {still} (latest check)")
     timeline = "\n".join(tl_lines)
 
     label = tag.upper() if tag else "[site name — fill in]"
@@ -111,8 +123,9 @@ def build_draft(addr: str, row, history, status: str, tag: str) -> str:
 
 Dark-web watch: a hidden service we've been tracking {verb}.
 
-Since {first_down_s}, SecurityCyber's onion monitor has been unable to reach
-{label} (v3 .onion) over Tor — it appears offline, having seemingly been
+Since {first_down_s}{(' — about ' + dur_s + ' and counting') if dur_s else ''},
+SecurityCyber's onion monitor has been unable to reach {label} (v3 .onion) over
+Tor across repeated automated checks — it appears offline, having seemingly been
 reachable shortly before.
 
 Our read: this looks consistent with an exit scam / "rug pull" — what appears to
