@@ -96,6 +96,30 @@ or `DARKWEB_ALERT_NTFY` env — never the pipeline's canary `ntfy_url`). Every
 status change is also written to a `status_log`, so `harvest.py history <onion>`
 prints the full up/down timeline (useful for an exit-scam / rug-pull theory).
 
+## Internal blockchain watcher (`chainwatch.py`) — never public
+
+Separate, internal-only tool: watches crypto addresses you supply and alerts on
+large or imminent outflows (the signal that an exit-scam warchest is draining).
+It never posts publicly.
+
+- **No invented addresses** — you add verified/candidate ones; `add` validates +
+  baselines them. BTC only (mempool.space, queried over Tor so our watchlist
+  isn't leaked). **Monero can't be watched on-chain** and is refused.
+- Alerts: `outflow` (balance dropped ≥ threshold), `pending-outflow` (a large
+  spend sitting in the mempool — imminent), `activity` (new tx). Recorded in
+  `chainwatch.db`, shown on the panel **Wallets** tab, and optionally pushed to a
+  dedicated ntfy topic (`chainwatch.alert.ntfy_url` / `CHAINWATCH_ALERT_NTFY`) —
+  never the pipeline canary.
+
+```bash
+cp darkweb/chainwatch.yaml.example darkweb/chainwatch.yaml
+python3 darkweb/chainwatch.py add <btc-addr> --label shinyhunters-warchest --threshold-btc 0.25
+python3 darkweb/chainwatch.py check      # run by cti-chainwatch.timer every 30m
+python3 darkweb/chainwatch.py list
+python3 darkweb/chainwatch.py alerts
+```
+`chainwatch.yaml` is gitignored (holds addresses under investigation).
+
 ## Admin Center (`/darkweb`)
 - **Overview** — down→up alert banner, CSAM-blocked count, stats, controls
   (Check Tor, Crawl+validate, Re-check liveness), live addresses.
