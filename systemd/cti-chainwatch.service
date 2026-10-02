@@ -1,0 +1,39 @@
+[Unit]
+Description=SecurityCyber internal blockchain watcher (large-outflow alerts)
+Documentation=file:%h/Threatintel/darkweb/README.md
+After=network-online.target tor.service
+Wants=network-online.target tor.service
+
+# Internal only; never posts publicly. Same no-exec sandbox as the onion
+# collector: NoExecPaths=/ + narrow ExecPaths — runs python, cannot exec a shell.
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/Threatintel
+ExecStart=/usr/bin/python3 %h/Threatintel/darkweb/chainwatch.py check
+
+NoExecPaths=/
+ExecPaths=/usr/bin/python3 /usr/bin/python3.14 /usr/lib64 /usr/lib /lib64 /etc/ld.so.cache
+SystemCallFilter=@system-service
+SystemCallArchitectures=native
+NoNewPrivileges=yes
+LockPersonality=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ProtectSystem=strict
+ReadWritePaths=/mnt/data/threatintel/darkweb
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+UMask=0077
+
+TimeoutStartSec=900
+Nice=12
+
+[Install]
+WantedBy=default.target

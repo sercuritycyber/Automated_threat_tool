@@ -38,6 +38,8 @@ Gemini_Generated_Image*
 darkweb/sources.yaml
 darkweb/watchlist.yaml
 darkweb/safety_blocklist_*.txt
+# internal blockchain watcher — holds wallet addresses under investigation; never commit
+darkweb/chainwatch.yaml
 
 # machine-local (VM)
 /.agent-bus

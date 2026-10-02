@@ -2724,6 +2724,11 @@ def darkweb_sources(request: Request):
     return _dw_guard() or page("Dark web · Sources", DW.render_sources(), "/darkweb/sources", flash_from(request))
 
 
+@app.get("/darkweb/wallets", response_class=HTMLResponse)
+def darkweb_wallets(request: Request):
+    return _dw_guard() or page("Dark web · Wallets", DW.render_wallets(), "/darkweb/wallets", flash_from(request))
+
+
 @app.get("/darkweb/log", response_class=HTMLResponse)
 def darkweb_log(request: Request):
     return _dw_guard() or page("Dark web · Activity", DW.render_log(), "/darkweb/log", flash_from(request))
@@ -2745,6 +2750,8 @@ def darkweb_act(do: str = Form("check"), src: str = Form("")):
         return RedirectResponse("/darkweb/sources?m=" + quote(msg), 303)
     if do == "ack":
         return RedirectResponse("/darkweb?m=" + quote(DW.ack_alerts()), 303)
+    if do == "ackchain":
+        return RedirectResponse("/darkweb/wallets?m=" + quote(DW.ack_chain_alerts()), 303)
     msg = DW.action(do)
     dest = "/darkweb/log" if do in ("crawl", "checkup", "check") else "/darkweb"
     return RedirectResponse(f"{dest}?m=" + quote(msg), 303)

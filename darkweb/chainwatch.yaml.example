@@ -1,0 +1,23 @@
+# Internal blockchain watcher config. Copy to darkweb/chainwatch.yaml.
+# This file may hold wallet addresses you are investigating — it is gitignored
+# and must NEVER be committed or made public. Alerts are internal only.
+#
+# Add addresses with the CLI (validates + baselines), not by hand:
+#   python3 darkweb/chainwatch.py add <btc-address> --label shinyhunters-warchest --threshold-btc 0.25
+# then: python3 darkweb/chainwatch.py check   (run by the timer)
+
+chainwatch:
+  db: /mnt/data/threatintel/darkweb/chainwatch.db   # VM path (writable, ReadWritePaths)
+  over_tor: true            # query the explorer over Tor so our watchlist isn't leaked
+  proxy_host: 127.0.0.1
+  proxy_port: 9050
+  timeout: 60
+  default_threshold_btc: 0.1   # alert when at least this much moves, unless per-wallet set
+
+  # Optional push to a DEDICATED ntfy topic (never the pipeline canary). Env
+  # CHAINWATCH_ALERT_NTFY overrides. Unset = alerts recorded internally only.
+  alert:
+    ntfy_url: ""
+
+# Addresses are NOT stored here — they live in chainwatch.db (added via the CLI).
+# Only BTC is supported (mempool.space). Monero cannot be watched on-chain.

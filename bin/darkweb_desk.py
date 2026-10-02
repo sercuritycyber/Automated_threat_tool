@@ -33,7 +33,8 @@ RUNLOG = ROOT / "state" / "darkweb_desk.log"
 SERVICE = "cti-darkweb.service"
 
 TABS = [("/darkweb", "Overview"), ("/darkweb/addresses", "Addresses"),
-        ("/darkweb/sources", "Sources"), ("/darkweb/log", "Activity")]
+        ("/darkweb/sources", "Sources"), ("/darkweb/wallets", "Wallets"),
+        ("/darkweb/log", "Activity")]
 
 CSS = """<style>
 .dw-tabs{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 16px}
@@ -332,6 +333,73 @@ def render_sources() -> str:
             + '<p class="dim">Sources are crawled for addresses. Edit URLs in '
               '<span class="dw-k">darkweb/sources.yaml</span>; enable/disable here.</p>'
             + f'<table><tr><th>State</th><th>Source</th><th>URL</th><th></th></tr>{rows}</table>')
+
+
+def _btc(sats) -> str:
+    try:
+        return f"{int(sats) / 100_000_000:.6f} BTC"
+    except Exception:
+        return "?"
+
+
+def ack_chain_alerts() -> str:
+    try:
+        import chainwatch
+        cfg = chainwatch._settings(chainwatch._load_cfg(DW / "chainwatch.yaml"))
+        with chainwatch.Store(chainwatch._resolve(cfg["db"])) as st:
+            return f"acknowledged {st.ack_all()} wallet alert(s)"
+    except Exception as ex:
+        return f"error: {ex}"
+
+
+def render_wallets() -> str:
+    try:
+        import chainwatch
+    except Exception as ex:
+        return _tabs("/darkweb/wallets") + f'<div class="card"><span class="pill bad">unavailable</span> {e(ex)}</div>'
+    if not (DW / "chainwatch.yaml").exists():
+        return _tabs("/darkweb/wallets") + """<div class="card"><b>Internal blockchain watcher — not configured.</b>
+        <p class="dim">Internal only; never posted publicly. Copy
+        <span class="dw-k">darkweb/chainwatch.yaml.example</span> to
+        <span class="dw-k">darkweb/chainwatch.yaml</span>, then add a verified address:<br>
+        <span class="dw-k">python3 darkweb/chainwatch.py add &lt;btc-addr&gt; --label shinyhunters-warchest --threshold-btc 0.25</span></p>
+        <p class="dim">BTC only (mempool.space over Tor). Monero can't be watched on-chain.</p></div>"""
+    try:
+        cfg = chainwatch._settings(chainwatch._load_cfg(DW / "chainwatch.yaml"))
+        with chainwatch.Store(chainwatch._resolve(cfg["db"])) as st:
+            wallets = st.wallets()
+            alerts = st.alerts(unacked_only=True)
+            recent = st.alerts(unacked_only=False)[:15]
+    except Exception as ex:
+        return _tabs("/darkweb/wallets") + f'<div class="card"><span class="pill bad">DB error</span> {e(ex)}</div>'
+    banner = ""
+    if alerts:
+        items = "".join(
+            f'<div style="margin-top:6px"><b>{e(a["kind"].upper())}</b> '
+            f'<span class="pill bad">{e(_btc(a["amount_sats"]))}</span> '
+            f'{e(a["label"])} — <span class="dim">{e(a["detail"])}</span></div>' for a in alerts[:12])
+        banner = (f'<div class="dw-alert">💸 <b>{len(alerts)} wallet movement alert(s)</b>{items}'
+                  f'<form method=post action="/darkweb/act" style="margin-top:10px">'
+                  f'<input type=hidden name=do value=ackchain>'
+                  f'<button class="btn ghost" type=submit style="padding:4px 12px;font-size:12px">Acknowledge all</button></form></div>')
+    if not wallets:
+        wrows = '<tr><td class="dim" colspan=5>No wallets watched. Add via CLI (see Wallets setup).</td></tr>'
+    else:
+        wrows = "".join(
+            f'<tr><td><b>{e(w["label"] or "")}</b></td><td class="dw-k">{e(w["address"])}</td>'
+            f'<td>{e(_btc(w["balance_sats"]) if w["balance_sats"] is not None else "?")}</td>'
+            f'<td>{e(w["tx_count"] if w["tx_count"] is not None else "?")}</td>'
+            f'<td class="dim">thr {e(_btc(w["threshold_sats"]))}</td></tr>' for w in wallets)
+    arows = "".join(
+        f'<tr><td>{e(time.strftime("%Y-%m-%d %H:%M", time.localtime(a["created_at"])))}</td>'
+        f'<td>{e(a["kind"])}</td><td>{e(a["label"])}</td><td class="dim">{e(a["detail"])}</td></tr>'
+        for a in recent) or '<tr><td class="dim" colspan=4>No alerts yet.</td></tr>'
+    return (_tabs("/darkweb/wallets") + banner
+            + '<div class="dw-safe">🔒 Internal only — wallet data and alerts are never posted publicly.</div>'
+            + '<h2>Watched wallets</h2><table><tr><th>Label</th><th>Address</th><th>Balance</th><th>Txs</th><th></th></tr>'
+            + wrows + '</table>'
+            + '<h2>Recent movement alerts</h2><table><tr><th>When</th><th>Kind</th><th>Label</th><th>Detail</th></tr>'
+            + arows + '</table>')
 
 
 def render_log() -> str:
