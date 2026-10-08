@@ -117,7 +117,11 @@ async function route(request, env, ctx, url, path, cfg) {
   // ---- legal ----
   if (["/privacy", "/terms", "/cookies"].includes(path) && m === "GET") {
     const L = legalHtml(cfg, path.slice(1));
-    return L ? html(page(cfg, L.title, L.html)) : html(page(cfg, "Not found", "<h1>Not found</h1>"), 404);
+    // Free mode: the documents still describe the closed paid service, so say so up top.
+    const note = cfg.free_mode
+      ? `<div class=card><p><b>The paid service has closed.</b> Since 8 October 2026 the CTI feed is free for everyone, with no sign-up, payment or account. The billing, subscription and one-off brief sections below apply only to purchases made before then. Questions: <a href="mailto:${esc(cfg.contact_email || "securitycyber_cti@securitycyber.uk")}">${esc(cfg.contact_email || "securitycyber_cti@securitycyber.uk")}</a>.</p></div>`
+      : "";
+    return L ? html(page(cfg, L.title, note + L.html)) : html(page(cfg, "Not found", "<h1>Not found</h1>"), 404);
   }
 
   if (!cfg_enabled(env) && !path.startsWith("/webhooks") && !path.startsWith("/internal") && !path.startsWith("/admin")) {
@@ -128,8 +132,14 @@ async function route(request, env, ctx, url, path, cfg) {
   // ---- free mode: the feed is open, nothing to buy or sign up for ----
   if (cfg.free_mode) {
     if (path === "/" && m === "GET") {
+      // Full alerts (same stream + bar as the Discord channel) — the posts'
+      // gap line promises the full write-up is here. Public feed as fallback.
       let posts = [];
-      try { posts = await db.listPublicFeed(D, 15); } catch (e) { console.error("free landing feed", e); }
+      try { posts = await db.listAlertFeed(D, 20, Number(cfg.discord_channel_min_score ?? 50)); }
+      catch (e) { console.error("free landing alerts", e); }
+      if (!posts.length) {
+        try { posts = await db.listPublicFeed(D, 15); } catch (e) { console.error("free landing feed", e); }
+      }
       return html(freeLanding(cfg, posts, url.searchParams.get("m") || "", url.searchParams.get("k") || ""));
     }
     if (["/subscribe", "/account", "/welcome", "/brief", "/brief/buy", "/brief/thanks"].includes(path))

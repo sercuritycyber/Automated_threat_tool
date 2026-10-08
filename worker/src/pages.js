@@ -197,7 +197,9 @@ export const chanLabel = (k) => (CHAN_META[k] || [k])[0];
 // Discord section (which carries the invite once it's set there).
 export const discordUrl = (cfg) => cfg.discord_invite || `${cfg.main_site}/about#discord`;
 
-// Free-mode landing: the feed itself, no plans, no sign-up.
+// Free-mode landing: the feed itself, no plans, no sign-up. Takes the full
+// alert rows (listAlertFeed — what the social posts promise is "on the free
+// feed") or, as a fallback, public-feed rows; both shapes render.
 export function freeLanding(cfg, posts = [], flash = "", flashKind = "") {
   const age = (iso) => {
     const m = Math.round((Date.now() - Date.parse(iso)) / 60000);
@@ -205,10 +207,17 @@ export function freeLanding(cfg, posts = [], flash = "", flashKind = "") {
     return m < 60 ? `${m}m ago` : m < 1440 ? `${Math.round(m / 60)}h ago` : `${Math.round(m / 1440)}d ago`;
   };
   const items = posts.map((p) => {
-    const src = /^https?:\/\//i.test(p.source_url || "") ? p.source_url : "";
+    const link = p.url || p.source_url || "";
+    const src = /^https?:\/\//i.test(link) ? link : "";
     const text = String(p.text || "").replace(/\s*https:\/\/cti\.securitycyber\.uk\/?\s*$/, "");
-    return `<div class=card><div class=muted style="font:500 12px var(--mono)">score ${esc(p.score)} · ${esc(age(p.posted_at))}</div>
-<h3 style="margin-top:6px">${esc(p.title)}</h3><p class=muted>${esc(text)}</p>
+    let cves = p.cve_ids || [];
+    if (typeof cves === "string") { try { cves = JSON.parse(cves); } catch { cves = []; } }
+    const meta = [`score ${esc(p.score)}`, esc(age(p.seen_at || p.posted_at)), p.category ? esc(p.category) : "",
+      Array.isArray(cves) && cves.length ? cves.map(esc).join(", ") : ""].filter(Boolean).join(" · ");
+    return `<div class=card><div class=muted style="font:500 12px var(--mono)">${meta}</div>
+<h3 style="margin-top:6px">${esc(p.title)}</h3>
+${(p.action || "").trim() ? `<p><b>Do now:</b> ${esc(p.action.trim())}</p>` : ""}
+<p class=muted style="white-space:pre-line">${esc(text)}</p>
 ${src ? `<a href="${esc(src)}" target="_blank" rel="noopener noreferrer" style="font:500 13px var(--mono)">primary source →</a>` : ""}</div>`;
   }).join("\n");
   const body = `<section class=hero><div class=eyebrow>Cyber threat intelligence · free</div>

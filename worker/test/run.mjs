@@ -273,6 +273,10 @@ ok("free landing: points at the site + Discord", fl.includes('href="https://secu
 ok("free landing: escapes titles, drops non-http sources", fl.includes("&lt;b&gt;x&lt;/b&gt;") && !fl.includes("javascript:") && fl.includes("https://example.com/a"));
 ok("free landing: strips the trailing self-link", !fl.includes("Patch it. https://cti.securitycyber.uk"));
 ok("free landing: empty feed still renders", freeLanding(fc, []).includes("quiet right now"));
+const fa = freeLanding(fc, [{ title: "Full alert", url: "https://example.com/x", score: 70, cve_ids: '["CVE-2026-1"]',
+  action: "Patch to 1.2.3", category: "exploitation", text: "Affected: 1.0-1.2\nHunt: new admins", seen_at: new Date().toISOString() }]);
+ok("free landing: renders full alerts (Do now, write-up, CVE, source)", fa.includes("<b>Do now:</b> Patch to 1.2.3")
+  && fa.includes("Hunt: new admins") && fa.includes("CVE-2026-1") && fa.includes('href="https://example.com/x"'));
 const fp = page(fc, "t", "");
 ok("free-mode nav drops Services/Contact", !fp.includes("/services") && !fp.includes("/contact\"") && fp.includes(">Free CTI<"));
 ok("paid-mode nav unchanged", page(c, "t", "").includes("/services"));
