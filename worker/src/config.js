@@ -3,6 +3,11 @@
 
 const DEFAULTS = {
   live: false,
+  // Free mode (Oct 2026): the feed is open to everyone. Landing becomes the
+  // free feed + pointers to securitycyber.uk and the Discord; subscribe,
+  // checkout and the one-off brief are switched off. Existing subscribers
+  // keep delivery / manage / unsubscribe. false restores the paid service.
+  free_mode: false,
   // "link_only" = sell strictly through Stripe Payment Links; a cadence with
   // no link is simply not offered. "auto" falls back to an API-created
   // Checkout Session (which needs STRIPE_SECRET_KEY).
@@ -157,6 +162,8 @@ export function config(env) {
       ...env.FOREVER_FREE_EMAILS.split(",").map((x) => x.trim().toLowerCase()).filter(Boolean)])];
   c.forever_free_emails = (c.forever_free_emails || []).map((x) => String(x).toLowerCase());
   c.terms_version = env.TERMS_VERSION || "2026-09-02";
+  // Public Discord invite for free mode; empty falls back to the main site.
+  c.discord_invite = (env.DISCORD_INVITE || "").trim();
   return c;
 }
 

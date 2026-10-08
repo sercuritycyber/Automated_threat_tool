@@ -7,7 +7,7 @@ import * as discord from "./discord.js";
 import { alertEmailHtml } from "./emailtpl.js";
 import { send, verifyTarget, channelAvailability } from "./channels.js";
 import { sign, verify, newId, BadToken, timingSafeEqual } from "./tokens.js";
-import { page, landing, subscribeForm, managePage, simple, briefPage, paidPage, feedXml, LOGO_SVG, chanLabel } from "./pages.js";
+import { page, landing, subscribeForm, managePage, simple, briefPage, paidPage, feedXml, LOGO_SVG, chanLabel, freeLanding } from "./pages.js";
 import { legalHtml } from "./legal.js";
 import { html, text, json, redirect, q, esc, clientIp, rateLimit, nowIso } from "./util.js";
 
@@ -125,6 +125,17 @@ async function route(request, env, ctx, url, path, cfg) {
       "<h1>Not open yet</h1><p class=lede>The SecurityCyber CTI alert service isn't taking subscribers right now.</p>"));
   }
 
+  // ---- free mode: the feed is open, nothing to buy or sign up for ----
+  if (cfg.free_mode) {
+    if (path === "/" && m === "GET") {
+      let posts = [];
+      try { posts = await db.listPublicFeed(D, 15); } catch (e) { console.error("free landing feed", e); }
+      return html(freeLanding(cfg, posts, url.searchParams.get("m") || "", url.searchParams.get("k") || ""));
+    }
+    if (["/subscribe", "/account", "/welcome", "/brief", "/brief/buy", "/brief/thanks"].includes(path))
+      return redirect("/?m=" + q("The CTI feed is free now — no sign-up or payment needed."));
+  }
+
   // ---- landing ----
   if (path === "/" && m === "GET")
     return html(landing(cfg, url.searchParams.get("m") || "", url.searchParams.get("k") || "", buyable(cfg, env)));
@@ -225,6 +236,23 @@ async function route(request, env, ctx, url, path, cfg) {
     const limit = Math.min(Number(url.searchParams.get("limit")) || 20, 50);
     const rows = await db.listPublicFeed(D, limit);
     return json({ posts: rows }, 200, {
+      "Access-Control-Allow-Origin": "https://securitycyber.uk",
+      "Cache-Control": "public, max-age=120",
+    });
+  }
+
+  // Free mode only: the full alert stream, mirroring the Discord alerts
+  // channel (same score bar). Off in paid mode — it carries the write-ups.
+  if (path === "/api/alerts" && m === "GET" && cfg.free_mode) {
+    const limit = Math.min(Number(url.searchParams.get("limit")) || 50, 100);
+    const bar = Number(cfg.discord_channel_min_score ?? 50);
+    const rows = await db.listAlertFeed(D, limit, bar);
+    const alerts = rows.map((r) => {
+      let cves = []; try { cves = JSON.parse(r.cve_ids || "[]"); } catch { /* */ }
+      return { title: r.title, url: r.url, source: r.source, score: r.score, cve_ids: cves,
+        action: r.action || "", category: r.category || "", text: r.text || "", seen_at: r.seen_at };
+    });
+    return json({ alerts, min_score: bar }, 200, {
       "Access-Control-Allow-Origin": "https://securitycyber.uk",
       "Cache-Control": "public, max-age=120",
     });

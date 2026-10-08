@@ -43,9 +43,12 @@ SUPPORT_EMAIL = "securitycyber_cti@securitycyber.uk"
 COMPANY_LEGAL_NAME = "Charlie Collins"
 ICO_REG = ""   # <-- register at ico.org.uk and paste the number here before go-live
 TERMS_VERSION = "2026-09-02"
+# Public Discord invite shown in free mode (empty = securitycyber.uk/about#discord).
+DISCORD_INVITE = "https://discord.gg/BP8Y2m9nH"
 CONFIG = """
 {
   "live": true,
+  "free_mode": true,
   "ico_pending": true,
   "checkout_mode": "link_only",
   "cancel_after_failed_payments": 2,

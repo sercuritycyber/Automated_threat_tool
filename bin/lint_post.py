@@ -85,7 +85,7 @@ LANES = ("breaking", "intel", "trend")
 # (what the subscriber brief has that this post does not) or the plug.
 # A post with neither gives everything away and asks for nothing.
 CONVERSION = re.compile(
-    r"subscriber|paid feed|private feed|briefs? like this|in the comments"
+    r"subscriber|paid feed|private feed|free feed|full (?:alert|brief)|briefs? like this|in the comments"
     r"|cti\.securitycyber|\{alerts_today\}", re.I)
 
 

@@ -233,6 +233,13 @@ export async function kvGet(db, key, dflt = null) {
 export const kvSet = (db, key, value) =>
   run(db, "INSERT INTO kv(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", key, String(value));
 
+// Free mode: the same stream the shared Discord alerts channel carries
+// (every logged alert at or above the channel's score bar), newest first.
+export const listAlertFeed = (db, limit = 50, minScore = 0) =>
+  many(db, `SELECT title, url, source, score, cve_ids, action, category,
+                   COALESCE(NULLIF(subscriber_text, ''), post_text) AS text, seen_at
+              FROM posts_log WHERE score >= ? ORDER BY seen_at DESC LIMIT ?`, minScore, limit);
+
 export async function logPost(db, p) {
   await run(db,
     `INSERT INTO posts_log(post_key, title, url, source, score, cve_ids, post_text, short_text,

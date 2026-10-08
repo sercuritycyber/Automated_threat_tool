@@ -158,18 +158,23 @@ export function page(cfg, title, body, flash = "", flashKind = "", noindex = fal
 <title>${esc(title)} · SecurityCyber CTI</title><link rel=icon href="/logo.svg">
 <style>${CSS}</style>${gaHead(cfg)}</head><body><div class=wrap>
 <nav><a class=brand href="/">${LOGO_SVG}<b>Security<span>Cyber</span></b> <span class=tag style="font:400 12px var(--mono);color:var(--dim)">/ CTI</span></a>
-<span class=links>
+${cfg.free_mode ? `<span class=links>
+<a href="${esc(cfg.main_site)}">Home</a>
+<a href="/">Free CTI</a>
+<a href="${esc(cfg.main_site)}/blog">Blog</a>
+<a href="${esc(cfg.main_site)}/games">Games</a>
+<a href="${esc(discordUrl(cfg))}">Discord</a></span></nav>` : `<span class=links>
 <a href="${esc(cfg.main_site)}/services">Services</a>
 <a href="${esc(cfg.main_site)}/blue-team">Blue Team</a>
 <a href="${esc(cfg.main_site)}/cve">CVE Feed</a>
 <a href="/">Alerts</a>
-<a href="${esc(cfg.main_site)}/contact">Contact</a></span></nav>
+<a href="${esc(cfg.main_site)}/contact">Contact</a></span></nav>`}
 ${fl}${body}
 <footer><div class=fb>${LOGO_SVG}<b>Security<span>Cyber</span></b> · CTI Alerts</div>
 <p style="margin:6px 0 10px;font-style:italic">${esc(MOTTO)}</p>
-${esc(legal)}${ico} · Independent UK blue-team security advisory.<br>
+${esc(legal)}${ico} · ${cfg.free_mode ? "Free threat intel from Charlie Collins&rsquo; personal blue-team space." : "Independent UK blue-team security advisory."}<br>
 <a href="${esc(cfg.main_site)}">securitycyber.uk</a> ·
-<a href="${esc(cfg.main_site)}/services">Services</a> ·
+${cfg.free_mode ? `<a href="${esc(discordUrl(cfg))}">Discord</a>` : `<a href="${esc(cfg.main_site)}/services">Services</a>`} ·
 <a href="https://www.youtube.com/@OpsecCharlie" target="_blank" rel="noopener noreferrer">YouTube</a> ·
 <a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · <a href="/cookies">Cookies</a> ·
 <a href="mailto:${esc(contact)}">${esc(contact)}</a></footer>
@@ -187,6 +192,38 @@ export const CHAN_META = {
   ntfy: ["ntfy", "a full topic URL", "https://ntfy.sh/my-topic"],
 };
 export const chanLabel = (k) => (CHAN_META[k] || [k])[0];
+
+// Where "join the Discord" goes: the public invite, else the main site's
+// Discord section (which carries the invite once it's set there).
+export const discordUrl = (cfg) => cfg.discord_invite || `${cfg.main_site}/about#discord`;
+
+// Free-mode landing: the feed itself, no plans, no sign-up.
+export function freeLanding(cfg, posts = [], flash = "", flashKind = "") {
+  const age = (iso) => {
+    const m = Math.round((Date.now() - Date.parse(iso)) / 60000);
+    if (!(m >= 0)) return "";
+    return m < 60 ? `${m}m ago` : m < 1440 ? `${Math.round(m / 60)}h ago` : `${Math.round(m / 1440)}d ago`;
+  };
+  const items = posts.map((p) => {
+    const src = /^https?:\/\//i.test(p.source_url || "") ? p.source_url : "";
+    const text = String(p.text || "").replace(/\s*https:\/\/cti\.securitycyber\.uk\/?\s*$/, "");
+    return `<div class=card><div class=muted style="font:500 12px var(--mono)">score ${esc(p.score)} · ${esc(age(p.posted_at))}</div>
+<h3 style="margin-top:6px">${esc(p.title)}</h3><p class=muted>${esc(text)}</p>
+${src ? `<a href="${esc(src)}" target="_blank" rel="noopener noreferrer" style="font:500 13px var(--mono)">primary source →</a>` : ""}</div>`;
+  }).join("\n");
+  const body = `<section class=hero><div class=eyebrow>Cyber threat intelligence · free</div>
+<h1>The feed is free. No sign-up, no paywall.</h1>
+<p class=lede>Scored, source-linked alerts with a defensive takeaway on each — open to everyone. Read the full feed on securitycyber.uk, and talk it through in the Discord.</p>
+<p style="margin-top:18px;display:flex;gap:10px;flex-wrap:wrap">
+<a class=btn href="${esc(cfg.main_site)}/cti">Read the full feed</a>
+<a class="btn ghost" href="${esc(discordUrl(cfg))}">Join the Discord</a></p></section>
+<h2>Latest alerts</h2>
+${items || `<div class=card><p class=muted>The feed is quiet right now — check <a href="${esc(cfg.main_site)}/cti">securitycyber.uk/cti</a>.</p></div>`}
+<div class="cta-band" style="margin-top:28px"><h2>Talk about it in the Discord</h2>
+<p class=muted>Seen it in your own logs? Got a detection for it? The Discord is open to everyone, and new alerts are posted in its shared alerts channel too.</p>
+<p style="margin-top:14px"><a class=btn href="${esc(discordUrl(cfg))}">Join the Discord</a></p></div>`;
+  return page(cfg, "Free CTI feed", body, flash, flashKind);
+}
 
 export function landing(cfg, flash = "", flashKind = "", buyable = null) {
   const cap = (s) => s[0].toUpperCase() + s.slice(1);

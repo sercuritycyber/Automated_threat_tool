@@ -40,7 +40,9 @@ LOG = STATE / "marketing_posts.jsonl"
 # tag-stuffing and gets down-ranked. Matches prompts/analyst.md.
 HASHTAGS = "#CyberSecurity #ThreatIntel #BlueTeam"
 SITE = "https://securitycyber.uk/cti"
-DISCORD_INVITE = "https://discord.gg/r5ckQe33B"
+# discord.gg/r5ckQe33B had expired by 2026-10-08. This one expires
+# 2026-11-07 — swap in a never-expiring invite; empty = invite posts skip.
+DISCORD_INVITE = "https://discord.gg/BP8Y2m9nH"
 URL_RE = re.compile(r"https?://\S+")
 # Local windows where a UK working audience is actually on the feed. A promo
 # post at 21:00 spends a slot for almost no reach.
@@ -84,27 +86,27 @@ def intel_lure(limit: int = 3) -> tuple[str, str] | None:
              for a in top]
     rest = len(alerts) - len(top)
     return (
-        "What went out to subscribers today, top three by impact:\n\n"
+        "What went into the free CTI feed today, top three by impact:\n\n"
         + "\n".join(lines)
         + f"\n\nPlus {rest} more, each with the affected versions, how to check "
           "whether you are exposed, and the one action to take.\n\n"
           # Bare domain, no scheme: LinkedIn does not auto-link it, so the post
           # keeps its reach and the reader still has a route (our token cannot
           # post the first comment - it 403s).
-          "Seven days free, no card: cti.securitycyber.uk",
-        f"Start the free trial: {SITE}",
+          "Free, no sign-up: cti.securitycyber.uk",
+        f"Read the free feed: {SITE}",
     )
 
 
 _INVITE_TEXTS = [
-    "We run a live channel where the CTI team and other defenders talk "
+    "I run a live channel where defenders talk "
     "through what's actually being exploited today — same feed, more "
     "back-and-forth on what's worth acting on. Open to anyone:\n\n"
     f"{DISCORD_INVITE}",
 
-    "A look behind the daily posts: our Discord carries early flags on "
-    "what's heading for the paid brief, plus the reasoning behind why "
-    "something scores the way it does. Come see it:\n\n"
+    "A look behind the daily posts: the Discord carries every alert as it "
+    "lands, plus the reasoning behind why something scores the way it "
+    "does. Come see it:\n\n"
     f"{DISCORD_INVITE}",
 
     "CVSS isn't the whole story on most of what we post — the Discord is "
@@ -222,7 +224,7 @@ def main() -> int:
             if idx < 0:
                 print("[marketing] content bank is empty", file=sys.stderr)
                 return 1
-            comment = f"Start the free trial: {bank.get('url', SITE)}"
+            comment = f"Read the free feed: {bank.get('url', SITE)}"
         rot = _load(ROT, {})      # pick_post may have rewritten it; keep `used`
         rot["since_lure"] = since_lure
     rot["since_invite"] = since_invite
