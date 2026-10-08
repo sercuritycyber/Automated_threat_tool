@@ -25,6 +25,9 @@ have, driven by a systemd timer — with a local web control panel on top.
         mode=review → holds every draft in state/pending.json for you to approve
 ```
 
+> **Build your own:** step-by-step setup, from clone to scheduled runs, is in
+> [`docs/SETUP.md`](docs/SETUP.md).
+
 ## The web control panel
 
 ```

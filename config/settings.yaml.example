@@ -27,8 +27,8 @@ analyst:
   - {name: openai, base_url: https://api.openai.com/v1, key_env: OPENAI_API_KEY, model: ""}
   - {name: mistral, base_url: https://api.mistral.ai/v1, key_env: MISTRAL_API_KEY, model: ""}
 publish:
-  mode: live
-  dry_run: false
+  mode: review     # 'review' holds every post for approval; anything else posts automatically
+  dry_run: true     # nothing is published until you set this to false
   max_post_chars: 2900
   linkedin_api_version: "202509"   # LinkedIn rotates these ~monthly; publisher auto-bumps on HTTP 426
   visibility: PUBLIC
