@@ -241,6 +241,23 @@ async function route(request, env, ctx, url, path, cfg) {
     });
   }
 
+  // Free mode only: the full alert stream, mirroring the Discord alerts
+  // channel (same score bar). Off in paid mode — it carries the write-ups.
+  if (path === "/api/alerts" && m === "GET" && cfg.free_mode) {
+    const limit = Math.min(Number(url.searchParams.get("limit")) || 50, 100);
+    const bar = Number(cfg.discord_channel_min_score ?? 50);
+    const rows = await db.listAlertFeed(D, limit, bar);
+    const alerts = rows.map((r) => {
+      let cves = []; try { cves = JSON.parse(r.cve_ids || "[]"); } catch { /* */ }
+      return { title: r.title, url: r.url, source: r.source, score: r.score, cve_ids: cves,
+        action: r.action || "", category: r.category || "", text: r.text || "", seen_at: r.seen_at };
+    });
+    return json({ alerts, min_score: bar }, 200, {
+      "Access-Control-Allow-Origin": "https://securitycyber.uk",
+      "Cache-Control": "public, max-age=120",
+    });
+  }
+
   // ---- owner admin API ----
   if (path.startsWith("/admin/")) return adminApi(request, env, cfg, url, path);
 
