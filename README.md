@@ -6,9 +6,12 @@ security feeds, cross-references the CISA KEV catalog, uses **Claude Code**
 telling defenders about, then drafts and publishes them to your channels —
 **LinkedIn, Mastodon, Bluesky, X, or email**, any combination.
 
+## Pipeline Architecture
+
 ```mermaid
 flowchart LR
     subgraph IN["1 · Ingest"]
+        direction TB
         F["Security feeds<br/>config/feeds.yaml"] --> I["bin/ingest.py<br/>dedupe · cluster · pre-score"]
         K["CISA KEV catalog"] --> I
     end
