@@ -312,6 +312,7 @@ side-of-desk role, or a home lab.</p>
 <span>SOC &amp; detection focus</span>
 <span>Threat-informed, hands-on</span>
 <span>UK-based · UK data protection</span>
+<span>Anthropic CVP verified (Defense Access)</span>
 </div>
 </div>
 
