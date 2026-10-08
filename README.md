@@ -6,12 +6,48 @@ security feeds, cross-references the CISA KEV catalog, uses **Claude Code**
 telling defenders about, then drafts and publishes them to your channels —
 **LinkedIn, Mastodon, Bluesky, X, or email**, any combination.
 
+```mermaid
+flowchart LR
+    subgraph IN["1 · Ingest"]
+        F["Security feeds<br/>config/feeds.yaml"] --> I["bin/ingest.py<br/>dedupe · cluster · pre-score"]
+        K["CISA KEV catalog"] --> I
+    end
+    I --> C[("state/candidates.json")]
+
+    subgraph AN["2 · Analyst"]
+        C --> A["AI analyst<br/>verifies every claim against the source<br/>scores impact 0-100"]
+        A -. "engine down" .-> B["fallback chain<br/>Claude → Codex → Gemini → OpenAI-compatible"]
+        B -. "all down" .-> D["deterministic fallback<br/>alerts only, no public post"]
+    end
+    A --> J[("state/decision.json<br/>posts + alerts")]
+    H["Honeynet bridge<br/>weekly first-party data"] -.-> J
+
+    subgraph GU["3 · Guards"]
+        V["validation · leak guard<br/>grounding · lint"]
+    end
+    J --> V
+
+    subgraph OUT["4 · Out"]
+        V --> W["Cloudflare Worker + D1<br/>cti.securitycyber.uk"]
+        W --> W1["free public feed<br/>/api/alerts · securitycyber.uk/cti"]
+        W --> W2["Discord alerts channel"]
+        V --> P["bin/publish_linkedin.py<br/>dry-run · review queue · daily cap"]
+        P --> S["LinkedIn · Mastodon · Bluesky · X · email"]
+    end
+
+    UI["Web control panel :8799<br/>review · compose · settings · logs"] -.-> J
+    UI -.-> P
+```
+
+Runs unattended on a systemd timer, with a local control panel on top. Full
+build guide: [`docs/SETUP.md`](docs/SETUP.md).
+
 Multi-post: a quiet day is one post or none; a Patch-Tuesday meltdown goes out in
 full — stories scoring ≥ 90 ignore the daily cap. Or write your own on the
 **Compose** page and send it anywhere.
 
-No Hermes. No OpenAI/Anthropic API billing. Just the `claude` CLI you already
-have, driven by a systemd timer — with a local web control panel on top.
+No separate LLM API billing needed: the default engine is the `claude` CLI you
+already have, driven by a systemd timer, with a local web control panel on top.
 
 ```
  systemd timer ──▶ bin/run.sh                          web/app.py  ──▶  http://127.0.0.1:8799
