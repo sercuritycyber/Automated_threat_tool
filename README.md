@@ -25,6 +25,9 @@ have, driven by a systemd timer — with a local web control panel on top.
         mode=review → holds every draft in state/pending.json for you to approve
 ```
 
+> **Build your own:** step-by-step setup, from clone to scheduled runs, is in
+> [`docs/SETUP.md`](docs/SETUP.md).
+
 ## The web control panel
 
 ```
@@ -129,12 +132,13 @@ Everything below is in the panel (Settings / Feeds), or edit the files directly:
 | change the voice / scoring rubric | — | `prompts/analyst.md` |
 | get pinged on failures | Settings → Notifications | `config/settings.yaml` → `notify.ntfy_url` |
 
-## Paid alert service (optional)
+## Alert service (`worker/`)
 
-The same `posts[]` the analyst produces can be sold as a subscription — a
-separate, UK-compliant service. **Production runs as a Cloudflare Worker**
-(`worker/`, route `cti.securitycyber.uk`), deployed the same way
-securitycyber.uk is: push to GitHub → Cloudflare builds.
+The same `posts[]` the analyst produces feed a public alert service. **It runs
+as a Cloudflare Worker** (`worker/`, route `cti.securitycyber.uk`), deployed by
+hand with `cd worker && npx wrangler deploy`. With `CONFIG.free_mode` on (the
+live setting) the feed is free and open, with no sign-up; the subscription and
+Stripe code is kept for anyone who wants to run a paid version.
 
 ```
 worker/  (Cloudflare Worker + D1 + Resend + Stripe)     owner console (web/app.py)
@@ -227,11 +231,10 @@ state/                   candidates.json, decision.json, pending.json, history.j
 drafts/                  every generated post, kept for review
 ```
 
-## Where "Hermes" lives (for reference)
+## Licence
 
-Hermes wasn't on this machine. It's in **Turso**, org `hermess`, group `default`,
-region `aws-eu-west-1` — databases `hermes`, `hemress-brain`, `hermessecuritycyber`.
-No social-media API keys were found anywhere on the laptop (checked the CF Workers,
-n8n, and the old GODSEYE notes). If the LinkedIn credentials are in one of those
-Turso DBs, pull them and paste them into the panel's **Secrets** page. The Turso
-group admin token is on `godseye-vm:~/godseye/claude_token_turso`.
+Copyright © 2026 Charlie Collins. Dual-licensed: free under the
+[GNU AGPL-3.0](LICENSE), or under a commercial licence from the author for
+closed-source or commercial use without the AGPL obligations. Details in
+[`LICENSING.md`](LICENSING.md); contact charlie@securitycyber.uk.
+Contributions are accepted under the agreement in [`CONTRIBUTING.md`](CONTRIBUTING.md).
