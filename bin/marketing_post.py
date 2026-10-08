@@ -40,9 +40,9 @@ LOG = STATE / "marketing_posts.jsonl"
 # tag-stuffing and gets down-ranked. Matches prompts/analyst.md.
 HASHTAGS = "#CyberSecurity #ThreatIntel #BlueTeam"
 SITE = "https://securitycyber.uk/cti"
-# The old invite (discord.gg/r5ckQe33B) had expired by 2026-10-08. Paste a
-# permanent (never-expiring) invite here; empty = invite posts are skipped.
-DISCORD_INVITE = ""
+# discord.gg/r5ckQe33B had expired by 2026-10-08. This one expires
+# 2026-11-07 — swap in a never-expiring invite; empty = invite posts skip.
+DISCORD_INVITE = "https://discord.gg/BP8Y2m9nH"
 URL_RE = re.compile(r"https?://\S+")
 # Local windows where a UK working audience is actually on the feed. A promo
 # post at 21:00 spends a slot for almost no reach.
