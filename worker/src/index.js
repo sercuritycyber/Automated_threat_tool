@@ -204,6 +204,10 @@ async function route(request, env, ctx, url, path, cfg) {
     }));
 
   // ---- webhooks ----
+  // Free mode: Stripe is decommissioned (and its old signing secret leaked into
+  // public git history), so the endpoint is gone. Answer quietly: verifying and
+  // emailing the owner on every POST would let anyone flood the owner's inbox.
+  if (path === "/webhooks/stripe" && cfg.free_mode) return json({ error: "gone" }, 410);
   if (path === "/webhooks/stripe" && m === "POST") return stripeWebhook(request, env, cfg);
   if (path === "/webhooks/telegram" && m === "POST") return telegramWebhook(request, env, cfg);
 
