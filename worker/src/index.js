@@ -7,7 +7,7 @@ import * as discord from "./discord.js";
 import { alertEmailHtml } from "./emailtpl.js";
 import { send, verifyTarget, channelAvailability } from "./channels.js";
 import { sign, verify, newId, BadToken, timingSafeEqual } from "./tokens.js";
-import { page, landing, subscribeForm, managePage, simple, briefPage, paidPage, feedXml, LOGO_SVG, chanLabel } from "./pages.js";
+import { page, landing, subscribeForm, managePage, simple, briefPage, paidPage, feedXml, LOGO_SVG, chanLabel, freeLanding } from "./pages.js";
 import { legalHtml } from "./legal.js";
 import { html, text, json, redirect, q, esc, clientIp, rateLimit, nowIso } from "./util.js";
 
@@ -123,6 +123,17 @@ async function route(request, env, ctx, url, path, cfg) {
   if (!cfg_enabled(env) && !path.startsWith("/webhooks") && !path.startsWith("/internal") && !path.startsWith("/admin")) {
     return html(page(cfg, "Not open yet",
       "<h1>Not open yet</h1><p class=lede>The SecurityCyber CTI alert service isn't taking subscribers right now.</p>"));
+  }
+
+  // ---- free mode: the feed is open, nothing to buy or sign up for ----
+  if (cfg.free_mode) {
+    if (path === "/" && m === "GET") {
+      let posts = [];
+      try { posts = await db.listPublicFeed(D, 15); } catch (e) { console.error("free landing feed", e); }
+      return html(freeLanding(cfg, posts, url.searchParams.get("m") || "", url.searchParams.get("k") || ""));
+    }
+    if (["/subscribe", "/account", "/welcome", "/brief", "/brief/buy", "/brief/thanks"].includes(path))
+      return redirect("/?m=" + q("The CTI feed is free now — no sign-up or payment needed."));
   }
 
   // ---- landing ----

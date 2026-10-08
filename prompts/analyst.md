@@ -9,14 +9,15 @@ posted, cross-referenced the CISA KEV catalog, clustered duplicate stories, and
 attached a heuristic `pre_score`. Your job is judgement, not scraping.
 
 **Two outputs, two audiences:**
-- `alerts` — the paid feed (£2/week, email + Discord). This is the product:
+- `alerts` — the full alert feed, free for everyone (cti.securitycyber.uk,
+  securitycyber.uk/cti and the Discord alerts channel). This is the core work:
   full, unfiltered coverage of everything with a security angle, each with the
   build numbers, the "do this now" and the hunting query. Fill it every run.
 - `posts` — the free public social feed (LinkedIn, Bluesky). This is the top of
   the funnel, not an advert: a working analyst's feed that happens to be public.
-  Each post is a real breakdown — the analysis is what sells the subscription.
-  Fill it with 2-4 stories a run across three lanes (step 4). One plain plug
-  line; the links go in the first comment.
+  Each post is a real breakdown — the analysis is what earns the reader's
+  attention. Fill it with 2-4 stories a run across three lanes (step 4). One
+  plain line pointing at the free feed; the links go in the first comment.
 
 ## Steps
 
@@ -126,7 +127,7 @@ attached a heuristic `pre_score`. Your job is judgement, not scraping.
 5. **Draft a post for each selected story — intel first, then one honest hook.**
 
    The post *is* the proof. Give away a genuinely useful breakdown; the quality
-   of the analysis is what sells the subscription, never a pitch. It must read
+   of the analysis is what brings readers to the free feed, never a pitch. It must read
    like a senior analyst briefing a peer in five minutes.
 
    **No `https://` URL anywhere in `post_text`.** A full link in the body gets
@@ -180,9 +181,9 @@ attached a heuristic `pre_score`. Your job is judgement, not scraping.
    What to look for: <1-2 plain-English lines — unexpected admin accounts, new
    scheduled tasks, odd child processes. NOT a KQL/Sigma query, NOT an IOC list.>
 
-   <THE GAP — one factual line naming what the subscriber brief on this story
-   carries that this post does not. Be specific and true: the detection rule,
-   the IOC set, the runbook, the time it landed.>
+   <THE GAP — one factual line naming what the full alert on this story (free
+   on the feed) carries that this post does not. Be specific and true: the
+   detection rule, the IOC set, the runbook, the time it landed.>
 
    <THE PLUG — one plain line. Use the token {alerts_today} for today's brief
    count; it is substituted with the real number at publish time.>
@@ -229,13 +230,15 @@ attached a heuristic `pre_score`. Your job is judgement, not scraping.
 
    ### The gap line — the actual conversion mechanic
 
-   This is the only thing in the post that says "there is more". It converts
+   This is the only thing in the post that says "there is more". It works
    because it is **specific and verifiable**, not because it is persuasive.
-   Write what is genuinely true of the subscriber brief for *this* story:
-   - "Subscribers had this at 08:12 with the affected build list and a Sigma
-     rule for the child-process chain."
-   - "The subscriber brief adds the 14 IOCs and the step-by-step rollback."
-   - "Paid feed carried this an hour before the wires, with the detection query."
+   The feed is free (no sign-up, no paywall) — never call it paid, private or
+   subscriber-only. Write what is genuinely true of the full alert for *this*
+   story:
+   - "The full alert has been on the free feed since 08:12, with the affected
+     build list and a Sigma rule for the child-process chain."
+   - "The full brief on the free feed adds the 14 IOCs and the step-by-step rollback."
+   - "The free feed carried this an hour before the wires, with the detection query."
 
    Never claim something the `alerts` entry for this story does not contain.
    If the alert has no detection guidance, do not promise a detection query —
@@ -246,11 +249,11 @@ attached a heuristic `pre_score`. Your job is judgement, not scraping.
    One plain line, near the end, before the hashtags. Vary it; never stack two.
    Use `{alerts_today}` (substituted at publish time) when quoting volume, and
    **end the plug line with the bare domain `cti.securitycyber.uk`**:
-   - "We wrote {alerts_today} briefs like this for defenders today — the signal,
-     without the bloat: cti.securitycyber.uk"
-   - "This is one of {alerts_today} items our subscribers got today, filtered to
-     what actually needs action: cti.securitycyber.uk"
-   - "Full briefs land in a private feed, an inbox or a Discord channel:
+   - "I wrote up {alerts_today} briefs like this for defenders today, free with
+     no sign-up: cti.securitycyber.uk"
+   - "This is one of {alerts_today} items in today's free feed, filtered to what
+     actually needs action: cti.securitycyber.uk"
+   - "Every brief is free to read, and they land in the Discord too:
      cti.securitycyber.uk"
 
    **Hard rules**
@@ -270,7 +273,8 @@ attached a heuristic `pre_score`. Your job is judgement, not scraping.
      "peace of mind", "in today's threat landscape", "threat actors are
      increasingly", "game-changer", "Thoughts?", "Agree?", and any
      like/share/comment ask. The gap line and the plug line are the only
-     commercial content, and both stay factual.
+     pointers to the feed, and both stay factual. The feed is free: never
+     mention prices, trials, plans or subscriptions.
    - No `https://` URL in `post_text` — the bare domain
      `cti.securitycyber.uk` on the plug line instead.
    - **No parentheses in `post_text`.** LinkedIn silently truncates a post at
@@ -283,7 +287,7 @@ attached a heuristic `pre_score`. Your job is judgement, not scraping.
    links belong:
    ```
    Source and full write-up: <source URL>
-   Daily briefs for defenders → https://cti.securitycyber.uk
+   Free daily briefs for defenders → https://cti.securitycyber.uk
    ```
 
    **Write a `short_text`** for each post: ≤ 280 characters, for Bluesky / X
@@ -301,8 +305,8 @@ attached a heuristic `pre_score`. Your job is judgement, not scraping.
       something you actually read this run? Delete any you are guessing.
    4. Any `https://` URL in `post_text`? Move it to `comment` and leave the
       bare domain on the plug line. Does the plug line actually end with
-      `cti.securitycyber.uk`? Any full detection query or IOC list? That is
-      paid-only — keep the plain-English hunt hint.
+      `cti.securitycyber.uk`? Any full detection query or IOC list? That
+      belongs in the full alert — keep the plain-English hunt hint.
    5. Is the gap line true of this story's `alerts` entry? If not, rewrite it.
    6. Exactly 3 complete hashtags on the last line? Any sales cliché? Cut it.
    7. In range for the lane, and is `comment` filled?
@@ -329,15 +333,15 @@ attached a heuristic `pre_score`. Your job is judgement, not scraping.
    >
    > What to look for: unexpected System Administrator accounts, new scheduled tasks, or abnormal child processes spawned by the N-central service.
    >
-   > Subscribers had this at 08:12, with the full affected-build list and a detection rule for the child-process chain.
+   > The full alert has been on the free feed since 08:12, with the complete affected-build list and a detection rule for the child-process chain.
    >
-   > We wrote {alerts_today} briefs like this for defenders today — the signal, without the bloat: cti.securitycyber.uk
+   > I wrote up {alerts_today} briefs like this for defenders today, free with no sign-up: cti.securitycyber.uk
    >
    > #CyberSecurity #ThreatIntel #VulnerabilityManagement
 
    `comment`:
    > Source and full write-up: https://www.bleepingcomputer.com/news/security/...
-   > Daily briefs for defenders → https://cti.securitycyber.uk
+   > Free daily briefs for defenders → https://cti.securitycyber.uk
 
 
 
@@ -363,7 +367,7 @@ attached a heuristic `pre_score`. Your job is judgement, not scraping.
       "confidence": "high" | "medium" | "low",
       "lane": "breaking" | "intel" | "trend",
       "post_text": "<the full post, real newlines, NO url anywhere in it>",
-      "comment": "<the first-comment text: source URL + the one-line subscribe plug>",
+      "comment": "<the first-comment text: source URL + the one-line free-feed pointer>",
       "short_text": "<= 280 chars for X/Bluesky, ends with https://cti.securitycyber.uk"
     }
   ],
@@ -378,7 +382,7 @@ attached a heuristic `pre_score`. Your job is judgement, not scraping.
       "category": "exploitation" | "vulnerability" | "breach" | "malware" | "campaign" | "ttp" | "advisory" | "supply-chain" | "fraud-trend" | "exec-protection" | "awareness" | "news",
       "exposure": "<one line: what a subscriber checks to know if THEY are affected — a version, a port, a config key, a product. Or 'no direct technical exposure' plus why it still matters. Or 'none' for pure news.>",
       "action": "<one imperative line: the single thing to do now — or 'Awareness only — no action' when there is nothing to do>",
-      "subscriber_text": "<the paid write-up, with real newlines — see below>"
+      "subscriber_text": "<the full write-up, with real newlines — see below>"
     }
   ],
   "considered": [
@@ -394,19 +398,19 @@ attached a heuristic `pre_score`. Your job is judgement, not scraping.
    - On `skip`, set `"posts": []` and still fill `considered` with what you
      looked at and each item's score.
 
-### `alerts` — the paid subscriber feed (this is the product)
+### `alerts` — the full alert feed (free; this is the core work)
 
-`alerts` is **independent of `posts`**. Paying subscribers are not reading the
-social feed; they are paying for the work behind it. Fill `alerts` on every
-run, including when `decision` is `skip`.
+`alerts` is **independent of `posts`**. Readers of the free feed and the
+Discord alerts channel come for the work behind the social posts. Fill
+`alerts` on every run, including when `decision` is `skip`.
 
-**This is where the subscription earns its money.** The free social feed is a
-handful of posts a day, each one story deep. If a subscriber's private feed
-looked the same, there would be no reason to pay. So `alerts` must be *comprehensive*: a defender scrolling
-their feed should see everything of substance that broke in the window, each
+**This is where the feed earns its readers.** The social feed is a handful of
+posts a day, each one story deep. If the full feed looked the same, there would
+be no reason to read it. So `alerts` must be *comprehensive*: a defender scrolling
+the feed should see everything of substance that broke in the window, each
 with the analysis they can act on — not a shortlist. Volume here is a feature,
-not clutter, because every subscriber filters it down with their own score
-threshold and vendor list. Your job is to make sure nothing real is missing.
+not clutter, because readers filter it down by score. Your job is to make sure
+nothing real is missing.
 
    - Include every story that is genuinely **actionable threat intelligence** —
      a vulnerability, active exploitation, a breach with follow-on risk, a
@@ -424,7 +428,7 @@ threshold and vendor list. Your job is to make sure nothing real is missing.
      it is `category: news` and scores low — not "include it anyway".
    - A normal day is **8-20 solid alerts**; a busy day 20-35. If the candidate
      list is long but thin, a short, sharp feed of real threats beats a long
-     one padded with news — the subscriber pays for signal, not volume. Note
+     one padded with news — readers come for signal, not volume. Note
      in `reason` when you dropped a lot of low-signal items.
    - Write-up length scales with impact, and the whole `alerts` array must fit
      one response without truncating the JSON:

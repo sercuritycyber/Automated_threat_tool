@@ -140,8 +140,8 @@ def build(r: dict, cfg: dict) -> tuple[dict, dict]:
               "• Take Telnet off the internet, and put SSH and RDP behind a VPN or an allow-list.",
               "• Alert on one IP failing logons across many usernames. That is a spray, not a user.",
               "",
-              "Subscribers get the full weekly honeynet brief, with payload hosts, IOCs and the "
-              "credentials that worked. It's included in every plan. cti.securitycyber.uk",
+              "First-party data from my own sensors. More free threat intel, no sign-up: "
+              "cti.securitycyber.uk",
               "",
               "#CyberSecurity #ThreatIntel #Honeypot"]
     post_text = "\n".join(lines)
@@ -154,7 +154,7 @@ def build(r: dict, cfg: dict) -> tuple[dict, dict]:
         "title": title, "url": "", "source": SOURCE, "lane": "trend",
         "score": int(cfg["score"]), "confidence": "high", "cve_ids": [],
         "post_text": post_text, "short_text": short,
-        "comment": "Weekly honeynet intel from our own sensors, included in every subscription: "
+        "comment": "Weekly honeynet intel from my own sensors, free: "
                    "https://cti.securitycyber.uk",
     }
 

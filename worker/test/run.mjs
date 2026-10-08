@@ -3,7 +3,7 @@
 import { sign, verify, newId, BadToken, timingSafeEqual } from "../src/tokens.js";
 import { config, priceToTier, priceId, monthlyPence, problems, paymentLink } from "../src/config.js";
 import { verifyTarget, teaser, channelAvailability } from "../src/channels.js";
-import { landing, subscribeForm, feedXml } from "../src/pages.js";
+import { landing, subscribeForm, feedXml, freeLanding, page, discordUrl } from "../src/pages.js";
 import { alertEmailHtml, alertEmailText } from "../src/emailtpl.js";
 import { discordConfigured } from "../src/discord.js";
 import * as billing from "../src/billing.js";
@@ -259,6 +259,23 @@ ok("one-off checkout: mode=payment + line_items", briefEnc.includes("mode=paymen
   && briefEnc.includes("line_items%5B0%5D%5Bprice%5D=price_123")
   && briefEnc.includes("line_items%5B0%5D%5Bquantity%5D=1")
   && briefEnc.includes("metadata%5Bitem%5D=brief"));
+
+
+// ---- free mode ----
+const fc = config({ ...cenv, CONFIG: JSON.stringify({ free_mode: true }), MAIN_SITE: "https://securitycyber.uk" });
+ok("free_mode defaults off", config(cenv).free_mode === false && fc.free_mode === true);
+ok("discord falls back to the main site", discordUrl(fc) === "https://securitycyber.uk/about#discord");
+ok("discord uses the invite when set", discordUrl(config({ ...cenv, DISCORD_INVITE: " https://discord.gg/abc " })) === "https://discord.gg/abc");
+const fl = freeLanding(fc, [{ title: "<b>x</b> hijack", text: "Patch it. https://cti.securitycyber.uk", source_url: "javascript:alert(1)", score: 60, posted_at: new Date().toISOString() },
+  { title: "ok", text: "t", source_url: "https://example.com/a", score: 75, posted_at: new Date().toISOString() }]);
+ok("free landing: no prices, no subscribe/checkout", !/£|href="\/subscribe|buy\.stripe|Start the trial/.test(fl));
+ok("free landing: points at the site + Discord", fl.includes('href="https://securitycyber.uk/cti"') && fl.includes("Join the Discord"));
+ok("free landing: escapes titles, drops non-http sources", fl.includes("&lt;b&gt;x&lt;/b&gt;") && !fl.includes("javascript:") && fl.includes("https://example.com/a"));
+ok("free landing: strips the trailing self-link", !fl.includes("Patch it. https://cti.securitycyber.uk"));
+ok("free landing: empty feed still renders", freeLanding(fc, []).includes("quiet right now"));
+const fp = page(fc, "t", "");
+ok("free-mode nav drops Services/Contact", !fp.includes("/services") && !fp.includes("/contact\"") && fp.includes(">Free CTI<"));
+ok("paid-mode nav unchanged", page(c, "t", "").includes("/services"));
 
 // ---- markdown / legal ----
 ok("mdToHtml headings+links", mdToHtml("# Hi\n[x](https://y.z)").includes("<h1>Hi</h1>") && mdToHtml("[x](https://y.z)").includes('href="https://y.z"'));
