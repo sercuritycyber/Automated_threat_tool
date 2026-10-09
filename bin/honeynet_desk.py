@@ -27,6 +27,7 @@ ROLE_TEXT = {"loader": "installed a payload", "shell-access": "got a shell, ran 
 _CACHE: dict[str, tuple[float, dict]] = {}
 
 TABS = [("/honeynet", "Overview"), ("/honeynet/campaigns", "Campaigns"), ("/honeynet/iocs", "IOC feed"),
+        ("/honeynet/store", "IOC store"),
         ("/honeynet/credentials", "Credentials"), ("/honeynet/windows", "Windows"),
         ("/honeynet/report", "Report & draft")]
 
@@ -281,6 +282,53 @@ def render_iocs(role: str = "") -> str:
                     f'<td class=num>{x["bots"]}</td><td>{e(", ".join(x["families"]) or "—")}</td></tr>'
                     for x in infra) + '</table></div>')
     return "".join(body)
+
+
+def render_ioc_store(q: str = "") -> str:
+    """Central IOC store (Sentinel TI + alerts + honeypot downloads) in iocs.db."""
+    import sqlite3
+    db = Path.home() / "honeyintel" / "supplementary-iocs" / "iocs.db"
+    head = tabs("/honeynet/store")
+    if not db.exists():
+        return head + ('<div class=card>IOC store not built yet — run the '
+                       '<span class=mono>cti-iocpull</span> timer or the pull scripts in '
+                       '<span class=mono>~/honeyintel/supplementary-iocs/</span>.</div>')
+    c = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    try:
+        total = c.execute("SELECT COUNT(*) FROM iocs").fetchone()[0]
+        by = c.execute("SELECT source,type,COUNT(*) n FROM iocs GROUP BY source,type "
+                       "ORDER BY source, n DESC").fetchall()
+        bytype = c.execute("SELECT type,COUNT(*) n FROM iocs GROUP BY type ORDER BY n DESC").fetchall()
+        hits = []
+        if q:
+            hits = c.execute(
+                "SELECT indicator,type,source,threat_type,last_seen FROM iocs "
+                "WHERE indicator LIKE ? ORDER BY last_seen DESC LIMIT 300", (f"%{q}%",)).fetchall()
+    finally:
+        c.close()
+    tiles = "".join(f'<div class=stat><div class=n>{n:,}</div><div class=l>{e(t)}</div></div>'
+                    for t, n in bytype)
+    srcrows = "".join(f'<tr><td>{e(s)}</td><td>{e(t)}</td><td class=num>{n:,}</td></tr>' for s, t, n in by)
+    search = (f'<form method=get action="/honeynet/store" class=row style="margin:10px 0 14px">'
+              f'<input type=text name=q value="{e(q)}" placeholder="search an IOC — ip, hash, domain, url">'
+              f'<button class="btn sm" type=submit>Search</button></form>')
+    results = ""
+    if q:
+        rows = "".join(
+            f'<tr><td class=mono>{e(defang(ind))}</td><td>{e(ty)}</td><td>{e(src)}</td>'
+            f'<td>{e(tt or "—")}</td><td class=dim>{e((ls or "")[:10])}</td></tr>'
+            for ind, ty, src, tt, ls in hits)
+        results = ('<div class=card><h3>Matches</h3><table><tr><th>Indicator</th><th>Type</th>'
+                   '<th>Source</th><th>Threat</th><th>Last seen</th></tr>' + rows
+                   + f'</table><p class=dim>{len(hits)} shown (max 300).</p></div>')
+    return (head
+            + f'<div class=card><b>{total:,}</b> IOCs — Sentinel TI + alerts + honeypot downloads. '
+              'Blocklists exported to <span class=mono>~/honeyintel/supplementary-iocs/blocklist/</span>. '
+              'Addresses defanged.</div>'
+            + f'<div class=grid style="margin-bottom:14px">{tiles}</div>'
+            + search + results
+            + f'<div class=card><h3>By source</h3><table><tr><th>Source</th><th>Type</th>'
+              f'<th class=num>Count</th></tr>{srcrows}</table></div>')
 
 
 def render_credentials() -> str:
