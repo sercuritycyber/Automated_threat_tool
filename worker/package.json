@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "description": "SecurityCyber CTI Alerts — public subscription service (Cloudflare Worker)",
-  "license": "AGPL-3.0-only",
+  "license": "PolyForm-Noncommercial-1.0.0",
   "scripts": {
     "dev": "wrangler dev --local --persist-to .wrangler/state",
     "db:local": "wrangler d1 execute cti-subs --local --file schema.sql",

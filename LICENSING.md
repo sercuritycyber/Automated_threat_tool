@@ -2,20 +2,22 @@
 
 Copyright © 2026 Charlie Collins. All rights reserved except as granted below.
 
-This project is **dual-licensed**. You may use it under either:
+## Free for noncommercial use
 
-## 1. GNU Affero General Public License v3.0 (free)
+This project is licensed under the **PolyForm Noncommercial License 1.0.0**
+(full text in [`LICENSE`](LICENSE)). You may use, study, modify and share it for
+**any noncommercial purpose** — personal projects, learning, research,
+experimentation, hobby and amateur use, and by noncommercial organisations such
+as charities, educational institutions and public bodies.
 
-The full text is in [`LICENSE`](LICENSE). In short: you may use, study, modify
-and share the code for free. If you distribute it, **or run a modified version
-as a network service**, you must make your complete source code available under
-the AGPL-3.0 as well, keep this copyright notice, and credit the original.
+**Commercial and business use is not granted** under this licence.
 
-## 2. Commercial licence (from the author)
+## Commercial / business use (by arrangement)
 
-If you want to use this project, or parts of it, in a closed-source product or
-service, or otherwise without the AGPL-3.0 obligations, you need a commercial
-licence from the author. Terms are agreed case by case.
+If you want to use this project, or any part of it, for a commercial or business
+purpose — in a product or service, inside a company, or otherwise for commercial
+advantage — you need a separate commercial licence from the author. Terms are
+agreed case by case.
 
 Contact: **Charlie Collins — charlie@securitycyber.uk**
 
@@ -27,8 +29,3 @@ dependencies keep their own licences.
 
 The names "SecurityCyber" and the SecurityCyber logo are not licensed for reuse
 under either option.
-
-## Contributing
-
-To keep option 2 possible, contributions are accepted only under the
-contributor agreement in [`CONTRIBUTING.md`](CONTRIBUTING.md).

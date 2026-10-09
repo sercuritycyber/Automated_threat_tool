@@ -272,8 +272,9 @@ drafts/                  every generated post, kept for review
 
 ## Licence
 
-Copyright © 2026 Charlie Collins. Dual-licensed: free under the
-[GNU AGPL-3.0](LICENSE), or under a commercial licence from the author for
-closed-source or commercial use without the AGPL obligations. Details in
-[`LICENSING.md`](LICENSING.md); contact charlie@securitycyber.uk.
+Copyright © 2026 Charlie Collins. Free for **noncommercial / personal use**
+under the [PolyForm Noncommercial License 1.0.0](LICENSE) — personal projects,
+learning, research and hobby use. **Commercial or business use is not granted**
+and requires a separate licence from the author; details in
+[`LICENSING.md`](LICENSING.md), contact charlie@securitycyber.uk.
 Contributions are accepted under the agreement in [`CONTRIBUTING.md`](CONTRIBUTING.md).
