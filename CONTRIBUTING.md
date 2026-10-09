@@ -4,16 +4,16 @@ Thanks for wanting to help. Issues and pull requests are welcome.
 
 ## Contributor agreement
 
-This project is licensed under the PolyForm Noncommercial License 1.0.0, with a
-separate commercial licence available from the author — see
-[`LICENSING.md`](LICENSING.md). So that both options stay possible, every
+This project is **proprietary** — all rights reserved — see
+[`LICENSING.md`](LICENSING.md). Contributions are accepted only by prior
+arrangement with the author, and so that the project stays cleanly owned, every
 contribution must be made on these terms:
 
 > I confirm that I wrote this contribution, or otherwise have the right to
 > submit it. I keep the copyright in my contribution, and I grant Charlie
 > Collins a perpetual, worldwide, non-exclusive, royalty-free, irrevocable
 > licence to use, modify, sublicense and distribute it under any licence,
-> including the PolyForm Noncommercial License and a commercial licence.
+> including proprietary and commercial licences.
 
 Agree by adding this line to the description of your pull request:
 

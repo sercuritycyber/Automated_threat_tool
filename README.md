@@ -272,9 +272,9 @@ drafts/                  every generated post, kept for review
 
 ## Licence
 
-Copyright © 2026 Charlie Collins. Free for **noncommercial / personal use**
-under the [PolyForm Noncommercial License 1.0.0](LICENSE) — personal projects,
-learning, research and hobby use. **Commercial or business use is not granted**
-and requires a separate licence from the author; details in
-[`LICENSING.md`](LICENSING.md), contact charlie@securitycyber.uk.
+Copyright © 2026 Charlie Collins. **All rights reserved.** This project is
+**proprietary and closed-source** — the source is published for reference only
+and is **not** licensed for use, copying, running or distribution. See
+[`LICENSE`](LICENSE) and [`LICENSING.md`](LICENSING.md). Licensing or acquisition
+by arrangement: charlie@securitycyber.uk.
 Contributions are accepted under the agreement in [`CONTRIBUTING.md`](CONTRIBUTING.md).
