@@ -146,16 +146,30 @@ document.cookie='sc_cookie_ok=1; Path=/; Max-Age=31536000; SameSite=Lax; Secure'
 if(window.gtag)gtag('consent','update',{analytics_storage:'granted'});b.style.display='none';};})();</script>`;
 }
 
-export function page(cfg, title, body, flash = "", flashKind = "", noindex = false) {
+export function page(cfg, title, body, flash = "", flashKind = "", noindex = false, desc = "") {
   const fl = flash ? `<div class="flash ${flashKind}">${esc(flash)}</div>` : "";
   const ico = cfg.ico_reg ? ` · ICO registration ${esc(cfg.ico_reg)}` : "";
   const legal = cfg.company_legal_name || "SecurityCyber";
   const contact = cfg.contact_email || "securitycyber_cti@securitycyber.uk";
   const robots = noindex ? "noindex,nofollow" : "index,follow";
+  const ogTitle = `${title} · SecurityCyber CTI`;
+  const ogDesc = desc || (cfg.free_mode
+    ? "Free, verified threat intelligence for defenders — CVEs and exploitation notes, triaged fast, from Charlie Collins' personal blue-team space."
+    : "Independent UK blue-team security intelligence — verified CVEs, exploitation context and detection guidance for defenders.");
   return `<!doctype html><html lang=en><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1">
 <meta name=robots content="${robots}"><meta name=color-scheme content="dark">
 <title>${esc(title)} · SecurityCyber CTI</title><link rel=icon href="/logo.svg">
+<meta name=description content="${esc(ogDesc)}">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="SecurityCyber CTI">
+<meta property="og:title" content="${esc(ogTitle)}">
+<meta property="og:description" content="${esc(ogDesc)}">
+<meta property="og:image" content="${esc(PROMO_IMG)}">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="${esc(ogTitle)}">
+<meta name="twitter:description" content="${esc(ogDesc)}">
+<meta name="twitter:image" content="${esc(PROMO_IMG)}">
 <style>${CSS}</style>${gaHead(cfg)}</head><body><div class=wrap>
 <nav><a class=brand href="/">${LOGO_SVG}<b>Security<span>Cyber</span></b> <span class=tag style="font:400 12px var(--mono);color:var(--dim)">/ CTI</span></a>
 ${cfg.free_mode ? `<span class=links>
