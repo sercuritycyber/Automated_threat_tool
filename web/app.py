@@ -414,7 +414,9 @@ NAV = [
                  ("/compose", "Compose", "pen"), ("/candidates", "Candidates", "list"),
                  ("/intel", "Intel Desk", "radar"), ("/drafts", "Drafts", "file")]),
     ("Honeynet", [("/honeynet", "Overview", "hive"), ("/honeynet/campaigns", "Campaigns", "target"),
-                  ("/honeynet/iocs", "IOC feed", "shield"), ("/honeynet/credentials", "Credentials", "key"),
+                  ("/honeynet/iocs", "IOC feed", "shield"), ("/honeynet/store", "IOC store", "database"),
+                  ("/honeynet/map", "IOC map", "map"),
+                  ("/honeynet/credentials", "Credentials", "key"),
                   ("/honeynet/windows", "Windows sensors", "terminal"), ("/honeynet/report", "Report & draft", "file")]),
     ("Dark web", [("/darkweb", "Overview", "radar"), ("/darkweb/addresses", "Addresses", "list"),
                   ("/darkweb/sources", "Sources", "rss"), ("/darkweb/log", "Activity", "terminal")]),
@@ -2664,6 +2666,16 @@ def honeynet_campaigns(request: Request):
 @app.get("/honeynet/iocs", response_class=HTMLResponse)
 def honeynet_iocs(request: Request, role: str = ""):
     return page("Honeynet · IOC feed", HN.render_iocs(role), "/honeynet/iocs", flash_from(request))
+
+
+@app.get("/honeynet/store", response_class=HTMLResponse)
+def honeynet_store(request: Request, q: str = ""):
+    return page("Honeynet · IOC store", HN.render_ioc_store(q), "/honeynet/store", flash_from(request))
+
+
+@app.get("/honeynet/map", response_class=HTMLResponse)
+def honeynet_map(request: Request):
+    return page("Honeynet · IOC map", HN.render_ioc_map(), "/honeynet/map", flash_from(request))
 
 
 @app.get("/honeynet/credentials", response_class=HTMLResponse)

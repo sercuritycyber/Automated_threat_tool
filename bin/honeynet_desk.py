@@ -27,6 +27,7 @@ ROLE_TEXT = {"loader": "installed a payload", "shell-access": "got a shell, ran 
 _CACHE: dict[str, tuple[float, dict]] = {}
 
 TABS = [("/honeynet", "Overview"), ("/honeynet/campaigns", "Campaigns"), ("/honeynet/iocs", "IOC feed"),
+        ("/honeynet/store", "IOC store"), ("/honeynet/map", "IOC map"),
         ("/honeynet/credentials", "Credentials"), ("/honeynet/windows", "Windows"),
         ("/honeynet/report", "Report & draft")]
 
@@ -46,7 +47,12 @@ CSS = """<style>
 details.hn{border:1px solid var(--line);border-radius:10px;padding:10px 14px;margin-bottom:10px;background:var(--panel)}
 details.hn summary{cursor:pointer;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
-@media(max-width:640px){.hn-bar{grid-template-columns:104px 1fr 104px;font-size:12px}}
+#hn-map{height:520px;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--panel2)}
+#hn-map .leaflet-popup-content{font-size:12.5px;line-height:1.45}
+.hn-geochips{display:flex;flex-wrap:wrap;gap:8px}
+.hn-geochip{padding:3px 10px;border:1px solid var(--line);border-radius:999px;font-size:12px;color:var(--dim)}
+.hn-geochip b{color:#fff;font-variant-numeric:tabular-nums}
+@media(max-width:640px){.hn-bar{grid-template-columns:104px 1fr 104px;font-size:12px}#hn-map{height:360px}}
 </style>"""
 
 
@@ -279,6 +285,133 @@ def render_iocs(role: str = "") -> str:
                     f'<td class=num>{x["bots"]}</td><td>{e(", ".join(x["families"]) or "—")}</td></tr>'
                     for x in infra) + '</table></div>')
     return "".join(body)
+
+
+def render_ioc_store(q: str = "") -> str:
+    """Central IOC store (Sentinel TI + alerts + honeypot downloads) in iocs.db."""
+    import sqlite3
+    db = Path.home() / "honeyintel" / "supplementary-iocs" / "iocs.db"
+    head = tabs("/honeynet/store")
+    if not db.exists():
+        return head + ('<div class=card>IOC store not built yet — run the '
+                       '<span class=mono>cti-iocpull</span> timer or the pull scripts in '
+                       '<span class=mono>~/honeyintel/supplementary-iocs/</span>.</div>')
+    c = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    try:
+        total = c.execute("SELECT COUNT(*) FROM iocs").fetchone()[0]
+        by = c.execute("SELECT source,type,COUNT(*) n FROM iocs GROUP BY source,type "
+                       "ORDER BY source, n DESC").fetchall()
+        bytype = c.execute("SELECT type,COUNT(*) n FROM iocs GROUP BY type ORDER BY n DESC").fetchall()
+        hits = []
+        if q:
+            hits = c.execute(
+                "SELECT indicator,type,source,threat_type,last_seen FROM iocs "
+                "WHERE indicator LIKE ? ORDER BY last_seen DESC LIMIT 300", (f"%{q}%",)).fetchall()
+    finally:
+        c.close()
+    tiles = "".join(f'<div class=stat><div class=n>{n:,}</div><div class=l>{e(t)}</div></div>'
+                    for t, n in bytype)
+    srcrows = "".join(f'<tr><td>{e(s)}</td><td>{e(t)}</td><td class=num>{n:,}</td></tr>' for s, t, n in by)
+    search = (f'<form method=get action="/honeynet/store" class=row style="margin:10px 0 14px">'
+              f'<input type=text name=q value="{e(q)}" placeholder="search an IOC — ip, hash, domain, url">'
+              f'<button class="btn sm" type=submit>Search</button></form>')
+    results = ""
+    if q:
+        rows = "".join(
+            f'<tr><td class=mono>{e(defang(ind))}</td><td>{e(ty)}</td><td>{e(src)}</td>'
+            f'<td>{e(tt or "—")}</td><td class=dim>{e((ls or "")[:10])}</td></tr>'
+            for ind, ty, src, tt, ls in hits)
+        results = ('<div class=card><h3>Matches</h3><table><tr><th>Indicator</th><th>Type</th>'
+                   '<th>Source</th><th>Threat</th><th>Last seen</th></tr>' + rows
+                   + f'</table><p class=dim>{len(hits)} shown (max 300).</p></div>')
+    return (head
+            + f'<div class=card><b>{total:,}</b> IOCs — Sentinel TI + alerts + honeypot downloads. '
+              'Blocklists exported to <span class=mono>~/honeyintel/supplementary-iocs/blocklist/</span>. '
+              'Addresses defanged.</div>'
+            + f'<div class=grid style="margin-bottom:14px">{tiles}</div>'
+            + search + results
+            + f'<div class=card><h3>By source</h3><table><tr><th>Source</th><th>Type</th>'
+              f'<th class=num>Count</th></tr>{srcrows}</table></div>')
+
+
+def render_ioc_map() -> str:
+    """Geolocated map of IOC source IPs (direct ipv4 + hosts parsed from URLs),
+    read from ioc_geo joined to iocs. Leaflet from CDN; OSM/CARTO dark tiles.
+    Addresses are defanged in popups; no live links."""
+    import re as _re
+    import sqlite3
+    db = Path.home() / "honeyintel" / "supplementary-iocs" / "iocs.db"
+    head = tabs("/honeynet/map")
+    if not db.exists():
+        return head + ('<div class=card>IOC store not built yet — run the '
+                       '<span class=mono>cti-iocpull</span> timer first.</div>')
+    c = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    try:
+        if not c.execute("SELECT name FROM sqlite_master WHERE type='table' "
+                         "AND name='ioc_geo'").fetchone():
+            return head + ('<div class=card>No geolocation yet — run '
+                           '<span class=mono>geo_enrich.py</span> (it is part of the daily '
+                           '<span class=mono>cti-iocpull</span> run).</div>')
+        geo = c.execute("SELECT ip,lat,lon,country,city,org FROM ioc_geo "
+                        "WHERE lat IS NOT NULL AND lon IS NOT NULL").fetchall()
+        refs = c.execute("SELECT indicator,type,source FROM iocs "
+                         "WHERE type IN ('ipv4','url')").fetchall()
+    finally:
+        c.close()
+    # Associate each IOC with the IP it carries (direct, or parsed from a URL).
+    byip: dict[str, list[tuple[str, str]]] = {}
+    for ind, ty, src in refs:
+        ip = ind if ty == "ipv4" else None
+        if ip is None:
+            m = _re.match(r"^(?:[a-z]+://)?(\d{1,3}(?:\.\d{1,3}){3})", ind or "", _re.I)
+            ip = m.group(1) if m else None
+        if ip:
+            byip.setdefault(ip, []).append((ty, src))
+    points, countries = [], {}
+    for ip, lat, lon, country, city, org in geo:
+        recs = byip.get(ip, [])
+        srcs = sorted({s for _, s in recs})
+        if country:
+            countries[country] = countries.get(country, 0) + 1
+        points.append({
+            "lat": lat, "lon": lon, "ip": defang(ip),
+            "loc": ", ".join(x for x in (city, country) if x) or "unknown",
+            "org": org or "", "n": len(recs) or 1, "srcs": ", ".join(srcs) or "—",
+        })
+    if not points:
+        return head + ('<div class=card>No IOC IPs have coordinates yet. The geo step '
+                       'enriches public IPv4 indicators and C2 hosts found in URLs.</div>')
+    # Safe for embedding inside <script>: escape the tag-opening bracket.
+    data = json.dumps(points).replace("<", "\\u003c")
+    top = sorted(countries.items(), key=lambda kv: -kv[1])[:8]
+    chips = "".join(f'<span class=hn-geochip>{e(cc)} <b>{n}</b></span>' for cc, n in top)
+    nloc, ncty = len(points), len(countries)
+    return (head
+            + '<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">'
+            + '<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>'
+            + f'<div class=card><b>{nloc}</b> geolocated IOC source IP'
+              f'{"s" if nloc != 1 else ""} across <b>{ncty}</b> countr'
+              f'{"ies" if ncty != 1 else "y"} — honeypot downloads, alert infrastructure '
+              'and Sentinel TI. Marker size reflects how many IOCs trace to that IP. '
+              'Addresses defanged.</div>'
+            + (f'<div class="card hn-geochips">{chips}</div>' if chips else "")
+            + '<div id="hn-map"></div>'
+            + '<script>(function(){'
+              'var P=' + data + ';'
+              'var m=L.map("hn-map",{worldCopyJump:true}).setView([25,10],2);'
+              'L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",'
+              '{maxZoom:11,subdomains:"abcd",'
+              'attribution:"\\u00a9 OpenStreetMap \\u00a9 CARTO"}).addTo(m);'
+              'var g=[];'
+              'P.forEach(function(p){'
+              'var r=Math.min(6+p.n,16);'
+              'var c=L.circleMarker([p.lat,p.lon],{radius:r,color:"#3b82f6",'
+              'weight:1.5,fillColor:"#3b82f6",fillOpacity:.45});'
+              'c.bindPopup("<b>"+p.ip+"</b><br>"+p.loc+(p.org?"<br>"+p.org:"")'
+              '+"<br>"+p.n+" IOC"+(p.n!=1?"s":"")+" \\u00b7 "+p.srcs);'
+              'c.addTo(m);g.push([p.lat,p.lon]);});'
+              'if(g.length){try{m.fitBounds(g,{padding:[40,40],maxZoom:6});}catch(e){}}'
+              '}());</script>')
 
 
 def render_credentials() -> str:

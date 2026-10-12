@@ -51,6 +51,7 @@ _ICON_PATHS = {
     "pause": '<path d="M10 4H6v16h4zM18 4h-4v16h4z"/>',
     "lock": '<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
     "menu": '<path d="M3 6h18M3 12h18M3 18h18"/>',
+    "map": '<path d="M9 4 3 6v14l6-2 6 2 6-2V4l-6 2-6-2z"/><path d="M9 4v14M15 6v14"/>',
 }
 
 
