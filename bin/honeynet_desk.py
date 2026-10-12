@@ -31,13 +31,11 @@ TABS = [("/honeynet", "Overview"), ("/honeynet/campaigns", "Campaigns"), ("/hone
         ("/honeynet/report", "Report & draft")]
 
 CSS = """<style>
-.hn-tabs{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 16px}
-.hn-tabs a{padding:6px 12px;border:1px solid var(--line);border-radius:8px;color:var(--dim);font-size:13px}
-.hn-tabs a.on{border-color:var(--accent);color:#fff;background:rgba(59,130,246,.16)}
+/* .hn-tabs: styled by panel_theme's shared OTX tab strip */
 .hn-bars{display:grid;gap:4px}
 .hn-bar{display:grid;grid-template-columns:170px 1fr 92px;gap:10px;align-items:center;font-size:12.5px}
-.hn-bar .trk{height:14px;background:var(--panel2);border-radius:4px;overflow:hidden}
-.hn-bar .fill{height:100%;background:var(--accent);border-radius:0 4px 4px 0;min-width:2px}
+.hn-bar .trk{height:14px;background:#e9edf0;overflow:hidden}
+.hn-bar .fill{height:100%;background:#4a3fbf;min-width:2px}
 .hn-bar .v{text-align:right;color:var(--dim);font-variant-numeric:tabular-nums;white-space:nowrap}
 .hn-cols{display:flex;align-items:flex-end;gap:2px;height:120px;padding-top:6px}
 .hn-cols .c{flex:1;background:var(--accent);border-radius:4px 4px 0 0;min-height:2px}

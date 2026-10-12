@@ -178,22 +178,22 @@ def render_page() -> str:
 
 _PAGE = r"""
 <style>
-.cve{--b:#24344d}
+.cve{--b:var(--line)}
 .cve .search{display:flex;gap:8px;margin-bottom:14px}
 .cve .search input{flex:1}
 .cve .hint{color:var(--dim);font-size:12px;margin-bottom:14px}
-.cve .r{background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:12px 14px;margin:8px 0}
+.cve .r{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:12px 14px;margin:8px 0}
 .cve .r .top{display:flex;gap:9px;align-items:center;flex-wrap:wrap}
 .cve .r .id{font-weight:700;font-family:ui-monospace,monospace}
-.cve .b{font-size:11px;font-weight:700;padding:2px 7px;border-radius:5px}
-.cve .b.CRITICAL{background:#7f1d1d;color:#fca5a5}.cve .b.HIGH{background:#7c2d12;color:#fdba74}
-.cve .b.MEDIUM{background:#78350f;color:#fcd34d}.cve .b.LOW{background:#1e3a8a;color:#93c5fd}
-.cve .b.kev{background:#991b1b;color:#fecaca}
-.cve .r p{margin:8px 0 0;color:#cbd5e1;font-size:13px}
+.cve .b{font-size:10.5px;font-weight:600;padding:0 6px;border-radius:2px;border:1px solid currentColor;letter-spacing:.06em;line-height:17px}
+.cve .b.CRITICAL{background:#fdecee;color:#b21f2d}.cve .b.HIGH{background:#fff1e6;color:#b4500a}
+.cve .b.MEDIUM{background:#fff8e1;color:#8a6500}.cve .b.LOW{background:#eef1ff;color:var(--accent)}
+.cve .b.kev{background:#b21f2d;color:#fff;border-color:#b21f2d}
+.cve .r p{margin:8px 0 0;color:var(--fg);font-size:13px}
 .cve .r .act{margin-top:10px;display:flex;gap:8px}
 .cve .meta{color:var(--dim);font-size:11.5px}
 .cve .section{display:flex;align-items:center;gap:10px;margin:22px 0 10px}
-.cve .section h3{margin:0;font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:var(--dim)}
+.cve .section h3{margin:0;font-size:12px;text-transform:uppercase;letter-spacing:1px;color:var(--fg)}
 .cve .section .btn{margin-left:auto;padding:3px 10px;font-size:12px}
 .cve .shipped{display:flex;justify-content:space-between;gap:10px;align-items:baseline;padding:7px 0;border-bottom:1px solid var(--line)}
 .cve .shipped .t{font-size:13px}.cve .shipped .m{color:var(--dim);font-size:11.5px;white-space:nowrap}
