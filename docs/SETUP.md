@@ -5,8 +5,8 @@ it reads the security news, has an AI analyst verify and score it, and drafts
 (or publishes) posts for defenders. Everything beyond the core pipeline is
 optional and listed in step 8.
 
-It's free for noncommercial / personal use under the
-[PolyForm Noncommercial License 1.0.0](../LICENSE); see
+It's proprietary software — all rights reserved; the source is for reference
+only. See [`LICENSE`](../LICENSE) and
 [`LICENSING.md`](../LICENSING.md) for commercial use.
 
 ```
@@ -155,6 +155,6 @@ domain bare (no `https://`) on LinkedIn so the post isn't throttled.
 
 ## Licence
 
-PolyForm Noncommercial 1.0.0 (personal / noncommercial), or a commercial licence
-from the author. See [`LICENSING.md`](../LICENSING.md). Contributions:
+Proprietary — all rights reserved; licensing by arrangement with the author.
+See [`LICENSING.md`](../LICENSING.md). Contributions:
 [`CONTRIBUTING.md`](../CONTRIBUTING.md).
