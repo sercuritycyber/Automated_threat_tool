@@ -81,6 +81,11 @@ _AI_MODEL_LISTS = {"OPENROUTER_API_KEY": "https://openrouter.ai/api/v1/key",  # 
                    "OPENAI_API_KEY": "https://api.openai.com/v1/models",
                    "MISTRAL_API_KEY": "https://api.mistral.ai/v1/models"}
 SECRET_KEYS += CLAUDE_KEYS
+# Threat-intel source keys (bin/ingest.py, bin/cve_desk.py).
+INTEL_KEYS = [("OTX_API_KEY", "AlienVault OTX API key",
+               "otx.alienvault.com → Settings → API key; feeds subscribed pulses (TLP:WHITE/CLEAR only)"),
+              ("CVEFEED_API_KEY", "CVEFeed API key", "cvefeed.io; CVE stream and the CVE desk")]
+SECRET_KEYS += INTEL_KEYS
 
 # fields shown as plain text (not masked) so they can be checked / fixed
 PLAINTEXT_KEYS = {"LINKEDIN_AUTHOR_URN", "MASTODON_BASE_URL", "BLUESKY_HANDLE", "BLUESKY_PDS_URL",
@@ -1583,6 +1588,13 @@ def secrets_get(request: Request):
                  f'{"".join(_secret_field(k, lb, ht, env) for k, lb, ht in BACKUP_AI_KEYS)}'
                  f'<div style="margin-top:10px"><button class="btn ghost" formaction=/secrets/test '
                  f'name=only value=backup_ai formnovalidate>Test backup keys</button></div></div>')
+    intel_badge = ('<span class="pill good">configured</span>' if env.get("OTX_API_KEY")
+                   else '<span class="pill dim">not set up</span>')
+    sections += (f'<h2>Intel feeds {intel_badge}</h2><div class=card><small>Keys for threat-intel '
+                 f'sources the ingest step pulls from.</small>'
+                 f'{"".join(_secret_field(k, lb, ht, env) for k, lb, ht in INTEL_KEYS)}'
+                 f'<div style="margin-top:10px"><button class="btn ghost" formaction=/secrets/test '
+                 f'name=only value=intel formnovalidate>Test intel keys</button></div></div>')
     extra = "".join(_secret_field(k, lb, ht, env) for k, lb, ht in
                     [("NTFY_URL", "Notification URL", "ntfy.sh-style topic for pipeline alerts")])
     dry = env.get("CTI_DRY_RUN", "")
@@ -1750,9 +1762,51 @@ def _test_backup_ai(env: dict) -> str:
     return "<br>".join(e(x) if "<" not in x else x for x in out) or "No backup keys set."
 
 
+def _test_intel(env: dict) -> str:
+    """Read-only checks: who the OTX key belongs to and how many public pulses
+    the next ingest would see; whether CVEFeed accepts its key."""
+    out = []
+    otx = env.get("OTX_API_KEY")
+    if not otx:
+        out.append("<b>OTX:</b> no OTX_API_KEY set.")
+    else:
+        h = {"X-OTX-API-KEY": otx, "Accept": "application/json"}
+        try:
+            me = requests.get("https://otx.alienvault.com/api/v1/users/me", headers=h, timeout=20)
+            if me.status_code in (401, 403):
+                out.append("<b>OTX:</b> key rejected (HTTP %d)." % me.status_code)
+            elif not me.ok:
+                out.append(f"<b>OTX:</b> HTTP {me.status_code}")
+            else:
+                since = (datetime.now(timezone.utc) - timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%S")
+                sub = requests.get("https://otx.alienvault.com/api/v1/pulses/subscribed", headers=h,
+                                   params={"limit": 50, "modified_since": since}, timeout=30)
+                res = sub.json().get("results", []) if sub.ok else []
+                # judged by creation date like ingest: OTX re-touches month-old
+                # pulses, which would otherwise look like new activity here
+                new = [p for p in res if str(p.get("created", "")) >= since]
+                public = sum(str(p.get("tlp", "")).lower() in ("white", "clear") for p in new)
+                out.append(f"<b>OTX:</b> ✓ signed in as <span class=mono>{e(me.json().get('username', '?'))}</span> · "
+                           f"{len(new)} new subscribed pulses in the last 48h, {public} public (TLP:WHITE/CLEAR) "
+                           f"and eligible for ingest.")
+        except Exception as ex:  # noqa
+            out.append(f"<b>OTX:</b> error: {e(str(ex))}")
+    cvf = env.get("CVEFEED_API_KEY")
+    if not cvf:
+        out.append("<b>CVEFeed:</b> no CVEFEED_API_KEY set.")
+    else:
+        try:
+            r = requests.get("https://cvefeed.io/api/vulnerability/", params={"page_size": 1},
+                             headers={"Authorization": f"Bearer {cvf}", "Accept": "application/json"}, timeout=20)
+            out.append("<b>CVEFeed:</b> ✓ key accepted." if r.ok else f"<b>CVEFeed:</b> HTTP {r.status_code}")
+        except Exception as ex:  # noqa
+            out.append(f"<b>CVEFeed:</b> error: {e(str(ex))}")
+    return "<br>".join(out)
+
+
 _TESTS = {"linkedin": _test_linkedin, "mastodon": _test_mastodon, "bluesky": _test_bluesky,
           "x": _test_x, "email": _test_email, "claude": _test_claude,
-          "backup_ai": _test_backup_ai}
+          "backup_ai": _test_backup_ai, "intel": _test_intel}
 
 
 @app.post("/secrets/test", response_class=HTMLResponse)

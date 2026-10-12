@@ -188,6 +188,103 @@ def fetch_cvefeed(name: str, weight: float, min_cvss: float, timeout: int, api_k
     return out
 
 
+OTX_API = "https://otx.alienvault.com/api/v1/pulses/subscribed"
+OTX_PULSE = "https://otx.alienvault.com/pulse/{}"
+
+
+def _otx_names(values) -> list[str]:
+    """OTX returns malware families either as strings or {display_name: ...}."""
+    out = []
+    for v in values or []:
+        n = (v.get("display_name") or v.get("name")) if isinstance(v, dict) else v
+        if n and n not in out:
+            out.append(str(n))
+    return out
+
+
+def otx_pulse_item(p: dict, name: str, weight: float, allowed_tlp: set[str],
+                   min_indicators: int) -> dict | None:
+    """One OTX pulse -> one candidate story, or None if it mustn't/shouldn't run.
+
+    TLP gate: everything this pipeline ingests can end up on public socials, so
+    only pulses marked for public release (TLP:WHITE/CLEAR by default) pass.
+    A GREEN/AMBER/RED pulse from a private group is never published."""
+    tlp = str(p.get("tlp") or p.get("TLP") or "").strip().lower()
+    if tlp not in allowed_tlp:
+        return None
+    indicators = p.get("indicators") or []
+    if len(indicators) < min_indicators:
+        return None
+    try:
+        # created, not modified: indicators keep being appended to old pulses,
+        # which would otherwise resurface last month's campaign as news
+        pub = datetime.fromisoformat(str(p["created"]).replace("Z", "+00:00"))
+    except (KeyError, ValueError, TypeError):
+        return None
+    if pub.tzinfo is None:
+        pub = pub.replace(tzinfo=timezone.utc)
+
+    pulse_url = OTX_PULSE.format(p.get("id", ""))
+    refs = [r for r in (p.get("references") or []) if str(r).startswith(("http://", "https://"))]
+    desc = re.sub(r"\s+", " ", p.get("description") or "").strip()
+    title = (p.get("name") or "OTX pulse").strip()
+    # CVEs from typed indicators plus any named in the text, so KEV/EPSS scoring applies
+    cves = {str(i.get("indicator", "")).upper() for i in indicators if i.get("type") == "CVE"}
+    cves |= {c.upper() for c in CVE_RE.findall(f"{title} {desc}")}
+    malware = _otx_names(p.get("malware_families"))
+    attack = [a.get("id") if isinstance(a, dict) else a for a in (p.get("attack_ids") or [])]
+    parts = [f"OTX pulse · {len(indicators)} IOCs", f"TLP:{tlp.upper()}"]
+    if p.get("adversary"):
+        parts.append(f"actor: {p['adversary']}")
+    if malware:
+        parts.append("malware: " + ", ".join(malware[:4]))
+    if cves:
+        parts.append(", ".join(sorted(cves)[:6]))
+    if attack:
+        parts.append("ATT&CK: " + ", ".join(str(a) for a in attack[:5]))
+    return {
+        "title": title,
+        # the original write-up when OTX cites one: better provenance for posts,
+        # and it de-duplicates against the same story arriving by RSS
+        "link": refs[0] if refs else pulse_url,
+        "summary": ("[" + " · ".join(parts) + "] " + desc + f" (OTX: {pulse_url})")[:1200],
+        "published": pub,
+        "source": name,
+        "source_weight": weight,
+    }
+
+
+def fetch_otx(name: str, weight: float, timeout: int, api_key: str, since: datetime,
+              allowed_tlp: set[str], min_indicators: int, max_pages: int = 5) -> list[dict]:
+    """AlienVault OTX — pulses from the users/groups the account subscribes to
+    (by default AlienVault's own analysts, who write up public reporting with
+    IOCs, malware families and ATT&CK mappings)."""
+    if not api_key:
+        print(f"  ! {name}: OTX_API_KEY not set — skipping", file=sys.stderr)
+        return []
+    url, params = OTX_API, {"limit": 50, "modified_since": since.strftime("%Y-%m-%dT%H:%M:%S")}
+    out, skipped_tlp, pages = [], 0, 0
+    while url and pages < max_pages:
+        try:
+            r = requests.get(url, params=params, timeout=timeout,
+                             headers={**HEADERS, "X-OTX-API-KEY": api_key, "Accept": "application/json"})
+            r.raise_for_status()
+            j = r.json()
+        except (requests.RequestException, ValueError) as e:
+            print(f"  ! {name}: {e}", file=sys.stderr)
+            break
+        for p in j.get("results", []):
+            it = otx_pulse_item(p, name, weight, allowed_tlp, min_indicators)
+            if it:
+                out.append(it)
+            elif str(p.get("tlp") or "").lower() not in allowed_tlp:
+                skipped_tlp += 1
+        url, params, pages = j.get("next"), None, pages + 1   # 'next' carries the query
+    note = f", {skipped_tlp} held back by TLP" if skipped_tlp else ""
+    print(f"  - {name}: {len(out)} pulses{note}")
+    return out
+
+
 def fetch_kev(timeout: int) -> dict:
     try:
         r = requests.get(KEV_URL, headers=HEADERS, timeout=timeout)
@@ -419,6 +516,12 @@ def main() -> int:
                 futs.append(ex.submit(
                     fetch_cvefeed, f["name"], float(f.get("weight", 0.9)),
                     float(f.get("min_cvss", 7.5)), timeout, os.environ.get("CVEFEED_API_KEY", "")))
+            elif f.get("provider") == "otx":
+                futs.append(ex.submit(
+                    fetch_otx, f["name"], float(f.get("weight", 0.75)), timeout,
+                    os.environ.get("OTX_API_KEY", ""), cutoff,
+                    {str(t).lower() for t in f.get("allowed_tlp", ["white", "clear"])},
+                    int(f.get("min_indicators", 5))))
         for fut in as_completed(futs):
             raw.extend(fut.result())
     kev = fetch_kev(timeout)
