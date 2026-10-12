@@ -113,3 +113,14 @@ feeds:
   min_cvss: 7.5
   weight: 0.9
   enabled: true
+# AlienVault OTX: pulses from the users/groups the OTX account subscribes to
+# (AlienVault's own analysts by default). Needs OTX_API_KEY in config/env
+# (Secrets page -> Intel feeds). Only TLP:WHITE/CLEAR pulses are admitted:
+# everything ingested can be published, and GREEN/AMBER/RED must never be.
+- name: AlienVault OTX
+  type: api
+  provider: otx
+  weight: 0.75
+  min_indicators: 5
+  allowed_tlp: [white, clear]
+  enabled: true
