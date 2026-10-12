@@ -37,13 +37,11 @@ TABS = [("/darkweb", "Overview"), ("/darkweb/addresses", "Addresses"),
         ("/darkweb/log", "Activity")]
 
 CSS = """<style>
-.dw-tabs{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 16px}
-.dw-tabs a{padding:6px 12px;border:1px solid var(--line);border-radius:8px;color:var(--dim);font-size:13px}
-.dw-tabs a.on{border-color:var(--accent);color:#fff;background:rgba(59,130,246,.16)}
+/* .dw-tabs: styled by panel_theme's shared OTX tab strip */
 .dw-k{font-family:ui-monospace,Menlo,monospace;font-size:12px;word-break:break-all}
-.dw-safe{border:1px solid rgba(63,185,80,.4);background:rgba(63,185,80,.08);border-radius:10px;padding:10px 14px;margin-bottom:14px;font-size:13px}
-.dw-alert{border:1px solid var(--accent);background:rgba(59,130,246,.12);border-radius:10px;padding:12px 14px;margin-bottom:14px}
-.dw-alert b{color:#fff}
+.dw-safe{border:1px solid #b7dfc1;border-left:4px solid #28a745;background:#e7f5ea;border-radius:2px;padding:10px 14px;margin-bottom:14px;font-size:13px}
+.dw-alert{border:1px solid #b3bcff;border-left:4px solid var(--accent);background:#eef1ff;border-radius:2px;padding:12px 14px;margin-bottom:14px}
+.dw-alert b{color:var(--fg)}
 </style>"""
 
 

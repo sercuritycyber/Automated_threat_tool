@@ -428,12 +428,7 @@ NAV = [
 
 
 def page(title: str, body: str, active: str = "", flash: str = "") -> HTMLResponse:
-    nav = "".join(
-        f'<div class=grp>{e(group)}</div>' + "".join(
-            f'<a href="{p}" class="{"on" if p == active else ""}">{PT.icon(ic)}<span>{e(label)}</span></a>'
-            for p, label, ic in items)
-        for group, items in NAV
-    )
+    nav = PT.nav_menu(NAV, active, e)
     fl = f'<div class="flash">{e(flash)}</div>' if flash else ""
     return HTMLResponse(PT.shell(e(title), body, nav, fl, bool(_panel_pass()), datetime.now()))
 

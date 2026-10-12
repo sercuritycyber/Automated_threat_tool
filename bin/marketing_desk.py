@@ -404,29 +404,29 @@ def render_page(root: Path, creds: dict | None = None) -> str:
 
 _PAGE_HTML = r"""
 <style>
-.mkt{--b:#24344d;--c:#151f32;--m:#94a3b8;--ac:#3b82f6}
-.mkt h2{font-size:14px;text-transform:uppercase;letter-spacing:1px;color:var(--ac);margin:22px 0 10px}
+.mkt{--b:var(--line);--c:var(--panel);--m:var(--dim);--ac:var(--accent)}
+.mkt h2{font-size:12px;text-transform:uppercase;letter-spacing:1px;color:var(--fg);margin:22px 0 10px}
 .mkt .kgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
-.mkt .k{background:var(--c);border:1px solid var(--b);border-radius:8px;padding:12px 14px}
-.mkt .k b{display:block;font-size:22px;color:#fff}.mkt .k span{font-size:11px;color:var(--m);text-transform:uppercase;letter-spacing:.5px}
+.mkt .k{background:var(--c);border:1px solid var(--b);border-top:3px solid var(--accent);border-radius:var(--radius);padding:12px 14px}
+.mkt .k b{display:block;font-size:24px;font-weight:500;color:var(--fg)}.mkt .k span{font-size:11px;color:var(--m);text-transform:uppercase;letter-spacing:.5px}
 .mkt .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
-.mkt .card{background:var(--c);border:1px solid var(--b);border-radius:8px;margin:8px 0;overflow:hidden}
+.mkt .card{background:var(--c);border:1px solid var(--b);border-radius:var(--radius);margin:8px 0;overflow:hidden}
 .mkt .card>.hd{padding:12px 14px;cursor:pointer;display:flex;gap:10px;align-items:center}
-.mkt .card>.hd:hover{background:#1c2942}
-.mkt .card .t{font-weight:600;color:#fff;flex:1}
-.mkt .pill{font-size:11px;padding:2px 8px;border-radius:20px;border:1px solid var(--b);color:var(--m)}
-.mkt .pill.posted{color:#4ade80;border-color:#166534}.mkt .pill.scheduled{color:#fcd34d;border-color:#78350f}
-.mkt .pill.approved{color:#93c5fd;border-color:#1e3a8a}.mkt .pill.skip{color:#f87171;border-color:#7f1d1d}
+.mkt .card>.hd:hover{background:var(--panel2)}
+.mkt .card .t{font-weight:600;color:var(--fg);flex:1}
+.mkt .pill{font-size:10.5px;padding:0 6px;border-radius:2px;border:1px solid currentColor;color:var(--m);text-transform:uppercase;letter-spacing:.06em;line-height:17px}
+.mkt .pill.posted{color:#1f8f3a;background:#e7f5ea}.mkt .pill.scheduled{color:#a45f00;background:#fff3e0}
+.mkt .pill.approved{color:var(--accent);background:#eef1ff}.mkt .pill.skip{color:#c82333;background:#fdecee}
 .mkt .bd{padding:0 14px 14px;border-top:1px solid var(--b);display:none}
 .mkt .card.open .bd{display:block}
 .mkt .tabs{display:flex;gap:4px;flex-wrap:wrap;margin:12px 0 8px}
-.mkt .tabs button{background:#0b1120;border:1px solid var(--b);color:var(--m);padding:5px 10px;border-radius:6px;font-size:12px;cursor:pointer}
-.mkt .tabs button.on{color:#fff;border-color:var(--ac)}
-.mkt textarea{width:100%;min-height:150px;background:#0b1120;border:1px solid var(--b);color:#e2e8f0;border-radius:6px;padding:10px;font:13px/1.5 ui-monospace,monospace;resize:vertical}
+.mkt .tabs button{background:#fff;border:0;color:var(--ac);padding:7px 14px;border-radius:0;font-size:13px;cursor:pointer}
+.mkt .tabs button.on{color:#fff;background:var(--ac)}
+.mkt textarea{width:100%;min-height:150px;background:#fff;border:1px solid #b9c0c7;color:var(--fg);border-radius:2px;padding:10px;font:13px/1.5 ui-monospace,monospace;resize:vertical}
 .mkt .mini{font-size:11px;color:var(--m)}
-.mkt select,.mkt input[type=datetime-local],.mkt input[type=number],.mkt input[type=text]{background:#0b1120;border:1px solid var(--b);color:#e2e8f0;border-radius:6px;padding:6px 8px;font-size:13px}
-.mkt button.act{background:var(--ac);border:0;color:#fff;padding:6px 12px;border-radius:6px;cursor:pointer;font-size:13px}
-.mkt button.ghost{background:#0b1120;border:1px solid var(--b);color:#e2e8f0;padding:6px 12px;border-radius:6px;cursor:pointer;font-size:13px}
+.mkt select,.mkt input[type=datetime-local],.mkt input[type=number],.mkt input[type=text]{background:#fff;border:1px solid #b9c0c7;color:var(--fg);border-radius:2px;padding:6px 8px;font-size:13px}
+.mkt button.act{background:var(--ac);border:1px solid var(--ac);color:#fff;padding:6px 12px;border-radius:2px;cursor:pointer;font-size:13px}
+.mkt button.ghost{background:#fff;border:1px solid var(--ac);color:var(--ac);padding:6px 12px;border-radius:2px;cursor:pointer;font-size:13px}
 .mkt table{width:100%;border-collapse:collapse;font-size:13px}.mkt td,.mkt th{border-bottom:1px solid var(--b);padding:6px 8px;text-align:left}
 </style>
 <div class=mkt>
