@@ -7,9 +7,14 @@ exploited right now in front of defenders is worth more than tidy scheduling,
 so this runs every 20 minutes and wakes the full pipeline the moment a primary
 source says something is on fire.
 
-Cheap by design: it costs zero analyst tokens when nothing is burning. It only
-fetches the CISA KEV catalogue and the PRIMARY feeds (vendor PSIRTs, CERTs,
-research labs — not the news wires that rehash them hours later).
+Cheap by design: it costs zero analyst tokens when nothing is burning. It
+fetches the CISA KEV catalogue, the PRIMARY feeds (vendor PSIRTs, CERTs,
+research labs) and the higher-weight NEWS feeds. A primary source counts when
+it is KEV-fresh OR uses active-exploitation language; a news wire counts only
+when it explicitly says something is being exploited / is a zero-day (an
+8.x "High" that is actively exploited but not yet KEV-listed, e.g. an edge-VPN
+auth-bypass, must not wait 4h for the next harvest). The existing dedupe +
+the analyst's own recently_posted check stop a news rehash becoming a repeat.
 
 It writes ONLY state/emergency_seen.json, its own ledger, so it can never race
 a harvest that is midway through rewriting state/candidates.json.
@@ -46,6 +51,11 @@ KEV_FRESH_DAYS = 2
 MIN_PRESCORE = 55
 # Don't trigger again within this many minutes of the last pipeline run.
 COOLDOWN_MIN = 25
+# Also poll news/analysis feeds at or above this weight (below PRIMARY_WEIGHT).
+# News-tier items only count when they carry explicit active-exploitation /
+# zero-day language — this is what catches a news-first exploited High (e.g.
+# an edge-VPN auth-bypass) before CISA KEV lists it.
+NEWS_WEIGHT = 0.7
 
 EXPLOITED = re.compile(
     r"exploited in the wild|activ(?:e|ely) exploit|under active attack"
@@ -127,8 +137,9 @@ def find_emergencies() -> list[dict]:
     feeds = [f for f in ingest.load_yaml(ROOT / "config" / "feeds.yaml").get("feeds", [])
              if f.get("enabled", True)
              and f.get("type", "rss") == "rss"
-             and float(f.get("weight", 0)) >= ingest.PRIMARY_WEIGHT]
-    log(f"polling {len(feeds)} primary source(s)")
+             and float(f.get("weight", 0)) >= NEWS_WEIGHT]
+    n_primary = sum(1 for f in feeds if float(f.get("weight", 0)) >= ingest.PRIMARY_WEIGHT)
+    log(f"polling {len(feeds)} source(s) ({n_primary} primary, {len(feeds) - n_primary} news)")
 
     cutoff = datetime.now(timezone.utc) - timedelta(hours=FRESH_HOURS)
     items = []
@@ -151,9 +162,16 @@ def find_emergencies() -> list[dict]:
         kev_hit = [c for c in sc["cve_ids"] if c in fresh_kev]
         ransom = any(fresh_kev.get(c, {}).get("ransomware") for c in kev_hit)
         exploited = bool(EXPLOITED.search(text))
+        is_primary = float(it.get("source_weight", 0)) >= ingest.PRIMARY_WEIGHT
         if sc["pre_score"] < MIN_PRESCORE:
             continue
-        if not (kev_hit or exploited):
+        # Primary sources trigger on a fresh-KEV hit OR active-exploitation
+        # language; news wires must say it explicitly, so a mere rehash of an
+        # older KEV'd CVE doesn't wake the pipeline.
+        if is_primary:
+            if not (kev_hit or exploited):
+                continue
+        elif not exploited:
             continue
         hits.append({
             "title": it.get("title", "")[:140], "url": it["url"],
