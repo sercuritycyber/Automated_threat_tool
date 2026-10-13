@@ -11,6 +11,14 @@ feeds:
   url: https://sec.cloudapps.cisco.com/security/center/psirtrss20/CiscoSecurityAdvisory.xml
   weight: 0.85
   enabled: true
+- name: Fortinet FortiGuard PSIRT
+  url: https://filestore.fortinet.com/fortiguard/rss/ir.xml
+  weight: 0.85
+  enabled: true
+- name: Palo Alto Networks Security Advisories
+  url: https://security.paloaltonetworks.com/rss.xml
+  weight: 0.85
+  enabled: true
 - name: CERT/CC Vulnerability Notes
   url: https://www.kb.cert.org/vulfeed/
   weight: 0.85
