@@ -313,6 +313,21 @@ def post_linkedin(text: str, creds: dict, settings: dict, short_text=None, log=p
     return _res("linkedin", True, id=urn, url=url)
 
 
+def post_linkedin_personal(text: str, creds: dict, settings: dict, short_text=None, log=print,
+                           *, comment=None) -> dict:
+    """Post to the OPERATOR'S OWN LinkedIn profile (urn:li:person) instead of the
+    company page. Same token and shaping as post_linkedin, but LINKEDIN_AUTHOR_URN
+    is dropped so _li_author resolves the token's own member. The result is tagged
+    provider="linkedin-personal" so history/targets can tell a personal op post from
+    a company CTI post. The automated CTI flow never selects this target — it is
+    operator-only (enforced in publish_linkedin.py), so CTI stays company-page-only."""
+    personal = dict(creds)
+    personal.pop("LINKEDIN_AUTHOR_URN", None)
+    r = post_linkedin(text, personal, settings, short_text, log, comment=comment)
+    r["provider"] = "linkedin-personal"
+    return r
+
+
 # ---------------------------------------------------------------- Mastodon
 def post_mastodon(text: str, creds: dict, settings: dict, short_text=None, log=print) -> dict:
     base = (creds.get("MASTODON_BASE_URL") or "").rstrip("/")
@@ -519,6 +534,7 @@ def post_discord(text: str, creds: dict, settings: dict, short_text=None, log=pr
 
 PROVIDERS = {
     "linkedin": post_linkedin,
+    "linkedin-personal": post_linkedin_personal,
     "mastodon": post_mastodon,
     "bluesky": post_bluesky,
     "x": post_x,
@@ -527,7 +543,8 @@ PROVIDERS = {
     "discord": post_discord,
 }
 
-PROVIDER_LABELS = {"linkedin": "LinkedIn", "mastodon": "Mastodon", "bluesky": "Bluesky",
+PROVIDER_LABELS = {"linkedin": "LinkedIn", "linkedin-personal": "LinkedIn (personal)",
+                   "mastodon": "Mastodon", "bluesky": "Bluesky",
                    "x": "X / Twitter", "email": "Email", "telegram": "Telegram",
                    "discord": "Discord"}
 
@@ -539,6 +556,10 @@ PROVIDER_KEYS: dict[str, list[tuple[str, str, str]]] = {
         ("LINKEDIN_CLIENT_ID", "OAuth client ID", "optional — enables auto token refresh"),
         ("LINKEDIN_CLIENT_SECRET", "OAuth client secret", "optional"),
         ("LINKEDIN_REFRESH_TOKEN", "OAuth refresh token", "optional"),
+    ],
+    "linkedin-personal": [
+        ("LINKEDIN_ACCESS_TOKEN", "Access token", "shares the LinkedIn token; posts as YOU (the token's "
+                                                  "own member), ignoring LINKEDIN_AUTHOR_URN. Needs w_member_social."),
     ],
     "mastodon": [
         ("MASTODON_BASE_URL", "Instance URL", "e.g. https://infosec.exchange"),
@@ -575,6 +596,7 @@ PROVIDER_KEYS: dict[str, list[tuple[str, str, str]]] = {
 # which env keys, if present, mean "this provider is configured"
 _REQUIRED = {
     "linkedin": ["LINKEDIN_ACCESS_TOKEN"],
+    "linkedin-personal": ["LINKEDIN_ACCESS_TOKEN"],
     "mastodon": ["MASTODON_BASE_URL", "MASTODON_ACCESS_TOKEN"],
     "bluesky": ["BLUESKY_HANDLE", "BLUESKY_APP_PASSWORD"],
     "x": ["X_API_KEY", "X_API_SECRET", "X_ACCESS_TOKEN", "X_ACCESS_SECRET"],
@@ -602,7 +624,7 @@ def post_all(text: str, creds: dict, settings: dict, *, short_text: str | None =
     for name in resolve_targets(settings, creds, only):
         fn = PROVIDERS[name]
         try:
-            if name == "linkedin":   # _li_shape adds the motto (above the tags)
+            if name in ("linkedin", "linkedin-personal"):   # _li_shape adds the motto (above the tags)
                 out.append(fn(text, creds, settings, short_text, log, comment=comment))
             elif name in _SHORT_NETWORKS:
                 out.append(fn(text, creds, settings, short_text, log))

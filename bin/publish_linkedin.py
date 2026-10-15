@@ -850,6 +850,14 @@ def main() -> int:
     failures: list[str] = []
     for p in to_post:
         only = p.get("targets") or None
+        # `linkedin-personal` (posting as the operator's own profile) is operator-only:
+        # only a hand-authored post (compose / operator confidence) may target it, so the
+        # automated analyst/CTI flow can never post to the personal profile — CTI stays
+        # company-page-only even if a target slipped into a decision by mistake.
+        if only and "linkedin-personal" in only \
+                and str(p.get("confidence", "")).lower() != "operator" and p.get("source") != "compose":
+            only = [t for t in only if t != "linkedin-personal"] or None
+            log(f"“{p.get('title', '')[:40]}” — linkedin-personal is operator-only; dropped (CTI stays page-only)")
         tset = publishers.resolve_targets(settings, C, only)
         missing = [t for t in tset if t not in ready]
         if missing:
