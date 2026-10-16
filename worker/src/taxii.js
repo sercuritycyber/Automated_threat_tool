@@ -75,18 +75,28 @@ export async function handle(D, cfg, url, path) {
     return tjson(collectionObj());
   }
   if (path === BASE + "/objects" || path === BASE + "/objects/") {
-    const addedAfter = url.searchParams.get("added_after") || "";
+    // `next` is TAXII 2.1 pagination; `added_after` is the incremental filter.
+    // Both resolve to "added > cursor" here (added is monotonic per ingest).
+    const cursor = url.searchParams.get("next") || url.searchParams.get("added_after") || "";
     const limit = Math.min(Number(url.searchParams.get("limit")) || 500, 2000);
-    let sql = "SELECT obj, added FROM stix_objects";
-    const binds = [];
-    if (addedAfter) { sql += " WHERE added > ?1"; binds.push(addedAfter); }
-    sql += ` ORDER BY added ASC LIMIT ?${binds.length + 1}`;
-    binds.push(limit);
-    const res = await D.prepare(sql).bind(...binds).all();
-    const rows = res.results || [];
+    let rows = [];
+    try {
+      let sql = "SELECT obj, added FROM stix_objects";
+      const binds = [];
+      if (cursor) { sql += " WHERE added > ?1"; binds.push(cursor); }
+      sql += ` ORDER BY added ASC LIMIT ?${binds.length + 1}`;
+      binds.push(limit);
+      const res = await D.prepare(sql).bind(...binds).all();
+      rows = res.results || [];
+    } catch (_e) {
+      rows = [];   // table not migrated yet / transient — serve an empty envelope, never 500
+    }
     const objects = rows.map((r) => JSON.parse(r.obj));
-    const envelope = { more: rows.length >= limit, objects };
-    const headers = { "Content-Type": STIX_CT, "Access-Control-Allow-Origin": "*",
+    const more = rows.length === limit;
+    const envelope = { more, objects };
+    if (more && rows.length) envelope.next = rows[rows.length - 1].added;   // cursor for the next page
+    // TAXII 2.1: the Get Objects response is an Envelope resource -> taxii+json, not stix+json.
+    const headers = { "Content-Type": TAXII_CT, "Access-Control-Allow-Origin": "*",
       "Cache-Control": "public, max-age=300" };
     if (rows.length) {
       headers["X-TAXII-Date-Added-First"] = rows[0].added;

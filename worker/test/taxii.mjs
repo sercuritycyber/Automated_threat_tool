@@ -63,10 +63,16 @@ ok("collection is read-only + indicators", j.collections[0].id === "indicators" 
 
 // ---- objects ----
 r = await taxii.handle(D, cfg, U("/taxii2/api/collections/indicators/objects/"), "/taxii2/api/collections/indicators/objects/");
-ok("objects returns stix content-type", r.headers.get("Content-Type").includes("stix+json;version=2.1"));
+ok("objects envelope is taxii+json (TAXII 2.1), not stix", r.headers.get("Content-Type").includes("taxii+json;version=2.1"));
 j = await r.json();
 ok("objects envelope has 2 indicators", Array.isArray(j.objects) && j.objects.length === 2 && j.objects[0].type === "indicator");
 ok("objects has X-TAXII-Date-Added headers", !!r.headers.get("X-TAXII-Date-Added-First"));
+ok("no more/next when all fit", j.more === false && j.next === undefined);
+
+// pagination: limit below count -> more:true + a next cursor
+r = await taxii.handle(D, cfg, U("/taxii2/api/collections/indicators/objects/?limit=1"), "/taxii2/api/collections/indicators/objects/");
+j = await r.json();
+ok("more:true + next cursor when paging", j.more === true && typeof j.next === "string" && j.objects.length === 1);
 
 // ---- added_after filter (everything has the same added ts => after=now returns none) ----
 const future = new Date(Date.now() + 60000).toISOString();
