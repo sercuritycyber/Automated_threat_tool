@@ -9,6 +9,7 @@ import { send, verifyTarget, channelAvailability } from "./channels.js";
 import { sign, verify, newId, BadToken, timingSafeEqual } from "./tokens.js";
 import { page, landing, subscribeForm, managePage, simple, briefPage, paidPage, feedXml, LOGO_SVG, chanLabel, freeLanding } from "./pages.js";
 import { legalHtml } from "./legal.js";
+import * as taxii from "./taxii.js";
 import { html, text, json, redirect, q, esc, clientIp, rateLimit, nowIso } from "./util.js";
 
 const TERMS_VERSION = db.TERMS_VERSION_DEFAULT;
@@ -236,6 +237,15 @@ async function route(request, env, ctx, url, path, cfg) {
   // both the automated pipeline and manual one-off posts, so it catches
   // everything the decision.json/posts_log path can miss (held/skipped
   // drafts, or a manually-fired post that never went through a full run).
+  if (path === "/internal/stix" && m === "POST") {
+    const auth = (request.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
+    if (!env.INGEST_SECRET || !timingSafeEqual(auth, env.INGEST_SECRET)) return json({ error: "unauthorized" }, 401);
+    let body; try { body = await request.json(); } catch { return json({ error: "bad json" }, 400); }
+    const n = await taxii.ingest(D, body);
+    return json({ ok: true, ingested: n });
+  }
+  if (path === "/taxii2" || path.startsWith("/taxii2/")) return taxii.handle(D, cfg, url, path);
+
   if (path === "/internal/public-feed" && m === "POST") {
     const auth = (request.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
     if (!env.INGEST_SECRET || !timingSafeEqual(auth, env.INGEST_SECRET)) return json({ error: "unauthorized" }, 401);

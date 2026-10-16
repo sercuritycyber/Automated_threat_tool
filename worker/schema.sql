@@ -161,3 +161,16 @@ CREATE TABLE IF NOT EXISTS public_feed (
   posted_at    TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_public_feed_posted ON public_feed(posted_at);
+
+-- TAXII 2.1 / STIX 2.1 feed: atomic indicators pushed from the VM IOC store,
+-- served read-only at /taxii2/ for Splunk / Sentinel native connectors.
+CREATE TABLE IF NOT EXISTS stix_objects (
+  id       TEXT PRIMARY KEY,
+  stype    TEXT NOT NULL,
+  created  TEXT,
+  modified TEXT,
+  added    TEXT NOT NULL,
+  pattern  TEXT,
+  obj      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_stix_added ON stix_objects(added);
