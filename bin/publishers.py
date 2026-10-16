@@ -517,8 +517,63 @@ def post_discord(text: str, creds: dict, settings: dict, short_text=None, log=pr
     return _res("discord", True, id=msg.get("id", ""), url="")
 
 
+# ---------------------------------------------------------------- Facebook (page)
+_FB_GRAPH = "https://graph.facebook.com"
+
+
+def _fb_comment(ver: str, post_id: str, text: str, token: str, log) -> bool:
+    """Add the first comment on a FB post (where links go — FB throttles
+    link-in-body). Non-fatal: the post already succeeded."""
+    if not (text and post_id):
+        return False
+    try:
+        r = requests.post(f"{_FB_GRAPH}/{ver}/{post_id}/comments",
+                          data={"message": text, "access_token": token}, timeout=25)
+        if r.ok:
+            return True
+        log(f"facebook: first comment failed HTTP {r.status_code}: "
+            f"{r.text[:160].replace(str(token), '<redacted>')}")
+    except requests.RequestException as e:
+        log(f"facebook: first comment error ({str(e)[:120]})")
+    return False
+
+
+def post_facebook(text: str, creds: dict, settings: dict, short_text=None, log=print,
+                  *, comment=None) -> dict:
+    """Post to a Facebook Page feed via the Graph API. Needs FB_PAGE_ID and a page
+    (or system-user) access token FB_PAGE_ACCESS_TOKEN with pages_manage_posts.
+
+    Links: if a first `comment` is given, the body is posted link-free and the link
+    rides in the first comment (FB throttles link-in-body — better reach). Otherwise,
+    a URL in the text is passed as `link` so the post still carries its source as a
+    preview card. The token is read from creds (config/env) and never logged."""
+    page_id = (creds.get("FB_PAGE_ID") or "").strip()
+    token = creds.get("FB_PAGE_ACCESS_TOKEN")
+    if not (page_id and token):
+        return _res("facebook", False, error="need FB_PAGE_ID + FB_PAGE_ACCESS_TOKEN")
+    ver = str(settings.get("publish", {}).get("facebook_api_version", "v21.0"))
+    data = {"message": text, "access_token": token}
+    link = _first_url(text)
+    if link and not comment:          # no first comment → keep the source as a body preview
+        data["link"] = link
+    try:
+        r = requests.post(f"{_FB_GRAPH}/{ver}/{page_id}/feed", data=data, timeout=30)
+    except requests.RequestException as e:
+        return _res("facebook", False, error=str(e)[:300])
+    if not r.ok:
+        # Graph errors echo the request; never surface the token in the message.
+        body = r.text[:300].replace(str(token), "<redacted>")
+        return _res("facebook", False, error=f"HTTP {r.status_code}: {body}")
+    pid = (r.json() or {}).get("id", "")
+    url = f"https://www.facebook.com/{pid}" if pid else ""
+    if comment and pid:
+        _fb_comment(ver, pid, comment, token, log)
+    return _res("facebook", True, id=pid, url=url)
+
+
 PROVIDERS = {
     "linkedin": post_linkedin,
+    "facebook": post_facebook,
     "mastodon": post_mastodon,
     "bluesky": post_bluesky,
     "x": post_x,
@@ -527,7 +582,7 @@ PROVIDERS = {
     "discord": post_discord,
 }
 
-PROVIDER_LABELS = {"linkedin": "LinkedIn", "mastodon": "Mastodon", "bluesky": "Bluesky",
+PROVIDER_LABELS = {"linkedin": "LinkedIn", "facebook": "Facebook (page)", "mastodon": "Mastodon", "bluesky": "Bluesky",
                    "x": "X / Twitter", "email": "Email", "telegram": "Telegram",
                    "discord": "Discord"}
 
@@ -539,6 +594,11 @@ PROVIDER_KEYS: dict[str, list[tuple[str, str, str]]] = {
         ("LINKEDIN_CLIENT_ID", "OAuth client ID", "optional — enables auto token refresh"),
         ("LINKEDIN_CLIENT_SECRET", "OAuth client secret", "optional"),
         ("LINKEDIN_REFRESH_TOKEN", "OAuth refresh token", "optional"),
+    ],
+    "facebook": [
+        ("FB_PAGE_ID", "Page ID", "the numeric Facebook Page ID (Page → About → Page transparency)"),
+        ("FB_PAGE_ACCESS_TOKEN", "Page access token", "page or system-user token with pages_manage_posts + "
+                                                      "pages_read_engagement. Rotate if ever exposed."),
     ],
     "mastodon": [
         ("MASTODON_BASE_URL", "Instance URL", "e.g. https://infosec.exchange"),
@@ -575,6 +635,7 @@ PROVIDER_KEYS: dict[str, list[tuple[str, str, str]]] = {
 # which env keys, if present, mean "this provider is configured"
 _REQUIRED = {
     "linkedin": ["LINKEDIN_ACCESS_TOKEN"],
+    "facebook": ["FB_PAGE_ID", "FB_PAGE_ACCESS_TOKEN"],
     "mastodon": ["MASTODON_BASE_URL", "MASTODON_ACCESS_TOKEN"],
     "bluesky": ["BLUESKY_HANDLE", "BLUESKY_APP_PASSWORD"],
     "x": ["X_API_KEY", "X_API_SECRET", "X_ACCESS_TOKEN", "X_ACCESS_SECRET"],
@@ -604,6 +665,8 @@ def post_all(text: str, creds: dict, settings: dict, *, short_text: str | None =
         try:
             if name == "linkedin":   # _li_shape adds the motto (above the tags)
                 out.append(fn(text, creds, settings, short_text, log, comment=comment))
+            elif name == "facebook":  # motto in the body; link/source rides in the first comment
+                out.append(fn(add_motto(text), creds, settings, short_text, log, comment=comment))
             elif name in _SHORT_NETWORKS:
                 out.append(fn(text, creds, settings, short_text, log))
             else:
