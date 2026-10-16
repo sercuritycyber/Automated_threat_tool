@@ -1801,7 +1801,40 @@ def _test_intel(env: dict) -> str:
     return "<br>".join(out)
 
 
-_TESTS = {"linkedin": _test_linkedin, "mastodon": _test_mastodon, "bluesky": _test_bluesky,
+def _test_facebook(env: dict) -> str:
+    page = (env.get("FB_PAGE_ID") or "").strip()
+    tok = env.get("FB_PAGE_ACCESS_TOKEN")
+    if not (page and tok):
+        return "No FB_PAGE_ID / FB_PAGE_ACCESS_TOKEN set."
+    try:
+        r = requests.get(f"https://graph.facebook.com/v21.0/{page}",
+                         params={"fields": "id,name", "access_token": tok}, timeout=15)
+    except Exception as ex:  # noqa
+        return f"error: {e(str(ex))}"
+    if not r.ok:
+        return f"HTTP {r.status_code}: <span class=mono>{e(r.text[:300].replace(tok, '<redacted>'))}</span>"
+    j = r.json()
+    return f"OK — posts to page <b>{e(j.get('name', '?'))}</b> (<span class=mono>{e(j.get('id', '?'))}</span>)"
+
+
+def _test_linkedin_personal(env: dict) -> str:
+    tok = env.get("LINKEDIN_ACCESS_TOKEN")
+    if not tok:
+        return "No LINKEDIN_ACCESS_TOKEN set."
+    try:
+        r = requests.get("https://api.linkedin.com/v2/userinfo",
+                         headers={"Authorization": f"Bearer {tok}"}, timeout=15)
+    except Exception as ex:  # noqa
+        return f"error: {e(str(ex))}"
+    if not r.ok:
+        return f"HTTP {r.status_code}"
+    j = r.json()
+    return (f"OK — personal posts go out as <b>{e(j.get('name', '?'))}</b> "
+            f"(<span class=mono>urn:li:person:{e(j.get('sub', '?'))}</span>), ignoring the org pin.")
+
+
+_TESTS = {"linkedin": _test_linkedin, "linkedin-personal": _test_linkedin_personal,
+          "facebook": _test_facebook, "mastodon": _test_mastodon, "bluesky": _test_bluesky,
           "x": _test_x, "email": _test_email, "claude": _test_claude,
           "backup_ai": _test_backup_ai, "intel": _test_intel}
 
