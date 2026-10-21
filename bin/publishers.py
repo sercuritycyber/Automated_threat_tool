@@ -135,7 +135,7 @@ LI_LINK_HINT = "cti.securitycyber.uk"
 # above the hashtags on every long-form network. Idempotent.
 MOTTO_FULL = ("You don't have an intelligence problem, you have an ingestion problem. "
               "You don't have an information problem, you have a triage problem.")
-MOTTO = "You don't have an information problem. You have a triage problem."
+MOTTO = "We provide IOC, not POC. You don't have an information problem. You have a triage problem."
 # Networks whose posts are built from a ~260-300 char teaser: the motto would
 # crowd out the alert itself, so they are the one exception.
 _SHORT_NETWORKS = {"bluesky", "x"}
