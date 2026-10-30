@@ -242,7 +242,7 @@ def schedule_social(posts: list[dict], decision: dict, settings: dict,
     """
     now = datetime.now(timezone.utc)
     pub = settings.get("publish", {})
-    delay_h = float(pub.get("social_delay_hours", 0) or 0)
+    delay_h = 0  # Free service: no subscriber head start.
     bypass = float(pub.get("social_delay_bypass_score", 10 ** 6) or 10 ** 6)
 
     due, waiting = [], []

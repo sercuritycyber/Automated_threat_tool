@@ -1,3 +1,4 @@
+import {route as advisoryRoute} from "./advisories.js";
 // SecurityCyber CTI Alerts — Cloudflare Worker entrypoint.
 import { config, problems, advisories, priceToTier, monthlyPence,
   paymentLink, paymentLinkUrl, canCheckout, buyableMap, takingRealMoney, MOTTO_SHORT } from "./config.js";
@@ -20,6 +21,8 @@ export default {
     const path = url.pathname;
     const cfg = config(env);
     try {
+      const advisoryResponse = await advisoryRoute(request, env, cfg, url);
+      if (advisoryResponse) return advisoryResponse;
       return await route(request, env, ctx, url, path, cfg);
     } catch (e) {
       console.error("worker error", path, e && e.stack || e);
@@ -31,6 +34,8 @@ export default {
   async scheduled(event, env, ctx) {
     const cfg = config(env);
     const D = env.DB;
+    // Subscriber lifecycle and digests are retired.
+    if (cfg.free_mode) return;
     // 03:30 Sunday cron = retention; everything else = digest.
     // Matched on the time fields only — the day-of-week is written as SUN
     // (Cloudflare rejects `0`), and an exact-string compare would silently
@@ -96,6 +101,9 @@ export default {
 async function route(request, env, ctx, url, path, cfg) {
   const m = request.method;
   const D = env.DB;
+  const retired = ["subscribe", "account", "welcome", "brief", "confirm", "manage", "unsubscribe", "channel", "feed", "webhooks"];
+  if (retired.includes(path.split("/")[1]) || path.startsWith("/admin/"))
+    return json({ error: "retired", message: "CTI is free at / and /api/alerts. No account or payment is required." }, 410);
 
   if (path === "/logo.svg")
     return new Response(LOGO_SVG, { headers: { "Content-Type": "image/svg+xml", "Cache-Control": "public, max-age=86400" } });
@@ -104,9 +112,7 @@ async function route(request, env, ctx, url, path, cfg) {
     catch (e) { console.error("healthz", e); return text("degraded", 503); }
   }
   if (path === "/robots.txt")
-    return text("User-agent: *\nAllow: /$\nAllow: /subscribe\nAllow: /brief\nAllow: /privacy\nAllow: /terms\nAllow: /cookies\n"
-      + "Disallow: /manage\nDisallow: /confirm\nDisallow: /unsubscribe\nDisallow: /welcome\nDisallow: /brief/thanks\n"
-      + "Disallow: /channel\nDisallow: /webhooks\nDisallow: /internal\nDisallow: /admin\nDisallow: /account\nDisallow: /feed\n");
+    return text("User-agent: *\nAllow: /\nDisallow: /internal/\nDisallow: /admin/\nSitemap: " + cfg.site_url + "/sitemap.xml\n");
 
   // ---- private RSS feed ----
   // /feed/<token>.xml — the token is the subscriber's rss channel target, so
@@ -244,7 +250,13 @@ async function route(request, env, ctx, url, path, cfg) {
     const n = await taxii.ingest(D, body);
     return json({ ok: true, ingested: n });
   }
-  if (path === "/taxii2" || path.startsWith("/taxii2/")) return taxii.handle(D, cfg, url, path);
+  if (path === "/taxii2" || path.startsWith("/taxii2/")) {
+    const ct = {"Content-Type":"application/taxii+json;version=2.1"};
+    if (m !== "GET") return json({title:"Read-only TAXII collection"},405,{...ct,Allow:"GET"});
+    const accept=request.headers.get("accept") || "*/*";
+    if (!accept.includes("*/*") && !accept.includes("application/taxii+json")) return json({title:"TAXII 2.1 media type required"},406,ct);
+    return taxii.handle(D, cfg, url, path);
+  }
 
   if (path === "/internal/public-feed" && m === "POST") {
     const auth = (request.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
@@ -1149,14 +1161,14 @@ async function internalIngest(request, env, cfg, ctx) {
   // Filtering on post_text alone silently dropped every subscriber-only alert.
   const posts = (body.posts || []).filter((p) =>
     (p.subscriber_text || "").trim() || (p.post_text || "").trim());
-  await db.ensureForeverFree(env.DB, cfg.forever_free_emails).catch((e) => console.error("forever-free", e));
+
   for (const p of posts) {
     p.post_key = normKey(p);
     await db.logPost(env.DB, p);
   }
   // instant fan-out (in the background so the pipeline call returns fast)
   ctx.waitUntil((async () => {
-    const subs = (await db.activeForDelivery(env.DB)).filter(canDeliver);
+    const subs = cfg.free_mode ? [] : (await db.activeForDelivery(env.DB)).filter(canDeliver);
     for (const s of subs) await deliverInstant(env, cfg, s, posts, "instant").catch((e) => console.error("instant", s.id, e));
     // Shared subscriber channel on Discord. Everyone in the channel sees the
     // same feed, so it uses one fixed threshold, not anyone's personal filter.
@@ -1470,7 +1482,7 @@ async function adminApi(request, env, cfg, url, path) {
   if (seg[1] === "digest" && request.method === "POST") {
     const posts = await db.postsSince(env.DB, cfg.digest_window_hours || 24);
     if (!posts.length) return json({ ran: true, posts: 0, delivered: 0 });
-    const subs = (await db.activeForDelivery(env.DB)).filter(canDeliver);
+    const subs = cfg.free_mode ? [] : (await db.activeForDelivery(env.DB)).filter(canDeliver);
     let delivered = 0;
     for (const su of subs) {
       try { await deliverDigest(env, cfg, su, posts); delivered++; }

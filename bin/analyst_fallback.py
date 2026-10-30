@@ -1,16 +1,7 @@
 #!/usr/bin/env python3
-"""Deterministic stand-in for the `claude -p` analyst.
-
-Runs when the LLM analyst is unavailable — token limits, an outage, a bad
-response. It cannot do judgement, so it does NOT decide to post anything
-publicly (`decision: "skip"`, `posts: []`). What it CAN do is keep the paid
-subscriber feed alive: it turns every pre-scored candidate at or above the
-subscriber floor into an `alerts[]` entry with a plain, honest write-up built
-from the fields ingest already collected — clearly marked as an unverified
-auto-summary so nobody mistakes it for the analyst's work.
-
-Reads  state/candidates.json
-Writes state/decision.json   (only if the analyst left none, or left a stale one)
+"""Deterministic source summaries for the free feed. No model calls.
+The independent advisory archive is the durable primary distribution path.
+Social posts remain empty: source excerpts are not independently checked analysis.
 """
 from __future__ import annotations
 
@@ -71,7 +62,7 @@ def build(cands: dict) -> dict:
     return {
         "run_at": datetime.now(timezone.utc).isoformat(),
         "decision": "skip",
-        "reason": f"analyst unavailable — deterministic fallback produced {len(alerts)} unverified subscriber alert(s), no public post",
+        "reason": f"deterministic packaging produced {len(alerts)} source-reported free alert(s), no public post",
         "min_score": int(cands.get("min_score", 60)),
         "posts": [],
         "alerts": alerts,
@@ -90,21 +81,12 @@ def main() -> int:
         cands = json.loads(src.read_text())
     except (OSError, json.JSONDecodeError) as e:
         print(f"[analyst_fallback] no usable candidates.json ({e})")
-        return 0
+        return 1
 
     dec_path = STATE / "decision.json"
-    # Only write if the analyst genuinely left nothing fresh for this run.
-    if dec_path.exists():
-        try:
-            dec = json.loads(dec_path.read_text())
-            if dec.get("run_at", "") >= cands.get("generated_at", "") and not dec.get("fallback"):
-                print("[analyst_fallback] a fresh analyst decision already exists — leaving it")
-                return 0
-        except (OSError, json.JSONDecodeError):
-            pass
-
     out = build(cands)
-    dec_path.write_text(json.dumps(out, indent=2))
+    from advisory_pipeline import atomic_json
+    atomic_json(dec_path, out)
     print(f"[analyst_fallback] wrote {len(out['alerts'])} unverified alert(s), decision=skip")
     return 0
 

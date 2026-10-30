@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "SecurityCyber CTI Alerts — public subscription service (Cloudflare Worker)",
+  "description": "SecurityCyber CTI Alerts \u2014 public subscription service (Cloudflare Worker)",
   "license": "UNLICENSED",
   "scripts": {
     "dev": "wrangler dev --local --persist-to .wrangler/state",
@@ -11,7 +11,7 @@
     "db:remote": "wrangler d1 execute cti-subs --remote --file schema.sql",
     "deploy": "wrangler deploy",
     "tail": "wrangler tail",
-    "test": "node test/run.mjs && node test/db.mjs && node test/taxii.mjs",
+    "test": "node test/run.mjs && node test/db.mjs && node test/taxii.mjs && node test/advisories.mjs",
     "test:flow": "node test/flow.mjs"
   },
   "devDependencies": {
