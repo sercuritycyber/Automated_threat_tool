@@ -48,6 +48,22 @@ PY
 
 echo "=== CTI run $TS ==============================================="
 
+# --- pre-flight: agent-config integrity guard (opt-in) -----------------
+# Detects the AGENTS.md/CLAUDE.md agent-hijack class (rogue ANTHROPIC_BASE_URL,
+# injected instruction files in Downloads, broad Codex trust). OFF by default so
+# it can never break a run on deploy; set AGENT_GUARD=1 to enable, and
+# AGENT_GUARD_STRICT=1 to abort on a finding (default: warn + continue).
+if [[ "${AGENT_GUARD:-0}" == "1" ]]; then
+  echo "[run] pre-flight : agent-config guard"
+  if ! python3 "$ROOT/bin/agent_guard.py" --alert; then
+    if [[ "${AGENT_GUARD_STRICT:-0}" == "1" ]]; then
+      fail agent_guard 2
+    else
+      echo "[run] agent_guard flagged indicators (non-strict: continuing; set AGENT_GUARD_STRICT=1 to abort)"
+    fi
+  fi
+fi
+
 echo "[run] stage 1/3 : ingest"
 python3 "$ROOT/bin/ingest.py" || fail ingest $?
 

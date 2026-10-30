@@ -1,0 +1,8 @@
+[Unit]
+Description=Agent-config integrity guard (AGENTS.md/CLAUDE.md hijack detector)
+After=network-online.target
+
+[Service]
+Type=oneshot
+# Source config/env for CTI_ALERT_WEBHOOK, then run the read-only guard with alerting.
+ExecStart=/bin/bash -lc 'set -a; . %h/Threatintel/config/env 2>/dev/null; set +a; exec python3 %h/Threatintel/bin/agent_guard.py --alert'
