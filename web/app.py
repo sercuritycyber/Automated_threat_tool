@@ -3039,6 +3039,15 @@ async def marketing_compose(request: Request):
 
 
 # ----------------------------------------------------------------------------- main
+
+
+@app.middleware("http")
+async def retired_subscriptions(request: Request, call_next):
+    if request.url.path.split("/")[1] in {"subscribers", "subscriptions", "billing"}:
+        return HTMLResponse("<h1>CTI is free</h1><p>Subscriber accounts and billing are retired.</p>", status_code=410)
+    return await call_next(request)
+
+
 if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("CTI_UI_PORT", "8799"))

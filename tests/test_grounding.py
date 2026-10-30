@@ -76,6 +76,10 @@ from pathlib import Path
 sys.path.insert(0, {str(ROOT / 'bin')!r})
 import publish_linkedin as P
 P.STATE = Path({str(tmp)!r}); P.SOCIAL_QUEUE = P.STATE / "social_queue.json"
+def capture_schedule(posts, decision, settings, operator=False):
+    P.SOCIAL_QUEUE.write_text(json.dumps({{"queue": posts}}))
+    return []
+P.schedule_social = capture_schedule
 P.archive_draft = lambda *a, **k: None
 P.write_last_run = lambda **k: None
 P.load_settings = lambda: {{"publish": {{"social_delay_hours": 5}}, "analyst": {{}}}}

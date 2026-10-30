@@ -47,9 +47,9 @@ out = P.schedule_social(
      {"title": "hi", "url": "u2", "lane": "intel", "score": 90},
      {"title": "norm", "url": "u3", "lane": "intel", "score": 50}],
     DEC, S, operator=False)
-chk("breaking + score>=85 go now", sorted(o["title"] for o in out), ["brk", "hi"])
+chk("free service has no subscriber delay", sorted(o["title"] for o in out), ["brk", "hi", "norm"])
 q = json.loads(P.SOCIAL_QUEUE.read_text())["queue"]
-chk("normal intel parked for lead time", [x["title"] for x in q], ["norm"])
+chk("no subscriber waiting queue", [x["title"] for x in q], [])
 
 # ---- queue drains even with delay 0 (the old bug) ----------------------
 past = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()

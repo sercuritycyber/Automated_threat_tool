@@ -42,11 +42,15 @@ export async function ingest(D, body) {
   const now = new Date().toISOString();
   const stmts = [];
   for (const o of objs) {
-    if (!o || o.type !== "indicator" || !o.id) continue;
+    if (!o || o.type !== "indicator" || !/^indicator--[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(o.id || "")) continue;
+    if (o.spec_version !== "2.1" || o.pattern_type !== "stix" || typeof o.pattern !== "string" || !o.pattern.trim()) continue;
+    if (![o.created,o.modified,o.valid_from].every(v=>typeof v==="string"&&v.endsWith("Z")&&Number.isFinite(Date.parse(v)))) continue;
+    if (Date.parse(o.modified)<Date.parse(o.created)) continue;
     stmts.push(D.prepare(
       `INSERT INTO stix_objects (id, stype, created, modified, added, pattern, obj)
        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-       ON CONFLICT(id) DO UPDATE SET modified = ?4, pattern = ?6, obj = ?7`,
+       ON CONFLICT(id) DO UPDATE SET modified = ?4, pattern = ?6, obj = ?7, added = ?5
+       WHERE julianday(excluded.modified) > julianday(stix_objects.modified)`,
     ).bind(o.id, o.type, o.created || now, o.modified || now, now, o.pattern || "", JSON.stringify(o)));
   }
   if (stmts.length) await D.batch(stmts);
@@ -74,35 +78,54 @@ export async function handle(D, cfg, url, path) {
   if (path === BASE || path === BASE + "/") {
     return tjson(collectionObj());
   }
-  if (path === BASE + "/objects" || path === BASE + "/objects/") {
-    // `next` is TAXII 2.1 pagination; `added_after` is the incremental filter.
-    // Both resolve to "added > cursor" here (added is monotonic per ingest).
-    const cursor = url.searchParams.get("next") || url.searchParams.get("added_after") || "";
-    const limit = Math.min(Number(url.searchParams.get("limit")) || 500, 2000);
-    let rows = [];
+  const suffix = path.slice(BASE.length).replace(/\/$/, "");
+  const objectMatch = suffix.match(/^\/objects\/(indicator--[a-f0-9-]+)(\/versions)?$/);
+  if (path.startsWith(BASE + "/") && (["/objects", "/manifest"].includes(suffix) || objectMatch)) {
+    const limitRaw = url.searchParams.get("limit") || "500";
+    const limit = Number(limitRaw);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 2000) return tjson({title:"Invalid limit"},400);
+    const clauses=[], binds=[];
+    const add=(sql,...values)=>{clauses.push(sql);binds.push(...values);};
+    const after=url.searchParams.get("added_after");
+    if(after) {
+      if(!Number.isFinite(Date.parse(after)))return tjson({title:"Invalid added_after"},400);
+      add("added > ?",new Date(after).toISOString());
+    }
+    const cursor=url.searchParams.get("next");
+    if(cursor) {
+      try {
+        const pair=JSON.parse(atob(cursor));
+        if(!Array.isArray(pair)||pair.length!==2||!Number.isFinite(Date.parse(pair[0]))||typeof pair[1]!=="string")throw Error();
+        add("(added > ? OR (added = ? AND id > ?))",pair[0],pair[0],pair[1]);
+      } catch {return tjson({title:"Invalid pagination cursor"},400);}
+    }
+    if(objectMatch)add("id = ?",objectMatch[1]);
+    for(const [param,col] of [["match[id]","id"],["match[type]","stype"]]) {
+      const value=url.searchParams.get(param);
+      if(value) {const values=value.split(",");if(values.length>100)return tjson({title:"Too many filters"},400);add(col+" IN ("+values.map(()=>"?").join(",")+")",...values);}
+    }
+    const spec=url.searchParams.get("match[spec_version]");
+    if(spec&&!spec.split(",").includes("2.1"))add("1 = 0");
+    const version=url.searchParams.get("match[version]");
+    if(version&&!['all','first','last'].includes(version)) {
+      if(!Number.isFinite(Date.parse(version)))return tjson({title:"Invalid version"},400);
+      add("julianday(modified) = julianday(?)",new Date(version).toISOString());
+    }
+    let rows;
     try {
-      let sql = "SELECT obj, added FROM stix_objects";
-      const binds = [];
-      if (cursor) { sql += " WHERE added > ?1"; binds.push(cursor); }
-      sql += ` ORDER BY added ASC LIMIT ?${binds.length + 1}`;
-      binds.push(limit);
-      const res = await D.prepare(sql).bind(...binds).all();
-      rows = res.results || [];
-    } catch (_e) {
-      rows = [];   // table not migrated yet / transient — serve an empty envelope, never 500
-    }
-    const objects = rows.map((r) => JSON.parse(r.obj));
-    const more = rows.length === limit;
-    const envelope = { more, objects };
-    if (more && rows.length) envelope.next = rows[rows.length - 1].added;   // cursor for the next page
-    // TAXII 2.1: the Get Objects response is an Envelope resource -> taxii+json, not stix+json.
-    const headers = { "Content-Type": TAXII_CT, "Access-Control-Allow-Origin": "*",
-      "Cache-Control": "public, max-age=300" };
-    if (rows.length) {
-      headers["X-TAXII-Date-Added-First"] = rows[0].added;
-      headers["X-TAXII-Date-Added-Last"] = rows[rows.length - 1].added;
-    }
-    return new Response(JSON.stringify(envelope), { status: 200, headers });
+      const sql="SELECT id, obj, added, modified FROM stix_objects"+(clauses.length?" WHERE "+clauses.join(" AND "):"")+" ORDER BY added ASC, id ASC LIMIT ?";
+      rows=(await D.prepare(sql).bind(...binds,limit+1).all()).results||[];
+    } catch {return tjson({title:"Feed temporarily unavailable",http_status:"503"},503);}
+    const more=rows.length>limit;rows=rows.slice(0,limit);
+    if(objectMatch&&!rows.length)return tjson({title:"Object not found"},404);
+    const envelope={more};
+    if(objectMatch?.[2])envelope.versions=rows.map(r=>r.modified);
+    else if(suffix==="/manifest")envelope.objects=rows.map(r=>({id:r.id,date_added:r.added,version:r.modified,media_type:STIX_CT}));
+    else envelope.objects=rows.map(r=>JSON.parse(r.obj));
+    if(more)envelope.next=btoa(JSON.stringify([rows.at(-1).added,rows.at(-1).id]));
+    const headers={"Cache-Control":"no-cache"};
+    if(rows.length){headers["X-TAXII-Date-Added-First"]=rows[0].added;headers["X-TAXII-Date-Added-Last"]=rows.at(-1).added;}
+    return tjson(envelope,200,headers);
   }
   return tjson({ title: "Not Found", http_status: "404" }, 404);
 }

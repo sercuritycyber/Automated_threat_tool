@@ -263,7 +263,7 @@ ok("one-off checkout: mode=payment + line_items", briefEnc.includes("mode=paymen
 
 // ---- free mode ----
 const fc = config({ ...cenv, CONFIG: JSON.stringify({ free_mode: true }), MAIN_SITE: "https://securitycyber.uk" });
-ok("free_mode defaults off", config(cenv).free_mode === false && fc.free_mode === true);
+ok("free mode permanent", config(cenv).free_mode === true && fc.free_mode === true);
 ok("discord falls back to the main site", discordUrl(fc) === "https://securitycyber.uk/about#discord");
 ok("discord uses the invite when set", discordUrl(config({ ...cenv, DISCORD_INVITE: " https://discord.gg/abc " })) === "https://discord.gg/abc");
 const fl = freeLanding(fc, [{ title: "<b>x</b> hijack", text: "Patch it. https://cti.securitycyber.uk", source_url: "javascript:alert(1)", score: 60, posted_at: new Date().toISOString() },
@@ -279,7 +279,7 @@ ok("free landing: renders full alerts (Do now, write-up, CVE, source)", fa.inclu
   && fa.includes("Hunt: new admins") && fa.includes("CVE-2026-1") && fa.includes('href="https://example.com/x"'));
 const fp = page(fc, "t", "");
 ok("free-mode nav drops Services/Contact", !fp.includes("/services") && !fp.includes("/contact\"") && fp.includes(">Free CTI<"));
-ok("paid-mode nav unchanged", page(c, "t", "").includes("/services"));
+ok("free navigation", !page(c, "t", "").includes("/services"));
 
 // ---- markdown / legal ----
 ok("mdToHtml headings+links", mdToHtml("# Hi\n[x](https://y.z)").includes("<h1>Hi</h1>") && mdToHtml("[x](https://y.z)").includes('href="https://y.z"'));

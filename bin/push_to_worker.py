@@ -1,29 +1,7 @@
 #!/usr/bin/env python3
-"""Push this run's subscriber alerts to the CTI Alerts Worker for fan-out.
-
-No-op unless CTI_WORKER_URL + CTI_INGEST_SECRET are set (in config/env). The
-Worker owns all subscriber state, delivery and the daily digest; this just
-hands it the fresh alerts.
-
-What gets sent, and why it is NOT the social posts
---------------------------------------------------
-Subscribers pay for more than the free feed, so this reads `alerts[]` from
-decision.json — every story the analyst scored at or above the subscriber
-floor, each with `subscriber_text` (versions, exposure check, action,
-detection) that never appears on socials.
-
-Two consequences that were previously bugs:
-
-  * It runs even when `decision` is "skip". A quiet day on LinkedIn is not a
-    quiet day for someone paying to be told about the 55-scoring thing that
-    wasn't worth a public post. Gating this on "did we post?" meant paying
-    subscribers got nothing on most runs.
-  * `alerts[]` is uncapped. The social feed is capped so the brand doesn't
-    look like a spam channel; that cap is a publishing concern and must not
-    reach through to people who asked to be told everything.
-
-Falls back to `posts[]` when `alerts[]` is absent, so an older analyst output
-(or a hand-written decision.json) still delivers something.
+"""Push free source alerts to the Worker and existing shared Discord channel.
+The durable advisory outbox is separate. Explicit empty alerts mean no delivery;
+legacy post fallback is used only when alerts are absent.
 """
 from __future__ import annotations
 
@@ -36,8 +14,7 @@ import requests
 
 ROOT = Path(__file__).resolve().parent.parent
 
-# Sent for every alert. `subscriber_text` is the paid write-up; `post_text` is
-# the social hook and is only a fallback body.
+# subscriber_text is retained as a compatibility field for free technical text.
 FIELDS = ("title", "url", "source", "score", "cve_ids", "category", "exposure",
           "confidence", "subscriber_text", "action", "post_text", "short_text")
 
@@ -53,7 +30,9 @@ def _clean(item: dict) -> dict:
 def collect(dec: dict) -> list[dict]:
     """Alerts to deliver, newest analyst shape first, older shape as fallback."""
     alerts = dec.get("alerts")
-    if isinstance(alerts, list) and alerts:
+    if "alerts" in dec:
+        if not isinstance(alerts, list) or any(not isinstance(a, dict) for a in alerts):
+            raise ValueError("invalid alerts")
         return [c for c in (_clean(a) for a in alerts) if c]
     # Legacy: only the posted items were ever available.
     posts = dec.get("posts") or []
@@ -88,9 +67,10 @@ def main() -> int:
                           headers={"Authorization": f"Bearer {secret}"}, timeout=25)
         print(f"[push_to_worker] {r.status_code} {r.text[:160]}")
         if r.status_code >= 400:
-            return 0  # non-fatal: the run must not fail over subscriber fan-out
+            return 1
     except requests.RequestException as e:
         print(f"[push_to_worker] request failed: {e}")
+        return 1
     return 0
 
 

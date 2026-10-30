@@ -1,280 +1,163 @@
-# SecurityCyber — Automated CTI → Social
+# SecurityCyber — Free operational CTI
 
-Unattended cyber-threat-intelligence pipeline. Every few hours it pulls the major
-security feeds, cross-references the CISA KEV catalog, uses **Claude Code**
-(`claude -p`, no separate LLM API key) to verify and score the stories worth
-telling defenders about, then drafts and publishes them to your channels —
-**LinkedIn, Mastodon, Bluesky, X, or email**, any combination.
+A deterministic, source-attributed CTI pipeline for defenders. Ingest deduplicates
+and scores feed items using rules and CISA KEV context. Eligible items become
+searchable advisories with three takeaways, preserved technical source text,
+provenance, RSS and STIX exports. No payment, account or AI service is required.
 
-## Pipeline Architecture
+AI remains a **complementary fact-checking engine**. When the existing Codex CLI
+is available and authenticated, it can consult public sources and record a
+separate check with evidence links. It cannot rewrite source records, assert
+human verification, or block publishing. Source excerpts are not novel research,
+confirmed attribution, or automatic evidence that an IP/hash is malicious.
+
+## Logic flow
 
 ```mermaid
-flowchart LR
-    subgraph IN["1 · Ingest"]
-        direction TB
-        F["Security feeds<br/>config/feeds.yaml"] --> I["bin/ingest.py<br/>dedupe · cluster · pre-score"]
-        K["CISA KEV catalog"] --> I
-    end
-    I --> C[("state/candidates.json")]
-
-    subgraph AN["2 · Analyst"]
-        C --> A["AI analyst<br/>verifies every claim against the source<br/>scores impact 0-100"]
-        A -. "engine down" .-> B["fallback chain<br/>Claude → Codex → Gemini → OpenAI-compatible"]
-        B -. "all down" .-> D["deterministic fallback<br/>alerts only, no public post"]
-    end
-    A --> J[("state/decision.json<br/>posts + alerts")]
-    H["Honeynet bridge<br/>weekly first-party data"] -.-> J
-
-    subgraph GU["3 · Guards"]
-        V["validation · leak guard<br/>grounding · lint"]
-    end
-    J --> V
-
-    subgraph OUT["4 · Out"]
-        V --> W["Cloudflare Worker + D1<br/>cti.securitycyber.uk"]
-        W --> W1["free public feed<br/>/api/alerts · securitycyber.uk/cti"]
-        W --> W2["Discord alerts channel"]
-        V --> P["bin/publish_linkedin.py<br/>dry-run · review queue · daily cap"]
-        P --> S["LinkedIn · Mastodon · Bluesky · X · email"]
-    end
-
-    UI["Web control panel :8799<br/>review · compose · settings · logs"] -.-> J
-    UI -.-> P
+flowchart TD
+    A[Feeds + KEV] --> B[Deterministic ingest / dedupe / score]
+    B --> C[Validate source URL, text, score and secret leakage]
+    C --> D[Immutable content IDs + durable local outbox]
+    D --> E[Authenticated Worker ingest / idempotent D1 archive]
+    E --> F[Searchable HTML + sitemap + RSS + STIX report bundles]
+    D -. optional .-> G[AI public-web fact check]
+    G --> H[Separate local evidence / verdict records]
+    B --> I[Deterministic free alert packaging]
+    I --> J[Freshness + validation + leak guards]
+    J --> K[Existing free feed + Discord]
+    L[Existing trusted IOC producer] --> M[Authenticated STIX ingest]
+    M --> N[Existing TAXII indicators collection]
 ```
 
-Runs unattended on a systemd timer, with a local control panel on top. Full
-build guide: [`docs/SETUP.md`](docs/SETUP.md).
+The archive is delivered before optional AI runs. Delivery failures leave the
+outbox intact for retry, including runs with no new candidates. A successful
+receipt must acknowledge the exact document ID. Retries do not duplicate archive
+records. Each run attempts at most 100 pending documents. This is distinct from
+the older Discord delivery path, which retains its existing deduplication.
 
-Multi-post: a quiet day is one post or none; a Patch-Tuesday meltdown goes out in
-full — stories scoring ≥ 90 ignore the daily cap. Or write your own on the
-**Compose** page and send it anywhere.
+The default archive floor is a deterministic pre-score of **50**. Source text
+must be present; malformed items and detected secret leakage are rejected.
+Content changes produce a new advisory ID; unchanged source content reuses its
+ID. Scores and source dates from the first accepted version are retained.
+Three takeaways summarize the reported subject, a generic exposure-check action,
+and the verification limitation. Full supplied source detail remains below them.
 
-No separate LLM API billing needed: the default engine is the `claude` CLI you
-already have, driven by a systemd timer, with a local web control panel on top.
+## Public interfaces
 
-```
- systemd timer ──▶ bin/run.sh                          web/app.py  ──▶  http://127.0.0.1:8799
-                     │                                  (dashboard · review · compose · settings
-   1. ingest  ───────┤  bin/ingest.py                    · feeds · secrets · logs · run-now)
-                     │        └─▶ state/candidates.json          ▲
-   2. analyst ───────┤  claude -p prompts/analyst.md              │ reads/writes the same files
-                     │        └─▶ state/decision.json  (posts[])  │
-   3. publish ───────┘  bin/publish_linkedin.py ──▶ bin/publishers.py
-        mode=auto   → posts straight away, up to publish.max_per_day (severe bypasses it)
-        mode=review → holds every draft in state/pending.json for you to approve
-```
-
-> **Build your own:** step-by-step setup, from clone to scheduled runs, is in
-> [`docs/SETUP.md`](docs/SETUP.md).
-
-## The web control panel
-
-```
-python3 web/app.py        # → http://127.0.0.1:8799   (localhost only, no external assets)
-```
-
-| Page | What it does |
+| Interface | Purpose |
 |---|---|
-| **Dashboard** | operations view: system-state banner (LIVE / DRY-RUN / ARMED) with a live countdown to the next scheduled run, stat tiles (posts today vs cap, 7-day count, avg score, queue depth), today's run slots, a 14-day activity chart, recent posts, a run-history timeline, and quick actions — **Run now**, **Fire top candidate**, **Go live / Pause**, **Clear test data**. Soft-refreshes every 60s |
-| **Review queue** | every held post as its own card — edit the text and the short (X/Bluesky) version, pick which networks it goes to, then **Approve & post**, **Save**, **Rewrite**, or **Reject** per item, or **Approve all** |
-| **Compose** | write a post yourself, pick networks, **Post now** or **Hold for review**. Bypasses the analyst, schedule, threshold and daily cap — it's your channel |
-| **Candidates** | the current `state/candidates.json` as a table; **Draft & review** on any row hands that story to `claude -p` now and queues the draft — bypasses the schedule and the daily cap |
-| **Drafts** | every generated post, archived |
-| **Settings** | brand/voice, lookback, `min_score`, publish mode, **dry-run switch**, **which networks to post to**, daily cap + severity override + runaway guard, per-network options, schedule, notifications — writes `config/settings.yaml` |
-| **Feeds** | add / remove / enable / disable / re-weight sources, **Test all feeds** — writes `config/feeds.yaml` |
-| **Secrets** | credentials for each network (LinkedIn, Mastodon, Bluesky, X, email), write-only + masked — writes `config/env` (chmod 600); per-network **Test** button |
-| **Logs** | every run log, newest tailed inline |
+| `/advisories` | Server-rendered archive; `?q=` searches exact text, CVEs or hashes |
+| `/advisories/<id>` | Stable, indexable advisory with canonical URL |
+| `/advisories/<id>.json` | Source record and provenance |
+| `/advisories/<id>.stix.json` | STIX 2.1 report, course of action and source-mentioned CVEs |
+| `/rss.xml` | Latest 50 source advisories, including technical detail |
+| `/sitemap.xml` | Sitemap index for the complete archive |
+| `/api/alerts` | Existing free alert API, retained |
+| `/taxii2/` | Existing TAXII 2.1 discovery URL, retained |
+| `/taxii2/api/` | Existing TAXII API root, retained |
+| `/taxii2/api/collections/indicators/` | Existing read-only IOC collection, retained |
+| `/taxii2/api/collections/indicators/objects/` | Indicator polling, pagination and filters |
 
-## Why this is better than a single `claude -p "scrape everything"` prompt
+The TAXII collection continues to carry **indicators from the existing producer**.
+Advisory reports do not pollute that collection or convert incidental IPs, domains
+or hashes into indicators. OpenCTI/TIP consumers may import the separate advisory
+STIX bundles. Existing SIEM/TIP connections keep their discovery/root/collection
+settings. Anonymous reads remain supported; `/internal/stix` still requires
+`Bearer INGEST_SECRET`.
 
-| Problem with the naive version | What this does instead |
-|---|---|
-| LLM "find the feeds" every run → non-reproducible, wastes tokens, misses feeds | Fixed `config/feeds.yaml`, fetched in parallel by Python |
-| Dedup by `grep`-ing a text file → breaks on tracking params, same story from 5 sites reposted | URL normalisation + CVE/title clustering + `recently_posted` shown to the analyst |
-| Post text passed as a shell arg → quotes/newlines/emoji corrupt the command | Analyst writes `state/decision.json`; publisher reads it. Zero shell interpolation of content |
-| No objective signal, pure vibes scoring | CISA KEV catalog cross-reference (+ "added in last N days" + ransomware flag) feeds a transparent pre-score |
-| Fires and posts immediately, no undo | `dry_run: true` by default — drafts are archived to `drafts/` for review before you flip the switch |
-| Deprecated `/v2/ugcPosts` endpoint | Versioned `/rest/posts` API, OpenID `userinfo` for the author URN, refresh-token support |
-| Silent failures | `flock` single-run lock, per-run logs in `logs/`, `state/last_run.json`, optional ntfy alerts |
-| cron | systemd **user** timer: `Persistent=true` catch-up, `RandomizedDelaySec`, journald |
+TAXII supports `limit`, `next`, `added_after`, `match[id]`, `match[type]`,
+`match[spec_version]` and `match[version]`, plus manifest, individual objects and
+available object versions. Storage retains only the latest accepted version per
+indicator; this upgrade does not claim historical-version retention. An update
+advances `added`, making it visible to incremental readers; replayed/older
+versions do not. Pagination uses timestamp **and ID** so equal timestamps cannot
+skip indicators. Storage failures return 503 rather than an empty success.
+Clients should treat `next` as opaque and persist `added_after` only after draining
+all pages. Old timestamp-only `next` tokens are rejected; restart that in-flight
+poll from its prior `added_after` checkpoint after upgrading.
 
-## Setup
+## Optional AI checks
 
-```bash
-cd ~/Threatintel
-
-# 1. deps — pipeline needs requests + pyyaml (usually already there);
-#    the panel also needs fastapi + uvicorn + python-multipart
-python3 -m pip install --user -r requirements.txt   # or: pip install --break-system-packages -r requirements.txt
-
-# 2. start the panel and do everything else from the browser
-python3 web/app.py            # → http://127.0.0.1:8799
-#   - Secrets  : paste your LinkedIn access token (or run without one — it just won't post)
-#   - Settings : leave dry-run ON and mode = review for now
-#   - Dashboard: click "Run pipeline now", watch Logs, review the draft
-
-# 3. when the drafts look right: Settings → turn dry-run OFF.
-#    Keep mode = review to approve each post by hand, or set it to auto.
-
-# 4. schedule it
-systemd/install.sh            # installs the 6-hourly timer AND the panel as a service
-```
-
-Prefer the CLI? `bin/run.sh` does the same thing; `config/env` + `config/settings.yaml`
-hold everything the panel edits.
-
-## LinkedIn token
-
-1. Create an app at <https://www.linkedin.com/developers/apps>, add the
-   **Share on LinkedIn** and **Sign In with LinkedIn using OpenID Connect**
-   products.
-2. Do the 3-legged OAuth flow for scopes `openid profile w_member_social`.
-3. Put the access token in `config/env` as `LINKEDIN_ACCESS_TOKEN`.
-   Tokens last ~60 days; add `LINKEDIN_CLIENT_ID/SECRET/REFRESH_TOKEN` and the
-   publisher will refresh automatically on a 401 and write the new token back.
-
-To post to a **company page** instead of your profile, set
-`LINKEDIN_AUTHOR_URN=urn:li:organization:<id>` and use a token with
-`w_organization_social`.
-
-## Other networks
-
-Add credentials on the **Secrets** page, then tick the network in
-**Settings → Post to**. `bin/publishers.py` has one function per network.
-
-| Network | Needs | Notes |
-|---|---|---|
-| **Mastodon** | instance URL + access token (Preferences → Development) | full post; `mastodon_visibility` setting |
-| **Bluesky** | handle + app password (Settings → App passwords) | 300-char limit — posts the `short_text` / an auto-trimmed teaser |
-| **X / Twitter** | API key/secret + access token/secret, app set to *Read and write* | OAuth 1.0a; 280-char teaser; needs a paid tier for write |
-| **Email** | SMTP host/port/user/password, `EMAIL_FROM`, `EMAIL_TO` (comma list) | subject = the hook line + `email_subject_prefix`; use SES/Resend/SendGrid for volume |
-
-Every enabled network with credentials gets each post. A network with no
-credentials is skipped, not an error.
-
-## Tuning
-
-Everything below is in the panel (Settings / Feeds), or edit the files directly:
-
-| Want to… | Panel | File |
-|---|---|---|
-| add/remove/disable sources | Feeds | `config/feeds.yaml` |
-| change cadence | Settings → Schedule | `systemd/cti-harvester.timer` → `OnCalendar=` |
-| raise/lower the publish bar | Settings → Min score | `config/settings.yaml` → `scoring.min_score` (65 default; 80 = KEV-only) |
-| choose which networks to post to | Settings → Post to | `config/settings.yaml` → `publish.targets` (list: linkedin, mastodon, bluesky, x, email) |
-| cap posts per day | Settings → Max posts per day | `config/settings.yaml` → `publish.max_per_day` (default 5; mid-tier extras held for review) |
-| let a severe story ignore the cap | Settings → Severity override score | `config/settings.yaml` → `publish.severity_override_score` (default 90; a story ≥ this always posts) |
-| stop a runaway analyst run | Settings → Runaway guard | `config/settings.yaml` → `publish.runaway_guard` (default 20 auto-posts/run; the rest are held) |
-| push a specific story out now | Candidates → **Draft & review**, or **Compose** | — (skips the schedule, threshold and daily cap; still needs one approval) |
-| widen the story window | Settings → Lookback | `config/settings.yaml` → `ingest.lookback_hours` |
-| auto-post vs approve-first | Settings → Mode | `config/settings.yaml` → `publish.mode` |
-| change the voice / scoring rubric | — | `prompts/analyst.md` |
-| get pinged on failures | Settings → Notifications | `config/settings.yaml` → `notify.ntfy_url` |
-
-## Alert service (`worker/`)
-
-The same `posts[]` the analyst produces feed a public alert service. **It runs
-as a Cloudflare Worker** (`worker/`, route `cti.securitycyber.uk`), deployed by
-hand with `cd worker && npx wrangler deploy`. With `CONFIG.free_mode` on (the
-live setting) the feed is free and open, with no sign-up; the subscription and
-Stripe code is kept for anyone who wants to run a paid version.
+`CTI_AI_FACTCHECK_ENABLED=1` (default) permits a bounded Codex public-web check when
+the CLI is installed and authenticated. Set it to `0` to disable AI completely.
+At most three unchecked documents are submitted per run, with a 120-second call
+limit. Results are stored separately in:
 
 ```
-worker/  (Cloudflare Worker + D1 + Resend + Stripe)     owner console (web/app.py)
-  /            SecurityCyber-branded landing + pricing     /subscribers      list · DSAR export/erase
-  /subscribe   tier + weekly/monthly + platform + handle   /subscribers/{id} detail + consent log
-               -> Stripe hosted Checkout                   /subscriptions    readiness (from the Worker)
-  /confirm     double opt-in · logs consent+IP · test-pings the chosen channel
-  /manage      channels · vendor filter · billing portal · download/delete my data
-  /unsubscribe one-click pause     /webhooks/stripe · /webhooks/telegram
-  cron         daily digest (08:15 UTC) + weekly retention (Sun 03:30 UTC)
-
-bin/push_to_worker.py   pipeline stage 4 — POSTs each run's posts to the
-                        Worker's /internal/ingest (it owns fan-out + digest)
+state/advisory-outbox/documents/<id>.json
+state/advisory-outbox/receipts/<id>.json
+state/advisory-outbox/factchecks/<id>.json
 ```
 
-Also `/brief` — a **one-off threat brief** sold as a single Stripe payment (no
-subscription); purchases land in the panel's **Purchases** page to fulfil.
+Checks carry a supported/contradicted/uncertain verdict, explanation and evidence
+URLs. They remain operator-review annotations, not public verified labels. A
+successful web tool response and syntactically valid URLs are not proof that the
+model checked every claim. Other legacy analyst adapters remain available for
+manual use; they are not required by the scheduled deterministic path.
 
-- **Storage:** Cloudflare **D1** (`cti-subs`) — all subscriber PII.
-- **Email:** **Resend** (same provider as securitycyber.uk).
-- **Payments:** Stripe hosted Checkout + Customer Portal — no card data touches
-  the code. **Weekly or monthly** per tier (the sign-up only offers the
-  cadences you've configured a Stripe price for). Test mode until `CONFIG.live`.
-- **Channels:** email, **Discord**, Slack, Telegram, generic webhook, ntfy —
-  picked with the handle/webhook at sign-up, carried through Stripe as a signed
-  intent, test-pinged on confirmation.
-- **Branding:** the SecurityCyber look — dark theme, blue accent, Syne / DM Sans.
-- **Compliance:** `docs/legal/` — privacy policy, terms, cookie statement,
-  owner compliance runbook (ICO, DSAR, breach, retention, PECR). Served at
-  `/privacy` `/terms` `/cookies` (also mirrored in `worker/src/legal.js`).
-- The Python `web/public_app.py` + `bin/deliver.py` + Turso path stay as a
-  **local-dev reference** (`python3 -m uvicorn web.public_app:app`); not deployed.
+## Safe upgrade
 
-**Setup:** `worker/README.md` (Cloudflare side) + `docs/legal/compliance-runbook.md`
-(ICO, Stripe, Resend). Then put `CTI_WORKER_URL` / `CTI_INGEST_SECRET` /
-`CTI_ADMIN_TOKEN` in `config/env`. `python3 bin/selftest.py` reports readiness.
-Background: `docs/RND.md`.
+1. Back up code and D1. Preserve live `config/env`, `config/settings.yaml`, queues,
+   credentials and existing indicator records. Hold `state/.lock` during host edits.
+2. Apply the additive Worker migration **before** deploying Worker code:
 
-## Operations
+   ```sh
+   cd worker
+   npx wrangler d1 execute cti-subs --remote --file migrations/0003_advisories.sql
+   npm run deploy
+   ```
 
-```bash
-systemd/install.sh                 # install / update the units + panel (safe to re-run)
-systemd/install.sh status          # what's running + next scheduled run
-systemd/install.sh uninstall       # remove the units (keeps config/, state/, logs/)
-sudo loginctl enable-linger $USER  # let the timer fire while you're logged out
+3. Install the updated host code. Keep `CTI_WORKER_URL` and `CTI_INGEST_SECRET`.
+   The latter must match the Worker's `INGEST_SECRET`. No new secret is needed.
+4. Check `/healthz`, `/advisories`, `/rss.xml`, `/taxii2/`, collection metadata and
+   object pagination. Existing timer runs invoke the new stages automatically.
 
-systemctl --user list-timers cti-harvester.timer
-systemctl --user start cti-harvester.service       # run the harvest now
-journalctl --user -u cti-harvester.service -f      # follow the harvest
-journalctl --user -u cti-panel.service -f          # follow the web panel
-ls -t logs/ ; cat state/last_run.json              # last outcome
-tail state/runs.jsonl                               # run history (feeds the dashboard)
-tail state/history.jsonl                            # what's been posted
+These commands are deployment instructions, not actions performed by the test
+suite. Do not run `bin/run.sh`, publishers or the live ingest endpoints as a smoke
+test: they may send real messages. Inspect a local fixture instead:
+
+```sh
+python3 bin/advisory_pipeline.py --candidates /tmp/candidates.json \
+  --output-dir /tmp/cti-preview
 ```
 
-## Files
+`--flush` explicitly sends pending records to the configured Worker. Without it,
+the command only creates local artifacts. Direct CLI invocations that write the
+production outbox must also hold `state/.lock`; `run.sh` already does so.
 
-```
-web/app.py               the control panel (FastAPI, single file, localhost only)
-config/feeds.yaml        source list + per-source weight + enabled flag
-config/settings.yaml     all runtime knobs (non-secret)
-config/env               secrets (git-ignored, chmod 600)
-lib/feedparse.py         stdlib RSS 2.0 / Atom parser
-bin/ingest.py            stage 1 — deterministic feeds + KEV + dedup
-prompts/analyst.md       stage 2 — the algorithm handed to `claude -p` (writes posts[])
-bin/publish_linkedin.py  stage 3 — classify posts[], cap/hold logic, archive, record
-bin/publishers.py        one post() per network: linkedin / mastodon / bluesky / x / email
-bin/notify.py            ntfy helper
+Billing/account endpoints and subscriber jobs are retired. Legacy modules and
+historical data are retained for rollback; this code does not cancel anything in
+an external payment provider. The old standalone paid site redirects to the free
+feed. Social subscriber lead time is removed. Deterministic packaging does not
+automatically turn source summaries into independent analyst social posts; manual
+publishing and existing guarded queue handling remain available.
 
-lib/db.py                Turso (libSQL HTTP) / local-SQLite abstraction
-lib/subscribers.py       subscriber store: schema, CRUD, consent + DSAR + retention
-lib/subsconfig.py        subscriptions: config loader + go-live blocker list
-lib/tokens.py            signed expiring URL tokens
-lib/channels.py          per-subscriber senders (email/slack/telegram/webhook/ntfy)
-lib/billing.py           Stripe REST (checkout, webhook verify, portal)
-lib/ratelimit.py         in-process rate limiter for the public app
-web/public_app.py        the public subscriber site + webhooks
-bin/deliver.py           subscriber fan-out (instant + digest)
-bin/retention.py         data-retention purge   bin/backup_db.py   DB backup
-bin/selftest.py          full pre-flight readiness report
-docs/legal/              privacy policy, terms, cookies, compliance runbook
-docs/RND.md              productisation notes   docs/BUILD.md   build tracker
-bin/runlog.py            appends a run summary to state/runs.jsonl (dashboard timeline)
-bin/postlog.py           rolling-24h post counter (daily cap)
-bin/lint_post.py         post-quality linter + gate
-bin/run.sh               orchestrator (lock, logging, stage wiring)
-systemd/                 user timer + panel service + installer
-state/                   candidates.json, decision.json, pending.json, history.jsonl,
-                         seen.jsonl, last_run.json
-drafts/                  every generated post, kept for review
+## Validation
+
+```sh
+python3 tests/test_advisory_pipeline.py
+python3 tests/test_codex_analyst.py
+python3 tests/test_grounding.py
+python3 tests/test_social_pacing.py
+cd worker && npm test
 ```
 
-## Licence
+Tests use temporary files, SQLite and in-process HTTP Request/Response objects.
+They cover durable retry and duplicate acknowledgements, provenance hashes,
+secret rejection, AI output boundaries, HTML escaping, RSS, search, STIX export,
+existing TAXII routes and equal-timestamp pagination. No messages are sent.
+See [the upgrade audit](docs/UPGRADE-AUDIT.md) for results and remaining limits.
 
-Copyright © 2026 Charlie Collins. **All rights reserved.** This project is
-**proprietary and closed-source** — the source is published for reference only
-and is **not** licensed for use, copying, running or distribution. See
-[`LICENSE`](LICENSE) and [`LICENSING.md`](LICENSING.md). Licensing or acquisition
-by arrangement: charlie@securitycyber.uk.
-Contributions are accepted under the agreement in [`CONTRIBUTING.md`](CONTRIBUTING.md).
+## Distribution and operational proof
+
+The archive, RSS and TAXII interfaces are the primary distribution surfaces.
+Social posts are supplementary. Existing shared Discord delivery remains.
+Aggregator operators can subscribe/poll or import the structured exports; no
+unsolicited AbuseIPDB reports, GitHub advisories or community messages are sent.
+Document original telemetry and evidence before publishing maliciousness claims.
+No special programme membership or third-party endorsement is implied.
+
+Protocol references: [STIX 2.1](https://docs.oasis-open.org/cti/stix/v2.1/os/stix-v2.1-os.html)
+and [TAXII 2.1](https://docs.oasis-open.org/cti/taxii/v2.1/os/taxii-v2.1-os.html).
+Legacy installation details remain in [docs/SETUP.md](docs/SETUP.md); this README
+supersedes its AI-required, paid-service and subscriber-first descriptions.

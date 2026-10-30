@@ -164,6 +164,7 @@ export function config(env) {
   c.terms_version = env.TERMS_VERSION || "2026-09-02";
   // Public Discord invite for free mode; empty falls back to the main site.
   c.discord_invite = (env.DISCORD_INVITE || "").trim();
+  c.free_mode = true; // Legacy config cannot enable checkout.
   return c;
 }
 

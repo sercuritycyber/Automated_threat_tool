@@ -159,6 +159,7 @@ export function page(cfg, title, body, flash = "", flashKind = "", noindex = fal
   return `<!doctype html><html lang=en><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1">
 <meta name=robots content="${robots}"><meta name=color-scheme content="dark">
+<link rel="alternate" type="application/rss+xml" title="SecurityCyber advisories" href="/rss.xml">
 <title>${esc(title)} · SecurityCyber CTI</title><link rel=icon href="/logo.svg">
 <meta name=description content="${esc(ogDesc)}">
 <meta property="og:type" content="website">
@@ -175,6 +176,8 @@ export function page(cfg, title, body, flash = "", flashKind = "", noindex = fal
 ${cfg.free_mode ? `<span class=links>
 <a href="${esc(cfg.main_site)}">Home</a>
 <a href="/">Free CTI</a>
+<a href="/advisories">Advisories</a>
+<a href="/rss.xml">RSS</a>
 <a href="${esc(cfg.main_site)}/blog">Blog</a>
 <a href="${esc(cfg.main_site)}/games">Games</a>
 <a href="${esc(discordUrl(cfg))}">Discord</a></span></nav>` : `<span class=links>

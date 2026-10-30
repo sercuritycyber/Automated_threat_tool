@@ -51,6 +51,17 @@ echo "=== CTI run $TS ==============================================="
 echo "[run] stage 1/3 : ingest"
 python3 "$ROOT/bin/ingest.py" || fail ingest $?
 
+# Primary deterministic archive and durable retry run even on quiet harvests.
+python3 "$ROOT/bin/advisory_pipeline.py" --candidates "$ROOT/state/candidates.json" \
+  --output-dir "$ROOT/state/advisory-outbox" || fail advisory_build $?
+python3 "$ROOT/bin/advisory_pipeline.py" --output-dir "$ROOT/state/advisory-outbox" --flush \
+  || echo "[run] advisory delivery pending; retained for retry next run"
+# AI only records complementary checks; it cannot gate or rewrite the archive.
+if [[ "${CTI_AI_FACTCHECK_ENABLED:-1}" == "1" ]]; then
+  python3 "$ROOT/bin/factcheck_advisories.py" --output-dir "$ROOT/state/advisory-outbox" \
+    || echo "[run] optional fact check unavailable"
+fi
+
 # Nothing to consider? stop before spending an analyst call.
 CAND_COUNT="$(python3 -c 'import json,sys; print(json.load(open("state/candidates.json"))["counts"]["candidates"])' 2>/dev/null || echo 0)"
 if [[ "$CAND_COUNT" == "0" ]]; then
@@ -70,103 +81,20 @@ if [[ "$USED" -ge "$MAXDAY" ]]; then
 fi
 echo "[run] $CAND_COUNT candidates queued for the analyst  ($USED/$MAXDAY posts used today)"
 
-# --- Analyst engine — config/settings.yaml -> analyst.engine ------------
-#   claude       claude -p (full verified analyst), then Antigravity (Gemini)
-#                as the sole backup, then the deterministic fallback. This is
-#                the default.
-#   antigravity  Antigravity (Gemini) first, then deterministic.
-ENGINE="$(python3 - <<'PYEOF'
-import pathlib
-try:
-    import yaml
-    s = yaml.safe_load(pathlib.Path("config/settings.yaml").read_text()) or {}
-    a = s.get("analyst") or {}
-    print((a.get("engine") or "claude").strip().lower())
-except Exception:
-    print("claude")
-PYEOF
-)"
-echo "[run] stage 2/4 : analyst (engine=$ENGINE)"
+# The primary decision is deterministic. Legacy engines remain available for
+# manual review, but cannot replace source facts or become an availability gate.
+echo "[run] stage 2/4 : deterministic source packaging"
+touch "$ROOT/state/analyst_started"
+python3 "$ROOT/bin/analyst_fallback.py" || fail deterministic_packaging $?
 
-# The analyst reads hostile feed text and fetches arbitrary article URLs, so a
-# prompt injection is in scope. config/claude-untrusted.json hard-denies reading
-# secrets (/proc included — config/env is exported into this env) and editing
-# anything but state/. Deny rules beat --allowedTools and acceptEdits.
-run_claude_analyst() {
-  claude -p "$(cat "$ROOT/prompts/analyst.md")" \
-    --allowedTools "Read,Write,WebFetch" --permission-mode acceptEdits \
-    --settings "$ROOT/config/claude-untrusted.json" "$@"
-}
-
-# API bridge: when the Claude subscription is unavailable (lapsed, or a session
-# limit), spend prepaid API credits on at most ONE analyst run per day — the
-# first after 07:00, so it feeds the 08:15 digest. Every other run takes the
-# free deterministic fallback. Only active while ANTHROPIC_API_KEY_BRIDGE is in
-# config/env; it is deliberately not named ANTHROPIC_API_KEY, which would make
-# every run bill the API even while the subscription works.
-BRIDGE_MAX_USD="${BRIDGE_MAX_USD:-5}"
-BRIDGE_STAMP="$ROOT/state/api_bridge_last_run"
-BRIDGE_EXPECTED_FALLBACK=0
-run_bridge_analyst() {
-  [[ -n "${ANTHROPIC_API_KEY_BRIDGE:-}" ]] || return 1
-  local today; today="$(date +%F)"
-  if [[ "$(cat "$BRIDGE_STAMP" 2>/dev/null)" == "$today" || "$(date +%-H)" -lt 7 ]]; then
-    echo "[run] API bridge: today's run already used (or before 07:00) — free fallback"
-    BRIDGE_EXPECTED_FALLBACK=1
-    return 1
-  fi
-  echo "$today" > "$BRIDGE_STAMP"   # stamp first: a failed attempt still counts
-  echo "[run] subscription unavailable — API bridge run (1/day, cap \$$BRIDGE_MAX_USD)"
-  ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY_BRIDGE" run_claude_analyst --max-budget-usd "$BRIDGE_MAX_USD"
-}
-
-set +e
-ANALYST_RC=1
-case "$ENGINE" in
-  codex)
-    python3 "$ROOT/bin/analyst_codex.py"; ANALYST_RC=$?
-    if [[ "$ANALYST_RC" -ne 0 ]]; then
-      echo "[run] Codex exited $ANALYST_RC — trying the Claude subscription"
-      run_claude_analyst; ANALYST_RC=$?
-    fi
-    # No paid API bridge on the Codex route. Keep subscriber-only deterministic
-    # fallback below if the subscription is unavailable.
-    ;;
-  antigravity)
-    python3 "$ROOT/bin/analyst_antigravity.py"; ANALYST_RC=$?
-    ;;
-  claude|*)
-    run_claude_analyst; ANALYST_RC=$?
-    if [[ "$ANALYST_RC" -ne 0 && -n "${ANTHROPIC_API_KEY_BRIDGE:-}" ]]; then
-      run_bridge_analyst; ANALYST_RC=$?
-    fi
-    if [[ "$ANALYST_RC" -ne 0 ]]; then
-      echo "[run] claude analyst exited $ANALYST_RC — trying Codex (ChatGPT plan) backup"
-      python3 "$ROOT/bin/analyst_codex.py"; ANALYST_RC=$?
-    fi
-    if [[ "$ANALYST_RC" -ne 0 ]]; then
-      echo "[run] Codex unavailable — trying Antigravity (Gemini) backup"
-      python3 "$ROOT/bin/analyst_antigravity.py"; ANALYST_RC=$?
-    fi
-    if [[ "$ANALYST_RC" -ne 0 ]]; then
-      echo "[run] Gemini backup unavailable — trying OpenAI-compatible providers"
-      python3 "$ROOT/bin/analyst_openai_compat.py"; ANALYST_RC=$?
-    fi
-    ;;
-esac
-set -e
-if [[ "$ANALYST_RC" -ne 0 ]]; then
-  echo "[run] all analyst engines failed ($ANALYST_RC) — deterministic fallback for subscribers"
-  # Without this, a lapsed claude login stops public posting with no signal —
-  # subscribers still get unverified alerts, so nothing else looks broken.
-  # In bridge mode the fallback is expected on all but one run a day: stay quiet.
-  if [[ "$BRIDGE_EXPECTED_FALLBACK" -eq 1 ]]; then
-    echo "[run] bridge mode: expected fallback, no alert"
-  else
-    python3 "$ROOT/bin/notify.py" "CTI analyst unavailable (exit $ANALYST_RC) — ran deterministic fallback: unverified subscriber alerts only, no public post. Check $ENGINE authentication on the VM. Log: $LOG" high || true
-  fi
-  python3 "$ROOT/bin/analyst_fallback.py" || fail analyst_fallback $?
-fi
+python3 - <<'PY' || fail decision_freshness $?
+from pathlib import Path
+p = Path("state/decision.json")
+c = Path("state/candidates.json")
+marker = Path("state/analyst_started")
+if not p.exists() or p.stat().st_mtime_ns < max(c.stat().st_mtime_ns, marker.stat().st_mtime_ns):
+    raise SystemExit("analyst did not produce a fresh decision")
+PY
 
 # Honeynet add-on: the weekly first-party brief from honeyintel joins this run's
 # decision here, so the leak guard, validation, subscriber fan-out and every
@@ -177,8 +105,7 @@ python3 "$ROOT/bin/honeynet_bridge.py" --merge "$ROOT/state/decision.json" \
 # Model output is untrusted: drop any public post whose URL was not in this
 # run's candidate set (or is missing from its own body). NON-FATAL — subscribers
 # still get served; only the offending social posts are removed.
-set +e
-python3 - <<'PY'
+python3 - <<'PY' || fail validation $?
 import json, sys
 from pathlib import Path
 sys.path.insert(0, "bin")
@@ -186,15 +113,21 @@ try:
     from decision_validation import sanitize_decision
     decision = json.loads(Path("state/decision.json").read_text())
     candidates = json.loads(Path("state/candidates.json").read_text())
+    if not isinstance(decision, dict) or not isinstance(candidates, dict):
+        raise ValueError("invalid decision/candidate shape")
+    for field in ("posts", "alerts"):
+        if field in decision and (not isinstance(decision[field], list) or any(not isinstance(x, dict) for x in decision[field])):
+            raise ValueError(f"invalid {field}")
 except Exception as exc:  # noqa: BLE001
-    print(f"[run] validation skipped ({exc}) — decision left as-is")
-    raise SystemExit(0)
+    print(f"[run] validation failed ({exc}) — delivery stopped")
+    raise SystemExit(1)
 from decision_validation import drop_leaking_items
 # Every engine, not only backups: web-verified Codex and Claude read hostile text too.
 # Only the items carrying a secret are dropped; the rest still reach subscribers.
 if isinstance(decision, dict):
     env = {}
-    for line in Path("config/env").read_text().splitlines():
+    secret_file = Path("config/env")
+    for line in (secret_file.read_text().splitlines() if secret_file.exists() else []):
         k, sep, v = line.partition("=")
         if sep and not k.strip().startswith("#"):
             env[k.strip()] = v.strip().strip("'\"")
@@ -227,18 +160,9 @@ if dropped:
 PY
 set -e
 
-# Stage 3: paying subscribers FIRST. They are buying the lead time as much as
-# the analysis, so the people who pay hear it before it is given away publicly.
-# Never fatal: a fan-out problem must not stop the brand posting.
-echo "[run] stage 3/4 : subscriber alerts"
-python3 "$ROOT/bin/push_to_worker.py" "$ROOT/state/decision.json" || echo "[run] push_to_worker returned $? (non-fatal)"
-
-# Optional head start before the same story goes out free on socials.
-LEAD_MIN="${CTI_SUBSCRIBER_LEAD_MINUTES:-0}"
-if [[ "$LEAD_MIN" =~ ^[0-9]+$ ]] && (( LEAD_MIN > 0 )); then
-  echo "[run] holding the public post ${LEAD_MIN}m so subscribers stay ahead"
-  sleep $((LEAD_MIN * 60))
-fi
+# Publish the free full feed before social summaries.
+echo "[run] stage 3/4 : free public feed"
+python3 "$ROOT/bin/push_to_worker.py" "$ROOT/state/decision.json" || fail public_feed $?
 
 echo "[run] stage 4/4 : publish"
 set +e
@@ -251,11 +175,6 @@ case "$PUB_RC" in
   5) echo "[run] publish: delivery failed — approved post(s) queued for manual (state/manual_post.md), operator notified — non-fatal" ;;
   *) fail publish "$PUB_RC" ;;
 esac
-
-# Legacy local delivery — only if the Worker isn't configured.
-if [[ -z "${CTI_WORKER_URL:-}" ]]; then
-  python3 "$ROOT/bin/deliver.py" --instant --from "$ROOT/state/decision.json" || echo "[run] deliver returned $? (non-fatal)"
-fi
 
 # success ping (optional)
 if python3 -c 'import json,sys; d=json.load(open("state/last_run.json")); sys.exit(0 if d.get("decision")=="post" and not d.get("dry_run") else 1)' 2>/dev/null; then
